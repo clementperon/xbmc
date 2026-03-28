@@ -1,5 +1,9 @@
 if(NOT CORE_SYSTEM_NAME)
-  string(TOLOWER ${CMAKE_SYSTEM_NAME} CORE_SYSTEM_NAME)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(CORE_SYSTEM_NAME wasm)
+  else()
+    string(TOLOWER ${CMAKE_SYSTEM_NAME} CORE_SYSTEM_NAME)
+  endif()
 endif()
 
 if(CORE_SYSTEM_NAME STREQUAL linux OR CORE_SYSTEM_NAME STREQUAL freebsd)
@@ -9,6 +13,12 @@ if(CORE_SYSTEM_NAME STREQUAL linux OR CORE_SYSTEM_NAME STREQUAL freebsd)
 
   if(NOT APP_RENDER_SYSTEM)
     message(SEND_ERROR "You need to decide whether you want to use GL- or GLES-based rendering. Please set APP_RENDER_SYSTEM to either \"gl\" or \"gles\". For normal desktop systems, you will usually want to use \"gl\".")
+  endif()
+elseif(CORE_SYSTEM_NAME STREQUAL wasm)
+  # WebAssembly / Emscripten: GLES maps to WebGL2
+  set(_DEFAULT_PLATFORM wasm)
+  if(NOT APP_RENDER_SYSTEM)
+    set(APP_RENDER_SYSTEM gles CACHE STRING "Render system for WASM (must be gles)" FORCE)
   endif()
 else()
   string(TOLOWER ${CORE_SYSTEM_NAME} _DEFAULT_PLATFORM)

@@ -1,0 +1,11 @@
+# WASM / Emscripten build defaults — disable features unavailable in the browser
+if(CORE_SYSTEM_NAME STREQUAL wasm)
+  set(ENABLE_PYTHON OFF CACHE BOOL "Python not used for initial WASM port" FORCE)
+  set(ENABLE_UPNP OFF CACHE BOOL "UPnP not available in browser" FORCE)
+  set(ENABLE_TESTING OFF CACHE BOOL "Tests do not run in browser" FORCE)
+  set(ADDONS_CONFIGURE_AT_STARTUP OFF CACHE BOOL "Binary addons not dynamically loaded in WASM" FORCE)
+  set(ENABLE_OPTICAL OFF CACHE BOOL "No optical drives in browser" FORCE)
+  set(ENABLE_AIRTUNES OFF CACHE BOOL "AirTunes not available in browser" FORCE)
+  set(ENABLE_EVENTCLIENTS OFF CACHE BOOL "Event clients not used for WASM" FORCE)
+  set(ENABLE_DVDCSS OFF CACHE BOOL "DVD CSS not applicable for WASM" FORCE)
+endif()

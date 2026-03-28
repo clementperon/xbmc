@@ -168,6 +168,10 @@ if(CORE_SYSTEM_NAME STREQUAL linux)
   option(ADDONS_CONFIGURE_AT_STARTUP "Configure binary addons at startup?" ON)
 endif()
 
+if(CORE_SYSTEM_NAME STREQUAL wasm)
+  include(cmake/scripts/wasm/WasmOptions.cmake)
+endif()
+
 # Build static libraries per directory
 if(NOT CMAKE_GENERATOR MATCHES "Visual Studio" AND NOT CMAKE_GENERATOR STREQUAL Xcode)
   set(ENABLE_STATIC_LIBS TRUE)

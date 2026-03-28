@@ -79,6 +79,13 @@ target_link_libraries(TexturePacker
                               texturepacker::Lzo2)
 
 target_compile_definitions(TexturePacker PRIVATE ${ARCH_DEFINES} ${SYSTEM_DEFINES})
+# Standalone native build (e.g. macOS host for WASM cross-compile) needs POSIX/Darwin flags
+# so cmdlineargs.h and XBTFWriter.cpp use the correct includes.
+if(APPLE)
+  target_compile_definitions(TexturePacker PRIVATE TARGET_DARWIN TARGET_POSIX)
+elseif(UNIX)
+  target_compile_definitions(TexturePacker PRIVATE TARGET_POSIX)
+endif()
 target_compile_features(TexturePacker PUBLIC cxx_std_17)
 
 install(TARGETS TexturePacker EXPORT TexturePacker

@@ -8,6 +8,12 @@
 
 #include "Application.h"
 
+#ifdef TARGET_WASM
+#include <emscripten.h>
+#include "application/AppEnvironment.h"
+extern "C" void kodi_wasm_jsonrpc_notify_ready();
+#endif
+
 #include "Autorun.h"
 #include "CompileInfo.h"
 #include "DatabaseManager.h"
@@ -771,6 +777,10 @@ bool CApplication::Initialize()
   }
 
   CJSONRPC::Initialize();
+
+#ifdef TARGET_WASM
+  kodi_wasm_jsonrpc_notify_ready();
+#endif
 
   CServiceBroker::RegisterSpeechRecognition(speech::ISpeechRecognition::CreateInstance());
 
@@ -1576,6 +1586,16 @@ int CApplication::Run()
     CServiceBroker::GetAppMessenger()->PostMsg(TMSG_PLAYLISTPLAYER_PLAY, -1);
   }
 
+#ifdef TARGET_WASM
+  emscripten_set_main_loop(
+      []()
+      {
+        g_application.WasmRunIteration();
+      },
+      0,
+      1);
+  return m_ExitCode;
+#else
   // Run the app
   while (!m_bStop)
   {
@@ -1607,7 +1627,47 @@ int CApplication::Run()
 
   CLog::Log(LOGINFO, "Exiting the application...");
   return m_ExitCode;
+#endif
 }
+
+#ifdef TARGET_WASM
+void CApplication::WasmRunIteration()
+{
+  if (m_bStop)
+  {
+    emscripten_cancel_main_loop();
+    Cleanup();
+    CAppEnvironment::TearDown();
+    CLog::Log(LOGINFO, "Exiting the application (WASM)...");
+    return;
+  }
+
+  std::chrono::time_point<std::chrono::steady_clock> lastFrameTime;
+  std::chrono::milliseconds frameTime;
+  const unsigned int noRenderFrameTime = 15;
+
+  lastFrameTime = std::chrono::steady_clock::now();
+  Process();
+
+  bool renderGUI = GetComponent<CApplicationPowerHandling>()->GetRenderGUI();
+  if (!m_bStop)
+    FrameMove(true, renderGUI);
+
+  if (renderGUI && !m_bStop)
+    Render();
+  else if (!renderGUI)
+  {
+    auto now = std::chrono::steady_clock::now();
+    frameTime = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime);
+    if (frameTime.count() < noRenderFrameTime)
+    {
+#ifndef TARGET_WASM
+      KODI::TIME::Sleep(std::chrono::milliseconds(noRenderFrameTime - frameTime.count()));
+#endif
+    }
+  }
+}
+#endif
 
 bool CApplication::Cleanup()
 {

@@ -1,0 +1,4 @@
+# Emscripten provides the linker; gold/lld/mold are not used
+option(ENABLE_GOLD "Enable gnu gold linker?" OFF)
+option(ENABLE_LLD "Enable llvm lld linker?" OFF)
+option(ENABLE_MOLD "Enable mold linker?" OFF)
