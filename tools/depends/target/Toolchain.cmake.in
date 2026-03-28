@@ -34,6 +34,15 @@ elseif(OS STREQUAL darwin_embedded)
   else()
     set(CORE_PLATFORM_NAME ios)
   endif()
+elseif(OS STREQUAL wasm)
+  set(CMAKE_SYSTEM_NAME Emscripten)
+  set(CORE_SYSTEM_NAME wasm)
+  set(APP_RENDER_SYSTEM gles CACHE STRING "Render system" FORCE)
+  # Prefer Emscripten-provided CMake find modules without including its
+  # Platform/Emscripten.cmake (which clobbers PKG_CONFIG_LIBDIR).
+  if(EXISTS "@use_toolchain@/cmake/Modules")
+    list(PREPEND CMAKE_MODULE_PATH "@use_toolchain@/cmake/Modules")
+  endif()
 endif()
 
 if(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
@@ -129,7 +138,13 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_FRAMEWORK LAST)
-set(ENV{PKG_CONFIG_LIBDIR} @prefix@/@deps_dir@/lib/pkgconfig:@prefix@/@deps_dir@/share/pkgconfig)
+set(_pkgconfig_libdir "@prefix@/@deps_dir@/lib/pkgconfig:@prefix@/@deps_dir@/share/pkgconfig")
+if(EMSCRIPTEN)
+  string(PREPEND _pkgconfig_libdir
+                ":@use_toolchain@/cache/sysroot/local/lib/pkgconfig:@use_toolchain@/cache/sysroot/lib/pkgconfig")
+endif()
+set(ENV{PKG_CONFIG_LIBDIR} "${_pkgconfig_libdir}")
+unset(_pkgconfig_libdir)
 
 # Binary Addons
 if(NOT CORE_SYSTEM_NAME STREQUAL linux)

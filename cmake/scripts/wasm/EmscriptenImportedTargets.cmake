@@ -1,0 +1,41 @@
+# Emscripten "system" libraries via -sUSE_* link flags (official ports).
+# Declared before core_require_dep so Find*.cmake modules short-circuit on existing kodi:: targets.
+if(NOT CORE_SYSTEM_NAME STREQUAL wasm)
+  return()
+endif()
+
+function(_emscripten_port_target _alias _portflag)
+  if(TARGET ${_alias})
+    return()
+  endif()
+  add_library(${_alias} INTERFACE)
+  target_link_options(${_alias} INTERFACE "SHELL:${_portflag}")
+  target_compile_options(${_alias} INTERFACE "SHELL:${_portflag}")
+endfunction()
+
+_emscripten_port_target(emscripten_port_zlib -sUSE_ZLIB=1)
+add_library(ZLIB::ZLIB ALIAS emscripten_port_zlib)
+add_library(kodi::ZLIB ALIAS emscripten_port_zlib)
+add_library(LIBRARY::ZLIB ALIAS emscripten_port_zlib)
+set(ZLIB_FOUND ON)
+
+_emscripten_port_target(emscripten_port_freetype -sUSE_FREETYPE=1)
+add_library(freetype::freetype ALIAS emscripten_port_freetype)
+add_library(Freetype::Freetype ALIAS emscripten_port_freetype)
+add_library(kodi::FreeType ALIAS emscripten_port_freetype)
+add_library(LIBRARY::FreeType ALIAS emscripten_port_freetype)
+set(Freetype_FOUND ON)
+
+_emscripten_port_target(emscripten_port_harfbuzz -sUSE_HARFBUZZ=1)
+target_link_libraries(emscripten_port_harfbuzz INTERFACE emscripten_port_freetype)
+add_library(harfbuzz::harfbuzz ALIAS emscripten_port_harfbuzz)
+add_library(kodi::HarfBuzz ALIAS emscripten_port_harfbuzz)
+add_library(LIBRARY::HarfBuzz ALIAS emscripten_port_harfbuzz)
+add_library(HarfBuzz::HarfBuzz ALIAS emscripten_port_harfbuzz)
+set(HarfBuzz_FOUND ON)
+
+_emscripten_port_target(emscripten_port_sqlite3 -sUSE_SQLITE3=1)
+add_library(sqlite3::sqlite3 ALIAS emscripten_port_sqlite3)
+add_library(kodi::Sqlite3 ALIAS emscripten_port_sqlite3)
+add_library(LIBRARY::Sqlite3 ALIAS emscripten_port_sqlite3)
+set(Sqlite3_FOUND ON)

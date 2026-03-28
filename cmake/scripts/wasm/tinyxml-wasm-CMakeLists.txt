@@ -1,0 +1,9 @@
+# Replaces upstream Makefile for Emscripten static build (see EmscriptenWasmDeps.cmake).
+cmake_minimum_required(VERSION 3.15)
+project(tinyxml LANGUAGES CXX)
+add_library(tinyxml STATIC tinyxml.cpp tinyxmlparser.cpp tinyxmlerror.cpp tinystr.cpp)
+target_include_directories(tinyxml PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:include>)
+install(TARGETS tinyxml ARCHIVE DESTINATION lib)
+install(FILES tinyxml.h tinystr.h DESTINATION include)

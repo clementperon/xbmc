@@ -1,0 +1,11 @@
+--- a/cmake/FindFriBidi.cmake
++++ b/cmake/FindFriBidi.cmake
+@@ -10,7 +10,7 @@
+ if(NOT TARGET FriBidi::${CMAKE_FIND_PACKAGE_NAME})
+   find_package(PkgConfig)
+
+-  if(PKG_CONFIG_FOUND AND NOT (WIN32 OR WINDOWS_STORE))
++  if(PKG_CONFIG_FOUND AND NOT (WIN32 OR WINDOWS_STORE) AND NOT EMSCRIPTEN)
+     pkg_check_modules(FRIBIDI fribidi IMPORTED_TARGET GLOBAL QUIET)
+
+     get_target_property(FRIBIDI_LIBRARY PkgConfig::FRIBIDI INTERFACE_LINK_LIBRARIES)

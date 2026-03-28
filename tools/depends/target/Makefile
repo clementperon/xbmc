@@ -66,6 +66,14 @@ ifeq ($(OS),android)
   LIBUUID = libuuid
 endif
 
+ifeq ($(OS),wasm)
+  EXCLUDED_DEPENDS = fontconfig freetype2 freetype2-noharfbuzz harfbuzz sqlite3 \
+                     gettext gmp gnutls nettle libffi libgcrypt libgpg-error \
+                     python3 pythonmodule-pil pythonmodule-pycryptodome pythonmodule-setuptools \
+                     libplist libshairplay libusb libxml2 xz gtest \
+                     samba samba-gplv3 libcdio libcdio-gplv3
+endif
+
 ZLIB=
 ifneq ($(HAS_ZLIB),1)
   DEPENDS += zlib

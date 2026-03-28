@@ -298,6 +298,11 @@ foreach(excludedep ${PLATFORM_OPTIONAL_DEPS_EXCLUDE})
   list(FILTER optional_deps EXCLUDE REGEX ${excludedep})
 endforeach()
 
+# Emscripten: stub system libs via ports + pre-build fribidi for internal libass before dependency resolution
+if(CORE_SYSTEM_NAME STREQUAL wasm)
+  include(cmake/scripts/wasm/EmscriptenImportedTargets.cmake)
+endif()
+
 # Check optional deps first, since their availability can influence required ones, e.g. ffmpeg
 core_optional_dep(${optional_deps})
 core_require_dep(${required_deps})

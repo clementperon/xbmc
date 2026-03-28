@@ -1,0 +1,41 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,16 +5,34 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
+ # All platforms require
+-find_package(Iconv REQUIRED)
+-find_package(Freetype 2.6 REQUIRED)
+-find_package(FriBidi REQUIRED)
+-find_package(HarfBuzz REQUIRED)
++if(EMSCRIPTEN)
++  add_library(emscripten_freetype INTERFACE)
++  target_link_options(emscripten_freetype INTERFACE "SHELL:-sUSE_FREETYPE=1")
++  add_library(Freetype::Freetype ALIAS emscripten_freetype)
++  set(Freetype_FOUND TRUE)
++
++  add_library(emscripten_harfbuzz INTERFACE)
++  target_link_libraries(emscripten_harfbuzz INTERFACE Freetype::Freetype)
++  target_link_options(emscripten_harfbuzz INTERFACE "SHELL:-sUSE_HARFBUZZ=1")
++  add_library(harfbuzz::harfbuzz ALIAS emscripten_harfbuzz)
++  set(HarfBuzz_FOUND TRUE)
++
++  find_package(Iconv REQUIRED)
++  find_package(FriBidi REQUIRED)
++else()
++  find_package(Iconv REQUIRED)
++  find_package(Freetype 2.6 REQUIRED)
++  find_package(FriBidi REQUIRED)
++  find_package(HarfBuzz REQUIRED)
++endif()
+
+ # Font providers
+ if(CMAKE_SYSTEM_NAME MATCHES Windows)
+   set(CONFIG_DIRECTWRITE 1)
+ elseif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+   set(CONFIG_CORETEXT 1)
++elseif(EMSCRIPTEN)
++  set(CONFIG_FONTCONFIG 0)
+ else()
+   find_package(Fontconfig REQUIRED)
+   set(CONFIG_FONTCONFIG 1)
+ endif()
