@@ -8,6 +8,8 @@
 
 #include "SectionLoader.h"
 
+#ifdef HAS_DLLLOADER
+
 #include "cores/DllLoader/DllLoaderContainer.h"
 #include "utils/GlobalsHandling.h"
 #include "utils/StringUtils.h"
@@ -128,3 +130,19 @@ void CSectionLoader::UnloadAll()
     it = g_sectionLoader.m_vecLoadedDLLs.erase(it);
   }
 }
+
+#else
+
+CSectionLoader::CSectionLoader(void) = default;
+CSectionLoader::~CSectionLoader(void) = default;
+
+LibraryLoader* CSectionLoader::LoadDLL(const std::string& dllname, bool bDelayUnload, bool bLoadSymbols)
+{
+  return nullptr;
+}
+
+void CSectionLoader::UnloadDLL(const std::string& dllname) {}
+void CSectionLoader::UnloadDelayed() {}
+void CSectionLoader::UnloadAll() {}
+
+#endif

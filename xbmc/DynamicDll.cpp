@@ -8,6 +8,8 @@
 
 #include "DynamicDll.h"
 
+#ifdef HAS_DLLLOADER
+
 #include "SectionLoader.h"
 #include "utils/FileUtils.h"
 #include "utils/log.h"
@@ -79,3 +81,36 @@ bool DllDynamic::SetFile(const std::string& strDllName)
   return true;
 }
 
+#else
+
+DllDynamic::DllDynamic()
+{
+  m_dll = NULL;
+  m_DelayUnload = false;
+}
+
+DllDynamic::DllDynamic(const std::string& strDllName) : m_strDllName(strDllName)
+{
+  m_dll = NULL;
+  m_DelayUnload = false;
+}
+
+DllDynamic::~DllDynamic() = default;
+
+bool DllDynamic::Load() { return false; }
+void DllDynamic::Unload() {}
+bool DllDynamic::CanLoad() { return false; }
+
+bool DllDynamic::EnableDelayedUnload(bool bOnOff)
+{
+  m_DelayUnload = bOnOff;
+  return true;
+}
+
+bool DllDynamic::SetFile(const std::string& strDllName)
+{
+  m_strDllName = strDllName;
+  return true;
+}
+
+#endif

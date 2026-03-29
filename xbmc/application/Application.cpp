@@ -27,7 +27,9 @@ extern "C" void kodi_wasm_jsonrpc_notify_ready();
 #include "LangInfo.h"
 #include "PartyModeManager.h"
 #include "PlayListPlayer.h"
+#ifdef HAS_DLLLOADER
 #include "SectionLoader.h"
+#endif
 #include "SeekHandler.h"
 #include "ServiceBroker.h"
 #include "ServiceManager.h"
@@ -2440,10 +2442,12 @@ void CApplication::ProcessSlow()
   // check if we should restart the player
   CheckDelayedPlayerRestart();
 
+#ifdef HAS_DLLLOADER
   //  check if we can unload any unreferenced dlls or sections
   const auto appPlayer = GetComponent<CApplicationPlayer>();
   if (!appPlayer->IsPlayingVideo())
     CSectionLoader::UnloadDelayed();
+#endif
 
 #ifdef TARGET_ANDROID
   // Pass the slow loop to droid

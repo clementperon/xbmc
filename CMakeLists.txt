@@ -107,6 +107,7 @@ option(ENABLE_INCLUDEWHATYOUUSE "Enable include-what-you-use support?" OFF)
 option(ENABLE_UPNP        "Enable UPnP support?" ON)
 option(ENABLE_AIRTUNES    "Enable AirTunes support?" ON)
 option(ENABLE_OPTICAL     "Enable optical support?" ON)
+option(ENABLE_DLLLOADER   "Enable DllLoader for binary add-on compat?" ON)
 option(ENABLE_PYTHON      "Enable python support?" ON)
 option(ENABLE_TESTING     "Enable testing support?" ON)
 
@@ -336,6 +337,10 @@ endif()
 if(ENABLE_OPTICAL)
   core_require_dep(Cdio>=0.80)
   list(APPEND DEP_DEFINES -DHAS_OPTICAL_DRIVE -DHAS_CDDA_RIPPER)
+endif()
+
+if(ENABLE_DLLLOADER)
+  list(APPEND DEP_DEFINES -DHAS_DLLLOADER)
 endif()
 
 if(ENABLE_AIRTUNES)

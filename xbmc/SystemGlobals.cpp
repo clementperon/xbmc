@@ -8,7 +8,9 @@
 #include "GUIInfoManager.h"
 #include "GUIPassword.h"
 #include "PartyModeManager.h"
+#ifdef HAS_DLLLOADER
 #include "SectionLoader.h"
+#endif
 #include "filesystem/DirectoryCache.h"
 #include "filesystem/DllLibCurl.h"
 #include "utils/AlarmClock.h"
@@ -33,6 +35,8 @@ XCURL::DllLibCurlGlobal g_curlInterface;
 CPartyModeManager g_partyModeManager;
 
 CAlarmClock g_alarmClock;
+#ifdef HAS_DLLLOADER
 CSectionLoader g_sectionLoader;
+#endif
 
 CZipManager g_ZipManager;
