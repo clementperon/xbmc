@@ -8,6 +8,7 @@
 #   ${APP_NAME_LC}::EGL   - The EGL library
 
 if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  set(_egl_target ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
   find_package(PkgConfig ${SEARCH_QUIET})
   if(PKG_CONFIG_FOUND)
     pkg_check_modules(PC_EGL egl ${SEARCH_QUIET})
@@ -16,8 +17,14 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
   find_path(EGL_INCLUDE_DIR EGL/egl.h
                             HINTS ${PC_EGL_INCLUDEDIR})
 
-  find_library(EGL_LIBRARY NAMES EGL egl
-                           HINTS ${PC_EGL_LIBDIR})
+  if(NOT EGL_LIBRARY)
+    find_library(EGL_LIBRARY NAMES EGL egl
+                             HINTS ${PC_EGL_LIBDIR})
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" AND NOT EGL_LIBRARY)
+    # Emscripten exposes EGL as a link name instead of a filesystem library.
+    set(EGL_LIBRARY EGL)
+  endif()
 
   set(EGL_VERSION ${PC_EGL_VERSION})
 
@@ -39,20 +46,28 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
     check_include_files("EGL/egl.h;EGL/eglext.h;EGL/eglext_angle.h" HAVE_EGLEXTANGLE)
     unset(CMAKE_REQUIRED_INCLUDES)
 
-    if(${EGL_LIBRARY} MATCHES ".+\.so$")
-      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} SHARED IMPORTED)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+      add_library(${_egl_target} INTERFACE IMPORTED)
+      set_target_properties(${_egl_target} PROPERTIES
+                                        INTERFACE_LINK_LIBRARIES "${EGL_LIBRARY}"
+                                        INTERFACE_INCLUDE_DIRECTORIES "${EGL_INCLUDE_DIR}"
+                                        INTERFACE_COMPILE_DEFINITIONS HAS_EGL)
+    elseif(${EGL_LIBRARY} MATCHES ".+\.so$")
+      add_library(${_egl_target} SHARED IMPORTED)
     else()
-      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} UNKNOWN IMPORTED)
+      add_library(${_egl_target} UNKNOWN IMPORTED)
     endif()
 
-    set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
-                                                                     IMPORTED_LOCATION "${EGL_LIBRARY}"
-                                                                     INTERFACE_INCLUDE_DIRECTORIES "${EGL_INCLUDE_DIR}"
-                                                                     INTERFACE_COMPILE_DEFINITIONS HAS_EGL
-                                                                     IMPORTED_NO_SONAME TRUE)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+      set_target_properties(${_egl_target} PROPERTIES
+                                          IMPORTED_LOCATION "${EGL_LIBRARY}"
+                                          INTERFACE_INCLUDE_DIRECTORIES "${EGL_INCLUDE_DIR}"
+                                          INTERFACE_COMPILE_DEFINITIONS HAS_EGL
+                                          IMPORTED_NO_SONAME TRUE)
+    endif()
 
     if(HAVE_EGLEXTANGLE)
-      set_property(TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} APPEND PROPERTY
+      set_property(TARGET ${_egl_target} APPEND PROPERTY
                                                                             INTERFACE_COMPILE_DEFINITIONS HAVE_EGLEXTANGLE)
     endif()
   endif()
