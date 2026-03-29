@@ -59,6 +59,10 @@ $(LIBDYLIB): .configured-$(PLATFORM)
 .installed-$(PLATFORM): $(LIBDYLIB)
 	$(MAKE) -C $(PLATFORM)/build install
 	rm -f $(PREFIX)/lib/mariadb/*.so $(PREFIX)/lib/mariadb/*.dylib
+ifeq ($(OS),wasm)
+	# static-only target: pkg-config references -lmariadb but only libmariadbclient.a exists
+	cd $(PREFIX)/lib/mariadb && ln -sf libmariadbclient.a libmariadb.a
+endif
 	touch $@
 
 clean:
