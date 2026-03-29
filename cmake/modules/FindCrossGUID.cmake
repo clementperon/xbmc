@@ -24,6 +24,10 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
                 "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/002-disable-Wall-error.patch"
                 "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/003-add-cstdint-include.patch")
 
+    if(CMAKE_SYSTEM_NAME STREQUAL Emscripten)
+      list(APPEND patches "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/004-emscripten-support.patch")
+    endif()
+
     generate_patchcommand("${patches}")
     unset(patches)
 
@@ -76,7 +80,7 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
       add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
     endif()
 
-    if(UNIX AND NOT (APPLE OR ANDROID))
+    if(UNIX AND NOT (APPLE OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten"))
       # Suppress mismatch warning, see https://cmake.org/cmake/help/latest/module/FindPackageHandleStandardArgs.html
       set(FPHSA_NAME_MISMATCHED 1)
       find_package(UUID REQUIRED ${SEARCH_QUIET})

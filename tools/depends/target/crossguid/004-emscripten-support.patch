@@ -1,0 +1,46 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -26,6 +26,8 @@
+     find_library(CFLIB CoreFoundation)
+     target_link_libraries(crossguid ${CFLIB})
+     target_compile_definitions(crossguid PRIVATE GUID_CFUUID)
++elseif(EMSCRIPTEN)
++    target_compile_definitions(crossguid PRIVATE GUID_EMSCRIPTEN)
+ elseif(ANDROID)
+     # GUID_ANDROID is used in the headers, so make PUBLIC
+     target_compile_definitions(crossguid PUBLIC GUID_ANDROID)
+--- a/src/guid.cpp
++++ b/src/guid.cpp
+@@ -42,6 +42,11 @@
+ #include <cassert>
+ #endif
+ 
++#ifdef GUID_EMSCRIPTEN
++#include <random>
++#include <algorithm>
++#endif
++
+ BEGIN_XG_NAMESPACE
+ 
+ #ifdef GUID_ANDROID
+@@ -388,7 +393,21 @@
+ }
+ #endif
+ 
++#ifdef GUID_EMSCRIPTEN
++Guid newGuid()
++{
++	std::random_device rd;
++	std::array<unsigned char, 16> data;
++	std::generate(data.begin(), data.end(), std::ref(rd));
++
++	// UUID v4: set version (4) and variant (RFC 4122)
++	data[6] = (data[6] & 0x0F) | 0x40;
++	data[8] = (data[8] & 0x3F) | 0x80;
++
++	return Guid{std::move(data)};
++}
++#endif
+ 
+ END_XG_NAMESPACE
+ 
