@@ -37,6 +37,24 @@ cmake --build build-wasm -j4
 
 If you configure depends in debug mode, use the `.../wasm32-unknown-emscripten-debug/...` toolchain path instead.
 
+## Running in the Browser
+
+Pthreads require [`SharedArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), which browsers only enable when the page is served with two specific HTTP headers (`COOP`/`COEP`). A plain `python3 -m http.server` will not work — use the provided helper instead.
+
+```bash
+cd build-wasm
+cp ../tools/wasm/kodi.html .
+python3 ../tools/wasm/serve.py          # http://localhost:8080
+python3 ../tools/wasm/serve.py 9000     # custom port
+```
+
+Then open <http://localhost:8080/kodi.html> in a Chromium-based or Firefox browser.
+
+The server sets:
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: require-corp`
+- Correct MIME types for `.wasm` and `.js`
+
 ## Known Incomplete Areas
 
 - `tools/depends make` does not complete end-to-end yet for the WASM flow.
