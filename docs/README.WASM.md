@@ -37,6 +37,33 @@ cmake --build build-wasm -j4
 
 If you configure depends in debug mode, use the `.../wasm32-unknown-emscripten-debug/...` toolchain path instead.
 
+## Debug Build
+
+Pass `-DCMAKE_BUILD_TYPE=Debug` to CMake to get an instrumented build suited for troubleshooting:
+
+```bash
+cmake -S . -B build-wasm-debug \
+  -GNinja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_TOOLCHAIN_FILE=/tmp/kodi-wasm-depends/wasm32-unknown-emscripten-release/share/Toolchain.cmake
+cmake --build build-wasm-debug -j4
+```
+
+What the debug build enables compared to release:
+
+| Flag | Effect |
+|---|---|
+| `-g -O0` | Full DWARF symbols, no optimisation — sources map 1:1 in DevTools |
+| `ASSERTIONS=2` | Extra Emscripten runtime checks (e.g. pointer alignment, table bounds) |
+| `SAFE_HEAP=1` | Every heap load/store is bounds-checked; null-pointer dereferences and bad casts surface as a clear abort message instead of an opaque `TypeError` |
+| `STACK_OVERFLOW_CHECK=2` | Stack canary on every function call; catches unbounded recursion or oversized stack frames |
+| `DISABLE_EXCEPTION_CATCHING=0` | C++ exceptions propagate with a readable message rather than being silently swallowed |
+| `--source-map-base` | Browser DevTools fetches the `.wasm.map` source map from `http://localhost:8080/` |
+
+> **Note**: `SAFE_HEAP=1` instruments every memory access and makes the build noticeably slower. Use it to track down memory errors; switch back to release for performance work.
+
+After building, copy `kodi.html` and serve from `build-wasm-debug/` the same way as a release build.
+
 ## Running in the Browser
 
 Pthreads require [`SharedArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), which browsers only enable when the page is served with two specific HTTP headers (`COOP`/`COEP`). A plain `python3 -m http.server` will not work — use the provided helper instead.
