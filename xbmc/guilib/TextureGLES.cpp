@@ -373,7 +373,15 @@ bool CGLESTexture::SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureS
 
 void CGLESTexture::SetSwizzle(bool swapRB)
 {
-#if defined(GL_ES_VERSION_3_0)
+#if defined(GL_ES_VERSION_3_0) && !defined(TARGET_WASM)
+  // The WebGL 2.0 specification (§ "No texture swizzles") explicitly removes
+  // GL_TEXTURE_SWIZZLE_R/G/B/A, even though they exist in GLES 3.0:
+  //   "Texture swizzles cannot be implemented in a performant manner on
+  //    Direct3D based WebGL implementations."
+  // Any call with these pnames therefore generates INVALID_ENUM on every
+  // WebGL 2.0 context.  Skip swizzle setup for the WASM target: Kodi's
+  // shaders already read the raw channel they need (font/SDF shaders sample
+  // .r directly, etc.) so hardware-level swizzle remapping is not needed.
   TextureSwizzle swiz;
 
   const auto it = SwizzleMapGLES.find(m_textureSwizzle);
