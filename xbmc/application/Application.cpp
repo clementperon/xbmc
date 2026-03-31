@@ -859,7 +859,8 @@ void CApplication::Render()
     appPower->ResetScreenSaver();
   }
 
-  if (!CServiceBroker::GetRenderSystem()->BeginRender())
+  const bool beginRenderOk = CServiceBroker::GetRenderSystem()->BeginRender();
+  if (!beginRenderOk)
     return;
 
   // render gui layer

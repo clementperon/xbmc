@@ -32,9 +32,192 @@
     var statusText = document.getElementById('statusText');
     var progressEl = document.getElementById('progress');
     var canvas     = document.getElementById('canvas');
+    var params = new URLSearchParams(window.location.search);
+    var wasmDiag = params.get('wasmDiag') === '1';
+    var wasmStencilHack = params.get('wasmStencilHack') !== '0';
+    var wasmNoStencil = params.get('wasmNoStencil') === '1';
+    var wasmNoClip = params.get('wasmNoClip') === '1';
+    var wasmForceClear = params.get('wasmForceClear') === '1';
+
+    function installKodiWasmGlHooks(gl, sourceTag) {
+      if (!gl || gl.__kodiWasmHooksInstalled)
+        return gl;
+      gl.__kodiWasmHooksInstalled = true;
+      console.log('[kodi-gl] hooks installed from', sourceTag,
+                  '| version:', gl.getParameter(gl.VERSION),
+                  '| stencilHack:', wasmStencilHack ? 'on' : 'off',
+                  '| noStencil:', wasmNoStencil ? 'on' : 'off',
+                  '| noClip:', wasmNoClip ? 'on' : 'off',
+                  '| diag:', wasmDiag ? 'on' : 'off');
+
+      if (wasmStencilHack) {
+        // WASM bring-up compatibility: upgrade Emscripten offscreen depth-only
+        // renderbuffer allocation to depth+stencil for GUI clipping.
+        var _lastRBOWasDepth16 = false;
+        var _rbStorageOrig = gl.renderbufferStorage.bind(gl);
+        gl.renderbufferStorage = function(target, internalformat, width, height) {
+          if (internalformat === 33189 /* GL_DEPTH_COMPONENT16 */) {
+            internalformat = 0x88F0; // GL_DEPTH24_STENCIL8
+            _lastRBOWasDepth16 = true;
+            if (wasmDiag) {
+              console.log('[kodi-gl] upgraded DEPTH_COMPONENT16 to DEPTH24_STENCIL8',
+                          width + 'x' + height);
+            }
+          } else {
+            _lastRBOWasDepth16 = false;
+          }
+          _rbStorageOrig(target, internalformat, width, height);
+        };
+
+        var _fboRBOrig = gl.framebufferRenderbuffer.bind(gl);
+        gl.framebufferRenderbuffer = function(target, attachment, rbTarget, rb) {
+          if (attachment === 36096 /* GL_DEPTH_ATTACHMENT */ && _lastRBOWasDepth16) {
+            attachment = 33306; // GL_DEPTH_STENCIL_ATTACHMENT
+            _lastRBOWasDepth16 = false;
+            if (wasmDiag) {
+              console.log('[kodi-gl] upgraded DEPTH_ATTACHMENT to DEPTH_STENCIL_ATTACHMENT');
+            }
+          }
+          _fboRBOrig(target, attachment, rbTarget, rb);
+        };
+      }
+
+      if (wasmDiag) {
+        var draws = 0;
+        var blits = 0;
+        var errors = 0;
+        var currentFBO = 0;
+
+        var bindFBOOrig = gl.bindFramebuffer.bind(gl);
+        gl.bindFramebuffer = function(target, fbo) {
+          currentFBO = (fbo === null) ? 0 : 1;
+          bindFBOOrig(target, fbo);
+        };
+
+        var drawArraysOrig = gl.drawArrays.bind(gl);
+        gl.drawArrays = function(mode, first, count) {
+          draws++;
+          drawArraysOrig(mode, first, count);
+        };
+
+        var drawElementsOrig = gl.drawElements.bind(gl);
+        gl.drawElements = function(mode, count, type, offset) {
+          draws++;
+          drawElementsOrig(mode, count, type, offset);
+        };
+
+        var blitOrig = gl.blitFramebuffer.bind(gl);
+        gl.blitFramebuffer = function(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter) {
+          blits++;
+          blitOrig(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+        };
+
+        setInterval(function() {
+          var e;
+          while ((e = gl.getError()) !== 0) {
+            errors++;
+            if (errors < 8) {
+              console.warn('[kodi-gl] GL error 0x' + e.toString(16));
+            }
+          }
+          console.log('[kodi-gl] tick draws=' + draws +
+                      ' blits=' + blits +
+                      ' currentFBO=' + currentFBO +
+                      ' errors=' + errors +
+                      ' moduleCtxSet=' + (!!(Module && Module.ctx)));
+          draws = 0;
+          blits = 0;
+        }, 5000);
+      }
+
+      if (wasmNoStencil) {
+        var STENCIL_TEST = 0x0B90;
+        var enableOrig = gl.enable.bind(gl);
+        gl.enable = function(cap) {
+          if (cap === STENCIL_TEST) {
+            if (wasmDiag) {
+              console.warn('[kodi-gl] wasmNoStencil: blocked gl.enable(STENCIL_TEST)');
+            }
+            return;
+          }
+          enableOrig(cap);
+        };
+
+        var stencilFuncOrig = gl.stencilFunc.bind(gl);
+        gl.stencilFunc = function(func, ref, mask) {
+          if (wasmDiag) {
+            console.warn('[kodi-gl] wasmNoStencil: forcing stencilFunc(ALWAYS,1,0xFF)');
+          }
+          stencilFuncOrig(gl.ALWAYS, 1, 0xFF);
+        };
+      }
+
+      if (wasmNoClip) {
+        var STENCIL_TEST2 = 0x0B90;
+        var SCISSOR_TEST = 0x0C11;
+        var DEPTH_TEST = 0x0B71;
+
+        var enableOrig2 = gl.enable.bind(gl);
+        var disableOrig2 = gl.disable.bind(gl);
+        gl.enable = function(cap) {
+          if (cap === STENCIL_TEST2 || cap === SCISSOR_TEST || cap === DEPTH_TEST) {
+            if (wasmDiag) {
+              console.warn('[kodi-gl] wasmNoClip: blocked gl.enable(' + cap + ')');
+            }
+            return;
+          }
+          enableOrig2(cap);
+        };
+        gl.disable = function(cap) {
+          if (cap === STENCIL_TEST2 || cap === SCISSOR_TEST || cap === DEPTH_TEST) {
+            disableOrig2(cap);
+            return;
+          }
+          disableOrig2(cap);
+        };
+
+        var scissorOrig = gl.scissor.bind(gl);
+        gl.scissor = function(x, y, w, h) {
+          if (wasmDiag) {
+            console.warn('[kodi-gl] wasmNoClip: ignored gl.scissor(' + [x,y,w,h].join(',') + ')');
+          }
+          // Force full viewport clip.
+          var vw = gl.drawingBufferWidth | 0;
+          var vh = gl.drawingBufferHeight | 0;
+          scissorOrig(0, 0, vw, vh);
+        };
+
+        var depthMaskOrig = gl.depthMask.bind(gl);
+        gl.depthMask = function(flag) {
+          depthMaskOrig(false);
+        };
+
+        var depthFuncOrig = gl.depthFunc.bind(gl);
+        gl.depthFunc = function(func) {
+          depthFuncOrig(gl.ALWAYS);
+        };
+      }
+
+      return gl;
+    }
+
+    var _origGetContext = canvas.getContext.bind(canvas);
+    canvas.getContext = function(type, attrs) {
+      var ctx = _origGetContext(type, attrs);
+      if (type === 'webgl2' && ctx) {
+        console.log('[kodi-gl] canvas.getContext(webgl2)',
+                    '| source attrs alpha=' + (attrs && attrs.alpha),
+                    'stencil=' + (attrs && attrs.stencil),
+                    'preserveDrawingBuffer=' + (attrs && attrs.preserveDrawingBuffer));
+        installKodiWasmGlHooks(ctx, 'canvas.getContext');
+      }
+      return ctx;
+    };
 
     var Module = {
       canvas: canvas,
+      kodiWasmDiag: wasmDiag,
+      kodiWasmForceClear: wasmForceClear,
       print: function(text) { console.log(text); },
       printErr: function(text) { console.error(text); },
       setStatus: function(text) {
@@ -52,6 +235,26 @@
       onRuntimeInitialized: function() {
         statusEl.classList.add('hidden');
         canvas.focus();
+        try {
+          var liveCtx = null;
+          if (typeof Module.ctx !== 'undefined' && Module.ctx)
+            liveCtx = Module.ctx;
+          else
+            liveCtx = canvas.getContext('webgl2');
+
+          if (!liveCtx) {
+            console.error('[kodi-gl] no WebGL2 context available at onRuntimeInitialized');
+          } else {
+            installKodiWasmGlHooks(liveCtx, 'onRuntimeInitialized');
+            if (Module.ctx && Module.ctx !== liveCtx) {
+              console.warn('[kodi-gl] Module.ctx differs from liveCtx object');
+            } else {
+              console.log('[kodi-gl] context ownership confirmed Module.ctx=' + (!!Module.ctx));
+            }
+          }
+        } catch (e) {
+          console.error('[kodi-gl] interceptor setup failed:', e);
+        }
       }
     };
 

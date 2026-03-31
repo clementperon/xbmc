@@ -39,6 +39,17 @@ public:
   void Register(IDispResource* resource) override {}
   void Unregister(IDispResource* resource) override {}
 
+  /*!
+   * \brief WebGL has no EGL_EXT_buffer_age / swap-buffer age like Wayland or GBM.
+   * Default WinSystem::GetBufferAge() is 2 (truthy), so CGUIWindowManager::Render()
+   * skips the "buffer age == 0 → full viewport" path. With the default dirty-region
+   * algorithm (FILL_VIEWPORT_ON_CHANGE), RenderPass() only runs when dirtyRegions is
+   * non-empty — on WASM that often never happens reliably → black screen with only
+   * occasional draws. Returning 0 matches "backbuffer contents undefined" and
+   * forces a full GUI RenderPass every frame until the port has proper dirty tracking.
+   */
+  int GetBufferAge() override;
+
 protected:
   void SetVSyncImpl(bool enable) override;
   void PresentRenderImpl(bool rendered) override;

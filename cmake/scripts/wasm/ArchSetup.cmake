@@ -61,7 +61,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sINITIAL_MEMORY=256MB"
     "SHELL:-sMAXIMUM_MEMORY=4GB"
     "SHELL:-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-    "SHELL:-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
+    "SHELL:-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_kodi_nfs_run_swap']"
     "SHELL:-sPROXY_TO_PTHREAD"
     "SHELL:-sOFFSCREEN_FRAMEBUFFER"
     "SHELL:-sMIN_WEBGL_VERSION=2"
