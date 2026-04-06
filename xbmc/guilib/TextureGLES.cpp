@@ -312,6 +312,12 @@ void CGLESTexture::DestroyTextureObject()
 
 void CGLESTexture::LoadToGPU()
 {
+  static unsigned int wasmTextureDiagLogs = 0;
+#if defined(TARGET_WASM)
+  constexpr bool wasmMaxDiag = true;
+#else
+  constexpr bool wasmMaxDiag = false;
+#endif
   if (!m_pixels)
   {
     // nothing to load - probably same image (no change)
@@ -436,6 +442,18 @@ void CGLESTexture::LoadToGPU()
     }
     SetSwizzle(swapRB);
     glesFormat = GetFormatGLES30(textureFormat);
+
+#if defined(TARGET_WASM)
+    if (wasmMaxDiag && (wasmTextureDiagLogs < 40 || (wasmTextureDiagLogs % 200) == 0))
+    {
+      CLog::Log(LOGINFO,
+                "WASM: tex upload pre format={} swizzle={} internal={} extformat={} type={} w={} h={}",
+                static_cast<int>(m_textureFormat), static_cast<int>(m_textureSwizzle),
+                static_cast<unsigned int>(glesFormat.internalFormat),
+                static_cast<unsigned int>(glesFormat.format),
+                static_cast<unsigned int>(glesFormat.type), m_textureWidth, m_textureHeight);
+    }
+#endif
   }
   else
   {
@@ -476,8 +494,16 @@ void CGLESTexture::LoadToGPU()
                  static_cast<unsigned int>(uploadErr), static_cast<int>(m_textureFormat),
                  static_cast<int>(m_textureSwizzle), m_textureWidth, m_textureHeight);
     }
+    else if (wasmMaxDiag && (wasmTextureDiagLogs < 40 || (wasmTextureDiagLogs % 200) == 0))
+    {
+      CLog::Log(LOGINFO, "WASM: tex upload ok format={} swizzle={} w={} h={}",
+                static_cast<int>(m_textureFormat), static_cast<int>(m_textureSwizzle),
+                m_textureWidth, m_textureHeight);
+    }
   }
 #endif
+
+  ++wasmTextureDiagLogs;
   if (IsMipmapped())
   {
     glGenerateMipmap(GL_TEXTURE_2D);

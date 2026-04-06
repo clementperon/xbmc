@@ -293,12 +293,13 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
 
   MAIN_THREAD_EM_ASM(
       {
-        if (!Module.kodiWasmDiag)
+        if (!Module.kodiWasmDiag && !Module.kodiWasmMaxDiag)
           return;
         if (!Module.__kodiWasmStateLogTick)
           Module.__kodiWasmStateLogTick = 0;
         Module.__kodiWasmStateLogTick++;
-        if (Module.__kodiWasmStateLogTick > 8 && (Module.__kodiWasmStateLogTick % 120) !== 0)
+        var period = Module.kodiWasmMaxDiag ? 60 : 120;
+        if (Module.__kodiWasmStateLogTick > 12 && (Module.__kodiWasmStateLogTick % period) !== 0)
           return;
 
         var ctx = GL.contexts[$0];
@@ -308,18 +309,76 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
         var vp = gl.getParameter(gl.VIEWPORT);
         var sb = gl.getParameter(gl.SCISSOR_BOX);
         var cm = gl.getParameter(gl.COLOR_WRITEMASK);
+        var cc = gl.getParameter(gl.COLOR_CLEAR_VALUE);
         var prog = gl.getParameter(gl.CURRENT_PROGRAM);
         var rb = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
         var db = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+        var readStatus = gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER);
+        var drawStatus = gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER);
+        var px = new Uint8Array(4);
+        var prevSc = gl.isEnabled(gl.SCISSOR_TEST);
+        if (prevSc) gl.disable(gl.SCISSOR_TEST);
+        gl.readPixels((vp[2] / 2) | 0, (vp[3] / 2) | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        if (prevSc) gl.enable(gl.SCISSOR_TEST);
+        var e = gl.getError();
         console.log('[kodi-wasm] pre-commit state viewport=' + Array.from(vp).join(',') +
                     ' scissorBox=' + Array.from(sb).join(',') +
                     ' colorMask=' + Array.from(cm).join(',') +
+                    ' clear=' + Array.from(cc).map(function(v){return v.toFixed(2);}).join(',') +
                     ' scissor=' + gl.isEnabled(gl.SCISSOR_TEST) +
                     ' depth=' + gl.isEnabled(gl.DEPTH_TEST) +
                     ' stencil=' + gl.isEnabled(gl.STENCIL_TEST) +
+                    ' blend=' + gl.isEnabled(gl.BLEND) +
+                    ' cull=' + gl.isEnabled(gl.CULL_FACE) +
                     ' program=' + (!!prog) +
                     ' readFbo=' + (rb ? 'bound' : 'default') +
-                    ' drawFbo=' + (db ? 'bound' : 'default'));
+                    ' drawFbo=' + (db ? 'bound' : 'default') +
+                    ' readStatus=0x' + readStatus.toString(16) +
+                    ' drawStatus=0x' + drawStatus.toString(16) +
+                    ' centerPx=' + Array.from(px).join(',') +
+                    (e ? ' glErr=0x' + e.toString(16) : ""));
+      },
+      m_webglContext);
+
+  // Ensure commit reads from default framebuffer in the same main-thread
+  // context object used by proxied WebGL. Doing this from worker GL calls can
+  // be reordered relative to main-thread inspection/commit.
+  MAIN_THREAD_EM_ASM(
+      {
+        var ctx = GL.contexts[$0];
+        if (!ctx || !ctx.GLctx)
+          return;
+        var gl = ctx.GLctx;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        if (gl.READ_FRAMEBUFFER && gl.DRAW_FRAMEBUFFER) {
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+        }
+      },
+      m_webglContext);
+
+  MAIN_THREAD_EM_ASM(
+      {
+        if (!Module.kodiWasmDiag && !Module.kodiWasmMaxDiag)
+          return;
+        if (!Module.__kodiWasmPostUnbindTick)
+          Module.__kodiWasmPostUnbindTick = 0;
+        Module.__kodiWasmPostUnbindTick++;
+        var period = Module.kodiWasmMaxDiag ? 60 : 120;
+        if (Module.__kodiWasmPostUnbindTick > 12 && (Module.__kodiWasmPostUnbindTick % period) !== 0)
+          return;
+        var ctx = GL.contexts[$0];
+        if (!ctx || !ctx.GLctx)
+          return;
+        var gl = ctx.GLctx;
+        var rb = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+        var db = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+        var readStatus = gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER);
+        var drawStatus = gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER);
+        console.log('[kodi-wasm] post-unbind state readFbo=' + (rb ? 'bound' : 'default') +
+                    ' drawFbo=' + (db ? 'bound' : 'default') +
+                    ' readStatus=0x' + readStatus.toString(16) +
+                    ' drawStatus=0x' + drawStatus.toString(16));
       },
       m_webglContext);
 
@@ -339,6 +398,12 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
       m_webglContext);
 
   const EMSCRIPTEN_RESULT commitResult = emscripten_webgl_commit_frame();
+  if (EM_ASM_INT({ return Module.kodiWasmMaxDiag ? 1 : 0; }))
+  {
+    MAIN_THREAD_EM_ASM(
+        { console.log('[kodi-wasm] commit rc=' + $0 + ' handle=' + $1); }, commitResult,
+        m_webglContext);
+  }
   if (commitResult != EMSCRIPTEN_RESULT_SUCCESS)
     CLog::Log(LOGWARNING, "WASM: emscripten_webgl_commit_frame failed ({})", commitResult);
 }
