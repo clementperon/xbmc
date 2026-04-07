@@ -141,7 +141,7 @@ set(CMAKE_FIND_FRAMEWORK LAST)
 set(_pkgconfig_libdir "@prefix@/@deps_dir@/lib/pkgconfig:@prefix@/@deps_dir@/share/pkgconfig")
 if(EMSCRIPTEN)
   string(PREPEND _pkgconfig_libdir
-                ":@use_toolchain@/cache/sysroot/local/lib/pkgconfig:@use_toolchain@/cache/sysroot/lib/pkgconfig")
+                "@use_toolchain@/cache/sysroot/local/lib/pkgconfig:@use_toolchain@/cache/sysroot/lib/pkgconfig:")
 endif()
 set(ENV{PKG_CONFIG_LIBDIR} "${_pkgconfig_libdir}")
 unset(_pkgconfig_libdir)
