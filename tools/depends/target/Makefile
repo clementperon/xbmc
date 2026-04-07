@@ -67,7 +67,7 @@ ifeq ($(OS),android)
 endif
 
 ifeq ($(OS),wasm)
-  EXCLUDED_DEPENDS = fontconfig freetype2 freetype2-noharfbuzz harfbuzz sqlite3 \
+  EXCLUDED_DEPENDS = freetype2 freetype2-noharfbuzz harfbuzz sqlite3 \
                      gettext gmp gnutls nettle libffi libgcrypt libgpg-error \
                      python3 pythonmodule-pil pythonmodule-pycryptodome pythonmodule-setuptools \
                      libplist libshairplay libusb libxml2 xz gtest \
