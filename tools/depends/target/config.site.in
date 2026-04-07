@@ -27,7 +27,11 @@ CXXFLAGS="@platform_cxxflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/i
 CPPFLAGS="@platform_cflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CPPFLAGS"
 
 export PKG_CONFIG=@prefix@/@tool_dir@/bin/pkg-config
-export PKG_CONFIG_LIBDIR=@prefix@/@deps_dir@/lib/pkgconfig
+if test "@platform_os@" = "wasm"; then
+  export PKG_CONFIG_LIBDIR=@use_toolchain@/cache/sysroot/local/lib/pkgconfig:@use_toolchain@/cache/sysroot/lib/pkgconfig:@prefix@/@deps_dir@/lib/pkgconfig:@prefix@/@deps_dir@/share/pkgconfig
+else
+  export PKG_CONFIG_LIBDIR=@prefix@/@deps_dir@/lib/pkgconfig
+fi
 export NASM=@prefix@/@tool_dir@/bin/nasm
 LIBGCRYPT_CONFIG=@prefix@/@deps_dir@/bin/libgcrypt-config
 
