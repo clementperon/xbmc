@@ -103,9 +103,18 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   // (linker flag) provides the GL-call proxy infrastructure so all GL calls
   // from this pthread are serialised and executed on the main thread.
   //
-  // renderViaOffscreenBackBuffer = false: proxied GL calls go directly to
-  // the main thread's WebGL 2.0 context; emscripten_webgl_commit_frame() is
-  // a no-op and the rendered frame is already in the canvas back buffer.
+  // renderViaOffscreenBackBuffer = true is required for correct frame presentation.
+  // With PROXY_TO_PTHREAD the DOM canvas is unreachable from the worker, so
+  // PROXY_FALLBACK proxies the context to the main thread. On modern browsers
+  // _emscripten_supports_offscreencanvas() returns true, so Emscripten does NOT
+  // automatically force renderViaOffscreenBackBuffer (libhtml5_webgl.js lines 120-137).
+  // Without it GL.currentContext.defaultFbo is null, emscripten_webgl_commit_frame
+  // becomes a no-op (emscripten_webgl_do_commit_frame checks defaultFbo first,
+  // webgl1.c:114-119), and no blit ever reaches the canvas — black screen.
+  // With renderViaOffscreenBackBuffer=true Emscripten creates an offscreen FBO;
+  // commit_frame blits it to the canvas via GL.blitOffscreenFramebuffer.
+  // kodi.html upgrades the FBO depth buffer to DEPTH24_STENCIL8 (wasmStencilHack,
+  // on by default) so that GUI stencil clipping works.
   //
   // Note: GL_TEXTURE_SWIZZLE_R/G/B/A calls are disabled for TARGET_WASM in
   // TextureGLES.cpp.  The WebGL 2.0 spec explicitly removes TEXTURE_SWIZZLE_*
@@ -113,7 +122,7 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   // INVALID_ENUM.  Kodi's shaders read the channels they need directly, so
   // no hardware-level swizzle remapping is required.
   attrs.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_FALLBACK;
-  attrs.renderViaOffscreenBackBuffer = false;
+  attrs.renderViaOffscreenBackBuffer = true;
 
 
   m_webglContext = emscripten_webgl_create_context("#canvas", &attrs);
@@ -337,23 +346,6 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
                     ' drawStatus=0x' + drawStatus.toString(16) +
                     ' centerPx=' + Array.from(px).join(',') +
                     (e ? ' glErr=0x' + e.toString(16) : ""));
-      },
-      m_webglContext);
-
-  // Ensure commit reads from default framebuffer in the same main-thread
-  // context object used by proxied WebGL. Doing this from worker GL calls can
-  // be reordered relative to main-thread inspection/commit.
-  MAIN_THREAD_EM_ASM(
-      {
-        var ctx = GL.contexts[$0];
-        if (!ctx || !ctx.GLctx)
-          return;
-        var gl = ctx.GLctx;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        if (gl.READ_FRAMEBUFFER && gl.DRAW_FRAMEBUFFER) {
-          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-        }
       },
       m_webglContext);
 

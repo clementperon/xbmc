@@ -1645,11 +1645,11 @@ void CApplication::WasmRunIteration()
     return;
   }
 
-  std::chrono::time_point<std::chrono::steady_clock> lastFrameTime;
+  static std::chrono::time_point<std::chrono::steady_clock> lastFrameTime =
+      std::chrono::steady_clock::now();
   std::chrono::milliseconds frameTime;
   const unsigned int noRenderFrameTime = 15;
 
-  lastFrameTime = std::chrono::steady_clock::now();
   Process();
 
   bool renderGUI = GetComponent<CApplicationPowerHandling>()->GetRenderGUI();
@@ -1669,6 +1669,7 @@ void CApplication::WasmRunIteration()
 #endif
     }
   }
+  lastFrameTime = std::chrono::steady_clock::now();
 }
 #endif
 

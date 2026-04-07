@@ -313,7 +313,7 @@ void CGLESTexture::DestroyTextureObject()
 void CGLESTexture::LoadToGPU()
 {
   static unsigned int wasmTextureDiagLogs = 0;
-#if defined(TARGET_WASM)
+#if defined(TARGET_WASM) && defined(WASM_TEXTURE_DIAG)
   constexpr bool wasmMaxDiag = true;
 #else
   constexpr bool wasmMaxDiag = false;
