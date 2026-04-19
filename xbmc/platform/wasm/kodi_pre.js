@@ -5,6 +5,66 @@
 // ImageBitmapRenderingContext to <canvas id="canvas"> and installs
 // Module.onKodiFrame so the render pthread can deliver frames via
 // postMessage({cmd:'callHandler', ...}).  See docs/wasm/RENDERING.md.
+//
+// Also installs a same-origin HTTP proxy shim (see tools/wasm/serve.py).
+// Any cross-origin http(s) XHR/fetch issued from the wasm module is
+// rewritten to Module.kodiHttpProxy + '?u=<encoded>' so it bypasses CORS
+// in the browser dev setup. Set Module.kodiHttpProxy = null before module
+// startup to disable (e.g. on Tizen, where the web runtime allows
+// cross-origin XHR directly).
+
+(function installHttpProxy(scope) {
+  var Module = (scope.Module = scope.Module || {});
+  if (Module.kodiHttpProxy === undefined) {
+    Module.kodiHttpProxy = '/proxy';
+  }
+
+  function rewrite(url) {
+    var base = Module.kodiHttpProxy;
+    if (!base || typeof url !== 'string') {
+      return url;
+    }
+    try {
+      var u = new URL(url, scope.location.href);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        return url;
+      }
+      if (u.origin === scope.location.origin) {
+        return url;
+      }
+      return base + '?u=' + encodeURIComponent(u.href);
+    } catch (_) {
+      return url;
+    }
+  }
+
+  if (scope.XMLHttpRequest && scope.XMLHttpRequest.prototype &&
+      !scope.XMLHttpRequest.prototype.__kodiProxyPatched) {
+    var origOpen = scope.XMLHttpRequest.prototype.open;
+    scope.XMLHttpRequest.prototype.open = function (method, url) {
+      arguments[1] = rewrite(url);
+      return origOpen.apply(this, arguments);
+    };
+    scope.XMLHttpRequest.prototype.__kodiProxyPatched = true;
+  }
+
+  if (typeof scope.fetch === 'function' && !scope.fetch.__kodiProxyPatched) {
+    var origFetch = scope.fetch.bind(scope);
+    var patched = function (input, init) {
+      if (typeof input === 'string') {
+        input = rewrite(input);
+      } else if (input && typeof input.url === 'string') {
+        var rewritten = rewrite(input.url);
+        if (rewritten !== input.url) {
+          input = new Request(rewritten, input);
+        }
+      }
+      return origFetch(input, init);
+    };
+    patched.__kodiProxyPatched = true;
+    scope.fetch = patched;
+  }
+})(globalThis);
 
 (function () {
   if (typeof document === 'undefined') {
