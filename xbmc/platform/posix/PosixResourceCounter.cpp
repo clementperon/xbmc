@@ -23,6 +23,9 @@ CPosixResourceCounter::~CPosixResourceCounter() = default;
 
 double CPosixResourceCounter::GetCPUUsage()
 {
+#ifdef TARGET_WASM
+  return m_dLastUsage;
+#else
   struct timeval tmNow;
   if (gettimeofday(&tmNow, NULL) == -1)
     CLog::Log(LOGERROR, "error {} in gettimeofday", errno);
@@ -52,15 +55,18 @@ double CPosixResourceCounter::GetCPUUsage()
   }
 
   return m_dLastUsage;
+#endif
 }
 
 void CPosixResourceCounter::Reset()
 {
+#ifndef TARGET_WASM
   if (gettimeofday(&m_tmLastCheck, NULL) == -1)
     CLog::Log(LOGERROR, "error {} in gettimeofday", errno);
 
   if (getrusage(RUSAGE_SELF, &m_usage) == -1)
     CLog::Log(LOGERROR, "error {} in getrusage", errno);
+#endif
 
   m_dLastUsage = 0.0;
 }
