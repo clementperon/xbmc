@@ -1,12 +1,13 @@
 /*
  *  Copyright (C) 2026 Team Kodi
- *  This file is part of Kodi - https://kodi.tv
- *
  *  SPDX-License-Identifier: GPL-2.0-or-later
- *  See LICENSES/README.md for more information.
  */
 
 #include "PlatformWasm.h"
+
+#include "cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.h"
+#include "filesystem/wasm/WasmFilesystem.h"
+#include "windowing/wasm/WinSystemWasmGLESContext.h"
 
 #include <cstdlib>
 
@@ -20,5 +21,17 @@ bool CPlatformWasm::InitStageOne()
   if (!std::getenv("HOME"))
     setenv("HOME", "/home/web_user", 1);
 
-  return CPlatformPosix::InitStageOne();
+  if (!CPlatformPosix::InitStageOne())
+    return false;
+
+  CWinSystemWasmGLESContext::Register();
+  CAESinkWasmAudioWorklet::Register();
+  KODI::PLATFORM::WASM::EnsureVirtualFilesystem();
+
+  return true;
+}
+
+void CPlatformWasm::DeinitStageOne()
+{
+  CPlatformPosix::DeinitStageOne();
 }
