@@ -21,6 +21,7 @@
 #include "utils/log.h"
 
 #include <memory>
+#include <vector>
 
 namespace
 {
@@ -170,6 +171,111 @@ constexpr auto SwizzleMapGLES = make_map<KD_TEX_SWIZ, TextureSwizzle>(
   {KD_TEX_SWIZ_GGGG, {GL_GREEN, GL_GREEN, GL_GREEN, GL_GREEN}},
 });
 // clang-format on
+
+#if defined(TARGET_WASM)
+bool ConvertWasmTextureToRGBA(const uint8_t* src,
+                              uint32_t width,
+                              uint32_t height,
+                              uint32_t pitch,
+                              KD_TEX_FMT format,
+                              KD_TEX_SWIZ swizzle,
+                              std::vector<uint8_t>& out)
+{
+  if (width == 0 || height == 0 || !src)
+    return false;
+
+  uint32_t bpp = 0;
+  switch (format)
+  {
+    case KD_TEX_FMT_SDR_R8:
+      bpp = 1;
+      break;
+    case KD_TEX_FMT_SDR_RG8:
+      bpp = 2;
+      break;
+    case KD_TEX_FMT_SDR_RGB8:
+      bpp = 3;
+      break;
+    case KD_TEX_FMT_SDR_RGBA8:
+    case KD_TEX_FMT_SDR_BGRA8:
+      bpp = 4;
+      break;
+    default:
+      return false;
+  }
+
+  TextureSwizzle map{GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA};
+  if (auto it = SwizzleMapGLES.find(swizzle); it != SwizzleMapGLES.cend())
+    map = it->second;
+
+  out.resize(static_cast<size_t>(width) * height * 4);
+  for (uint32_t y = 0; y < height; ++y)
+  {
+    const uint8_t* row = src + static_cast<size_t>(y) * pitch;
+    for (uint32_t x = 0; x < width; ++x)
+    {
+      const uint8_t* p = row + static_cast<size_t>(x) * bpp;
+
+      uint8_t inR = 0;
+      uint8_t inG = 0;
+      uint8_t inB = 0;
+      uint8_t inA = 255;
+      switch (format)
+      {
+        case KD_TEX_FMT_SDR_R8:
+          inR = p[0];
+          break;
+        case KD_TEX_FMT_SDR_RG8:
+          inR = p[0];
+          inG = p[1];
+          break;
+        case KD_TEX_FMT_SDR_RGB8:
+          inR = p[0];
+          inG = p[1];
+          inB = p[2];
+          break;
+        case KD_TEX_FMT_SDR_RGBA8:
+          inR = p[0];
+          inG = p[1];
+          inB = p[2];
+          inA = p[3];
+          break;
+        case KD_TEX_FMT_SDR_BGRA8:
+          inR = p[2];
+          inG = p[1];
+          inB = p[0];
+          inA = p[3];
+          break;
+        default:
+          break;
+      }
+
+      auto pick = [&](GLint c) -> uint8_t
+      {
+        if (c == GL_RED)
+          return inR;
+        if (c == GL_GREEN)
+          return inG;
+        if (c == GL_BLUE)
+          return inB;
+        if (c == GL_ALPHA)
+          return inA;
+        if (c == GL_ONE)
+          return 255;
+        return 0;
+      };
+
+      uint8_t* d = &out[(static_cast<size_t>(y) * width + x) * 4];
+      d[0] = pick(map.r);
+      d[1] = pick(map.g);
+      d[2] = pick(map.b);
+      d[3] = pick(map.a);
+    }
+  }
+
+  return true;
+}
+#endif
 } // namespace
 
 std::unique_ptr<CTexture> CTexture::CreateTexture(unsigned int width,
@@ -288,15 +394,40 @@ void CGLESTexture::LoadToGPU()
     glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
 
   TextureFormat glesFormat;
+  const uint8_t* uploadPixels = m_pixels;
+  std::vector<uint8_t> wasmConvertedPixels;
   if (m_isGLESVersion30orNewer)
   {
     KD_TEX_FMT textureFormat = m_textureFormat;
     bool swapRB = false;
+#if defined(TARGET_WASM)
+    if (textureFormat == KD_TEX_FMT_SDR_BGRA8 || m_textureSwizzle != KD_TEX_SWIZ_RGBA)
+    {
+      if (ConvertWasmTextureToRGBA(m_pixels, m_textureWidth, m_textureHeight, GetPitch(),
+                                   textureFormat, m_textureSwizzle, wasmConvertedPixels))
+      {
+        uploadPixels = wasmConvertedPixels.data();
+        textureFormat = KD_TEX_FMT_SDR_RGBA8;
+      }
+    }
+#endif
     // Support for BGRA is hit and miss, swizzle instead
     if (textureFormat == KD_TEX_FMT_SDR_BGRA8)
     {
       textureFormat = KD_TEX_FMT_SDR_RGBA8;
+#if defined(TARGET_WASM)
+      // WASM/WebGL2 path has swizzles disabled; do channel remap on a temporary
+      // buffer to avoid mutating borrowed upload memory.
+      if (wasmConvertedPixels.empty())
+      {
+        const size_t srcSize = GetPitch() * GetRows();
+        wasmConvertedPixels.assign(m_pixels, m_pixels + srcSize);
+      }
+      SwapBlueRed(wasmConvertedPixels.data(), m_textureHeight, GetPitch());
+      uploadPixels = wasmConvertedPixels.data();
+#else
       swapRB = true;
+#endif
     }
     SetSwizzle(swapRB);
     glesFormat = GetFormatGLES30(textureFormat);
@@ -316,7 +447,7 @@ void CGLESTexture::LoadToGPU()
   if ((m_textureFormat & KD_TEX_FMT_SDR) || (m_textureFormat & KD_TEX_FMT_HDR))
   {
     glTexImage2D(GL_TEXTURE_2D, 0, glesFormat.internalFormat, m_textureWidth, m_textureHeight, 0,
-                 glesFormat.format, glesFormat.type, m_pixels);
+                 glesFormat.format, glesFormat.type, uploadPixels);
   }
   else
   {
@@ -373,7 +504,15 @@ bool CGLESTexture::SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureS
 
 void CGLESTexture::SetSwizzle(bool swapRB)
 {
-#if defined(GL_ES_VERSION_3_0)
+#if defined(GL_ES_VERSION_3_0) && !defined(TARGET_WASM)
+  // The WebGL 2.0 specification (§ "No texture swizzles") explicitly removes
+  // GL_TEXTURE_SWIZZLE_R/G/B/A, even though they exist in GLES 3.0:
+  //   "Texture swizzles cannot be implemented in a performant manner on
+  //    Direct3D based WebGL implementations."
+  // Any call with these pnames therefore generates INVALID_ENUM on every
+  // WebGL 2.0 context.  Skip swizzle setup for the WASM target: Kodi's
+  // shaders already read the raw channel they need (font/SDF shaders sample
+  // .r directly, etc.) so hardware-level swizzle remapping is not needed.
   TextureSwizzle swiz;
 
   const auto it = SwizzleMapGLES.find(m_textureSwizzle);

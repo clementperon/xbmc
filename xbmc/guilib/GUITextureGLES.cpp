@@ -18,6 +18,7 @@
 #include "windowing/GraphicContext.h"
 #include "windowing/WinSystem.h"
 
+#include <array>
 #include <cstddef>
 
 void CGUITextureGLES::Register()
@@ -58,6 +59,13 @@ void CGUITextureGLES::Begin(KODI::UTILS::COLOR::Color color)
   m_col[1] = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::G, color);
   m_col[2] = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::B, color);
   m_col[3] = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::A, color);
+
+  if (CServiceBroker::GetWinSystem()->UseLimitedColor())
+  {
+    m_col[0] = (235 - 16) * m_col[0] / 255 + 16;
+    m_col[1] = (235 - 16) * m_col[1] / 255 + 16;
+    m_col[2] = (235 - 16) * m_col[2] / 255 + 16;
+  }
 
   bool hasAlpha = m_texture.m_textures[m_currentFrame]->HasAlpha() || m_col[3] < 255;
   const bool hasBlendColor =
