@@ -69,7 +69,6 @@
 #include "utils/StringUtils.h"
 #include "ServiceBroker.h"
 #include "addons/VFSEntry.h"
-
 using namespace ADDON;
 using namespace XFILE;
 
@@ -157,9 +156,8 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
   if (url.IsProtocol("ftp")
   ||  url.IsProtocol("ftps")
   ||  url.IsProtocol("rss")
-  ||  url.IsProtocol("rsss")
-  ||  url.IsProtocol("http")
-  ||  url.IsProtocol("https")) return new CCurlFile();
+  ||  url.IsProtocol("rsss")) return new CCurlFile();
+  else if (url.IsProtocol("http") || url.IsProtocol("https")) return new CCurlFile();
   else if (url.IsProtocol("dav") || url.IsProtocol("davs")) return new CDAVFile();
   else if (url.IsProtocol("shout") || url.IsProtocol("shouts")) return new CShoutcastFile();
 #ifdef HAS_FILESYSTEM_SMB
