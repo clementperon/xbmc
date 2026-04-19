@@ -20,7 +20,7 @@
 namespace
 {
 constexpr char AUDIO_PROCESSOR_NAME[] = "kodi-audio-worklet";
-constexpr unsigned int BUFFER_TARGET_MS = 60;
+constexpr unsigned int BUFFER_TARGET_MS = 200;
 constexpr unsigned int MAX_CHANNELS = 8;
 constexpr unsigned int MIN_BUFFER_QUANTA = 2;
 constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
@@ -42,6 +42,30 @@ int GetAudioContextSampleRateOnMain(int audioContext)
 int GetAudioContextQuantumSizeOnMain(int audioContext)
 {
   return emscripten_audio_context_quantum_size(audioContext);
+}
+
+int GetAudioContextLatencyUsOnMain(int audioContext)
+{
+  const double totalSeconds = EM_ASM_DOUBLE(
+      {
+        const ctx = emscriptenGetAudioObject($0);
+        if (!ctx)
+          return 0.0;
+        let total = 0.0;
+        if (typeof ctx.baseLatency === "number" && isFinite(ctx.baseLatency))
+          total += ctx.baseLatency;
+        if (typeof ctx.outputLatency === "number" && isFinite(ctx.outputLatency))
+          total += ctx.outputLatency;
+        return total;
+      },
+      audioContext);
+
+  if (!(totalSeconds > 0.0))
+    return 0;
+  const double us = totalSeconds * 1'000'000.0;
+  if (us > static_cast<double>(std::numeric_limits<int>::max()))
+    return std::numeric_limits<int>::max();
+  return static_cast<int>(us);
 }
 
 void StartWorkletThreadOnMain(int audioContext,
@@ -125,11 +149,15 @@ bool CWasmAudioWorkletManager::Initialize(unsigned int channels, unsigned int re
   EnsureBufferAllocated();
   ResetBuffer();
   InstallResumeHooks();
+  RefreshPipelineLatency();
 
   m_ready.store(true, std::memory_order_release);
-  CLog::Log(LOGINFO, "WASM AudioWorklet: initialized (channels={}, sampleRate={}, quantum={})",
+  CLog::Log(LOGINFO,
+            "WASM AudioWorklet: initialized (channels={}, sampleRate={}, quantum={}, "
+            "pipelineLatency={:.3f} ms, ringCapacity={:.3f} ms)",
             channels, m_sampleRate.load(std::memory_order_relaxed),
-            m_quantumSize.load(std::memory_order_relaxed));
+            m_quantumSize.load(std::memory_order_relaxed),
+            GetPipelineLatencySeconds() * 1000.0, GetBufferCapacitySeconds() * 1000.0);
   return true;
 }
 
@@ -137,6 +165,7 @@ void CWasmAudioWorkletManager::ResetBuffer()
 {
   const uint64_t currentWrite = m_writeFrame.load(std::memory_order_acquire);
   m_readFrame.store(currentWrite, std::memory_order_release);
+  m_underrunFrames.store(0, std::memory_order_relaxed);
 }
 
 void CWasmAudioWorkletManager::Shutdown()
@@ -162,6 +191,8 @@ void CWasmAudioWorkletManager::Shutdown()
   m_ringBuffer.shrink_to_fit();
   m_readFrame.store(0, std::memory_order_release);
   m_writeFrame.store(0, std::memory_order_release);
+  m_pipelineLatencyUs.store(0, std::memory_order_relaxed);
+  m_underrunFrames.store(0, std::memory_order_relaxed);
 }
 
 unsigned int CWasmAudioWorkletManager::WriteInterleaved(const float* source,
@@ -236,6 +267,21 @@ double CWasmAudioWorkletManager::GetBufferCapacitySeconds() const
     return 0.0;
 
   return static_cast<double>(m_bufferCapacityFrames) / static_cast<double>(rate);
+}
+
+double CWasmAudioWorkletManager::GetPipelineLatencySeconds() const
+{
+  return static_cast<double>(m_pipelineLatencyUs.load(std::memory_order_relaxed)) / 1'000'000.0;
+}
+
+double CWasmAudioWorkletManager::GetTotalDelaySeconds() const
+{
+  return GetBufferedSeconds() + GetPipelineLatencySeconds();
+}
+
+uint64_t CWasmAudioWorkletManager::ConsumeUnderrunFrames()
+{
+  return m_underrunFrames.exchange(0, std::memory_order_relaxed);
 }
 
 unsigned int CWasmAudioWorkletManager::GetSampleRate() const
@@ -373,7 +419,21 @@ bool CWasmAudioWorkletManager::ConfigureNode(unsigned int channels)
 
   emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VIIII, ConnectAudioNodeOnMain,
                                              m_workletNode, m_audioContext, 0, 0);
+  RefreshPipelineLatency();
   return true;
+}
+
+void CWasmAudioWorkletManager::RefreshPipelineLatency()
+{
+  if (m_audioContext == 0)
+    return;
+
+  const int latencyUs = emscripten_sync_run_in_main_runtime_thread(
+      EM_FUNC_SIG_II, GetAudioContextLatencyUsOnMain, m_audioContext);
+  if (latencyUs < 0)
+    return;
+
+  m_pipelineLatencyUs.store(static_cast<uint32_t>(latencyUs), std::memory_order_relaxed);
 }
 
 void CWasmAudioWorkletManager::InstallResumeHooks() const
@@ -501,7 +561,10 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
   const uint64_t readFrame = m_readFrame.load(std::memory_order_relaxed);
   const uint64_t writeFrame = m_writeFrame.load(std::memory_order_acquire);
   const uint64_t availableFrames = writeFrame - readFrame;
-  const uint64_t toRead = std::min<uint64_t>(availableFrames, static_cast<uint64_t>(samplesPerChannel));
+  const uint64_t wantedFrames = static_cast<uint64_t>(samplesPerChannel);
+  const uint64_t toRead = std::min<uint64_t>(availableFrames, wantedFrames);
+  if (toRead < wantedFrames)
+    m_underrunFrames.fetch_add(wantedFrames - toRead, std::memory_order_relaxed);
   if (toRead == 0)
     return true;
 

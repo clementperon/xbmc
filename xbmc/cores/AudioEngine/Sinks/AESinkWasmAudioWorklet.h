@@ -8,6 +8,7 @@
 #include "cores/AudioEngine/Interfaces/AESink.h"
 #include "cores/AudioEngine/Utils/AEDeviceInfo.h"
 
+#include <cstdint>
 #include <memory>
 
 class CAESinkWasmAudioWorklet : public IAESink
@@ -32,5 +33,8 @@ public:
   void Drain() override;
 
 private:
+  void DrainUnderrunLog();
+
   bool m_initialized{false};
+  uint64_t m_pendingUnderrunFrames{0};
 };
