@@ -35,14 +35,14 @@ int64_t CurrentHostCounter(void)
   LARGE_INTEGER PerformanceCount;
   QueryPerformanceCounter(&PerformanceCount);
   return( (int64_t)PerformanceCount.QuadPart );
-#else
-  struct timespec now;
-#if defined(CLOCK_MONOTONIC_RAW) && !defined(TARGET_ANDROID)
-  clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-#else
+#elif defined(TARGET_ANDROID) || defined(__EMSCRIPTEN__)
+  struct timespec now = {};
   clock_gettime(CLOCK_MONOTONIC, &now);
-#endif // CLOCK_MONOTONIC_RAW && !TARGET_ANDROID
-  return( ((int64_t)now.tv_sec * 1000000000L) + now.tv_nsec );
+  return ((int64_t)now.tv_sec * 1000000000L) + now.tv_nsec;
+#else
+  struct timespec now = {};
+  clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+  return ((int64_t)now.tv_sec * 1000000000L) + now.tv_nsec;
 #endif
 }
 
