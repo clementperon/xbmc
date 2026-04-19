@@ -5,6 +5,7 @@
 
 #include "WinSystemWasmGLESContext.h"
 
+#include "WasmClipboard.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.h"
 #include "cores/VideoPlayer/Process/wasm/ProcessInfoWasm.h"
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h"
@@ -16,6 +17,7 @@
 #include "windowing/WindowSystemFactory.h"
 
 #include <cstdint>
+#include <string>
 
 #include <emscripten/em_asm.h>
 #include <emscripten/emscripten.h>
@@ -332,4 +334,9 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
 int CWinSystemWasmGLESContext::GetBufferAge()
 {
   return 0;
+}
+
+std::string CWinSystemWasmGLESContext::GetClipboardText()
+{
+  return WASM_CLIPBOARD::ConsumePendingPasteText();
 }

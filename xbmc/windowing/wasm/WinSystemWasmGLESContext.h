@@ -10,6 +10,7 @@
 #include "windowing/WinSystem.h"
 
 #include <cstdint>
+#include <string>
 #include <memory>
 
 #include <emscripten/html5.h>
@@ -51,6 +52,8 @@ public:
    * forces a full GUI RenderPass every frame until the port has proper dirty tracking.
    */
   int GetBufferAge() override;
+
+  std::string GetClipboardText() override;
 
 protected:
   void SetVSyncImpl(bool enable) override;

@@ -1,6 +1,8 @@
-set(SOURCES WinEventsWasm.cpp)
+set(SOURCES WinEventsWasm.cpp
+            WasmClipboard.cpp)
 
-set(HEADERS WinEventsWasm.h)
+set(HEADERS WinEventsWasm.h
+            WasmClipboard.h)
 
 if(TARGET ${APP_NAME_LC}::OpenGLES)
   list(APPEND SOURCES WinSystemWasmGLESContext.cpp)

@@ -19,6 +19,10 @@
     console.warn('[kodi] No <canvas id="canvas"> found; rendering disabled.');
     return;
   }
+  // tabindex=0 allows the canvas to receive focus so paste and keyboard reach Kodi.
+  if (canvas.getAttribute('tabindex') === '-1' || canvas.getAttribute('tabindex') === null) {
+    canvas.setAttribute('tabindex', '0');
+  }
 
   var bitmapCtx = null;
   try {
@@ -75,6 +79,26 @@
 
   var prevOnRuntime = Module.onRuntimeInitialized;
   Module.onRuntimeInitialized = function () {
+    // Must run on the browser main thread (document is undefined on pthread workers).
+    document.addEventListener(
+        'paste',
+        function (e) {
+          try {
+            var text = (e.clipboardData && e.clipboardData.getData)
+                ? e.clipboardData.getData('text/plain')
+                : String();
+            if (text === undefined || text === null) {
+              text = String();
+            }
+            e.preventDefault();
+            if (typeof Module.ccall === 'function') {
+              Module.ccall('kodi_wasm_dispatch_paste', null, ['string'], [text]);
+            }
+          } catch (err) {
+            console.error('[kodi] paste handler:', err);
+          }
+        },
+        true);
     try { canvas.focus(); } catch (_) {}
     if (typeof prevOnRuntime === 'function') {
       try { prevOnRuntime(); } catch (e) { console.error(e); }
