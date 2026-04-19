@@ -44,7 +44,8 @@ bool SoLoader::Load()
     m_soHandle = dlopen(strFileName.c_str(), flags);
     if (!m_soHandle)
     {
-      CLog::Log(LOGERROR, "Unable to load {}, reason: {}", strFileName, dlerror());
+      CLog::Log(LOGERROR, "Unable to load {} (from {}), reason: {}", strFileName, GetFileName(),
+                dlerror());
       return false;
     }
   }
