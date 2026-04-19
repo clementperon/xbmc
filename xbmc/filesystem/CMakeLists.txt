@@ -2,7 +2,6 @@ set(SOURCES AddonsDirectory.cpp
             AudioBookFileDirectory.cpp
             CacheStrategy.cpp
             CircularCache.cpp
-            CurlFile.cpp
             CurlHttpClient.cpp
             DAVCommon.cpp
             DAVDirectory.cpp
@@ -186,6 +185,14 @@ if(ENABLE_UPNP)
                       UPnPFile.cpp)
   list(APPEND HEADERS UPnPDirectory.h
                       UPnPFile.h)
+endif()
+
+if(CORE_SYSTEM_NAME STREQUAL wasm)
+  # On WASM, CurlFile.cpp is replaced by an XHR-backed implementation that
+  # preserves the CCurlFile ABI. See xbmc/filesystem/wasm/CurlFileWasm.cpp.
+  list(APPEND SOURCES wasm/CurlFileWasm.cpp)
+else()
+  list(APPEND SOURCES CurlFile.cpp)
 endif()
 
 core_add_library(filesystem)
