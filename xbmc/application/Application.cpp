@@ -8,6 +8,11 @@
 
 #include "Application.h"
 
+#ifdef TARGET_WASM
+#include <emscripten.h>
+extern "C" void kodi_wasm_jsonrpc_notify_ready();
+#endif
+
 #include "Autorun.h"
 #include "CompileInfo.h"
 #include "DatabaseManager.h"
@@ -754,6 +759,10 @@ bool CApplication::Initialize()
   // render loop reaches anything after it only once the dialog has been dismissed.
   CJSONRPC::Initialize();
 
+#ifdef TARGET_WASM
+  kodi_wasm_jsonrpc_notify_ready();
+#endif
+
   CServiceBroker::RegisterSpeechRecognition(speech::ISpeechRecognition::CreateInstance());
 
   if (!m_ServiceManager->InitStageThree(profileManager))
@@ -909,7 +918,8 @@ void CApplication::Render()
     appPower->ResetScreenSaver();
   }
 
-  if (!CServiceBroker::GetRenderSystem()->BeginRender())
+  const bool beginRenderOk = CServiceBroker::GetRenderSystem()->BeginRender();
+  if (!beginRenderOk)
     return;
 
   // render gui layer
