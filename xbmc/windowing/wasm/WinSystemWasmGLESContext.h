@@ -35,6 +35,7 @@ public:
 
   bool ResizeWindow(int newWidth, int newHeight, int newLeft, int newTop) override;
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
+  void ForceFullScreen(const RESOLUTION_INFO& resInfo) override;
 
   bool MessagePump() override;
   bool HasCursor() override { return false; }
