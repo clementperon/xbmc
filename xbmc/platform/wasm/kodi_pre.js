@@ -66,6 +66,60 @@
   }
 })(globalThis);
 
+// Persist Kodi's user profile ($HOME/.kodi) to IndexedDB via IDBFS so that
+// sources.xml, guisettings.xml, the databases, etc. survive a page refresh.
+// Mount and populate run inside Module.preRun, and addRunDependency blocks
+// main() until IDBFS has finished loading from IndexedDB.
+(function installIdbfsPersistence() {
+  var Module = globalThis.Module = globalThis.Module || {};
+  var PROFILE_PATH = '/home/web_user/.kodi';
+
+  Module.preRun = Module.preRun || [];
+  Module.preRun.push(function mountKodiProfile() {
+    try {
+      FS.mkdirTree(PROFILE_PATH);
+    } catch (e) {
+      console.warn('[kodi] mkdirTree ' + PROFILE_PATH + ':', e);
+    }
+
+    try {
+      FS.mount(IDBFS, {}, PROFILE_PATH);
+    } catch (e) {
+      console.warn('[kodi] IDBFS mount failed, profile will not persist:', e);
+      return;
+    }
+
+    // Block main() until the profile has been loaded from IndexedDB.
+    addRunDependency('kodi-idbfs-populate');
+    FS.syncfs(true, function (err) {
+      if (err) {
+        console.warn('[kodi] IDBFS populate:', err);
+      }
+      removeRunDependency('kodi-idbfs-populate');
+    });
+
+    // Debounced background flush to IndexedDB.
+    var syncing = false;
+    var pending = false;
+    function flushToIdb() {
+      if (syncing) { pending = true; return; }
+      syncing = true;
+      FS.syncfs(false, function (err) {
+        syncing = false;
+        if (err) { console.warn('[kodi] IDBFS persist:', err); }
+        if (pending) { pending = false; flushToIdb(); }
+      });
+    }
+
+    setInterval(flushToIdb, 5000);
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', flushToIdb, { capture: true });
+      window.addEventListener('beforeunload', flushToIdb, { capture: true });
+    }
+  });
+})();
+
 (function () {
   if (typeof document === 'undefined') {
     return;
