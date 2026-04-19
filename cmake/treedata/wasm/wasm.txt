@@ -1,4 +1,3 @@
-xbmc/cores/AudioEngine/Sinks/webaudio  cores_AudioEngine_Sinks_webaudio
 xbmc/cores/RetroPlayer/shaders/gles   cores/RetroPlayer/shaders/gles
 xbmc/cores/VideoPlayer/Process/wasm   videoplayer_process_wasm
 xbmc/filesystem/wasm                  filesystem_wasm
