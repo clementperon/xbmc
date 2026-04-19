@@ -8,6 +8,11 @@
 
 #include "Application.h"
 
+#ifdef TARGET_WASM
+#include <emscripten.h>
+extern "C" void kodi_wasm_jsonrpc_notify_ready();
+#endif
+
 #include "Autorun.h"
 #include "CompileInfo.h"
 #include "DatabaseManager.h"
@@ -772,6 +777,10 @@ bool CApplication::Initialize()
 
   CJSONRPC::Initialize();
 
+#ifdef TARGET_WASM
+  kodi_wasm_jsonrpc_notify_ready();
+#endif
+
   CServiceBroker::RegisterSpeechRecognition(speech::ISpeechRecognition::CreateInstance());
 
   if (!m_ServiceManager->InitStageThree(profileManager))
@@ -847,7 +856,8 @@ void CApplication::Render()
     appPower->ResetScreenSaver();
   }
 
-  if (!CServiceBroker::GetRenderSystem()->BeginRender())
+  const bool beginRenderOk = CServiceBroker::GetRenderSystem()->BeginRender();
+  if (!beginRenderOk)
     return;
 
   // render gui layer
@@ -1625,6 +1635,10 @@ int CApplication::Run()
     CServiceBroker::GetAppMessenger()->PostMsg(TMSG_PLAYLISTPLAYER_PLAY, -1);
   }
 
+#ifdef TARGET_WASM
+  emscripten_set_main_loop([]() { g_application.WasmRunIteration(); }, 0, 1);
+  return m_ExitCode;
+#else
   // Run the app
   while (!m_bStop)
   {
@@ -1656,6 +1670,7 @@ int CApplication::Run()
 
   CLog::Log(LOGINFO, "Exiting the application...");
   return m_ExitCode;
+#endif
 }
 
 bool CApplication::Cleanup()
