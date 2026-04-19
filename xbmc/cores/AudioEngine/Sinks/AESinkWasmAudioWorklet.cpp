@@ -103,12 +103,15 @@ unsigned int CAESinkWasmAudioWorklet::AddPackets(uint8_t** data, unsigned int fr
     return 0;
 
   const auto* interleaved = reinterpret_cast<const float*>(data[0]);
-  return CWasmAudioWorkletManager::Instance().WriteInterleaved(interleaved, frames, offset);
+  const unsigned int written =
+      CWasmAudioWorkletManager::Instance().WriteInterleaved(interleaved, frames, offset);
+  DrainUnderrunLog();
+  return written;
 }
 
 void CAESinkWasmAudioWorklet::GetDelay(AEDelayStatus& status)
 {
-  status.SetDelay(CWasmAudioWorkletManager::Instance().GetBufferedSeconds());
+  status.SetDelay(CWasmAudioWorkletManager::Instance().GetTotalDelaySeconds());
 }
 
 void CAESinkWasmAudioWorklet::Drain()
@@ -117,4 +120,29 @@ void CAESinkWasmAudioWorklet::Drain()
     return;
 
   CWasmAudioWorkletManager::Instance().Drain();
+  DrainUnderrunLog();
+}
+
+void CAESinkWasmAudioWorklet::DrainUnderrunLog()
+{
+  m_pendingUnderrunFrames += CWasmAudioWorkletManager::Instance().ConsumeUnderrunFrames();
+  if (m_pendingUnderrunFrames == 0)
+    return;
+
+  const unsigned int sampleRate = CWasmAudioWorkletManager::Instance().GetSampleRate();
+  if (sampleRate == 0)
+    return;
+
+  constexpr uint64_t LOG_THRESHOLD_MS = 10;
+  const uint64_t thresholdFrames = (static_cast<uint64_t>(sampleRate) * LOG_THRESHOLD_MS) / 1000;
+  if (thresholdFrames == 0 || m_pendingUnderrunFrames < thresholdFrames)
+    return;
+
+  const double missingMs =
+      static_cast<double>(m_pendingUnderrunFrames) * 1000.0 / static_cast<double>(sampleRate);
+  CLog::Log(LOGWARNING,
+            "CAESinkWasmAudioWorklet: worklet underrun, {} frames ({:.2f} ms) of silence "
+            "emitted since last report",
+            m_pendingUnderrunFrames, missingMs);
+  m_pendingUnderrunFrames = 0;
 }

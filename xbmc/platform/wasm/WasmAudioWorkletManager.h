@@ -27,11 +27,16 @@ public:
 
   double GetBufferedSeconds() const;
   double GetBufferCapacitySeconds() const;
+  double GetPipelineLatencySeconds() const;
+  double GetTotalDelaySeconds() const;
 
   unsigned int GetSampleRate() const;
   unsigned int GetQuantumSize() const;
   unsigned int GetChannels() const;
   bool IsReady() const;
+
+  // Returns and resets the number of underrun frames.
+  uint64_t ConsumeUnderrunFrames();
 
 private:
   CWasmAudioWorkletManager() = default;
@@ -44,6 +49,7 @@ private:
   bool ConfigureNode(unsigned int channels);
   void InstallResumeHooks() const;
   void EnsureBufferAllocated();
+  void RefreshPipelineLatency();
 
   bool WaitForState(std::atomic<bool>& readyFlag, const char* stageName);
   static void OnWorkletThreadStarted(int audioContext, bool success, void* userData);
@@ -77,5 +83,9 @@ private:
   unsigned int m_bufferCapacityFrames{0};
   std::atomic<uint64_t> m_readFrame{0};
   std::atomic<uint64_t> m_writeFrame{0};
+
+  std::atomic<uint32_t> m_pipelineLatencyUs{0};
+
+  std::atomic<uint64_t> m_underrunFrames{0};
 };
 } // namespace KODI::PLATFORM::WASM
