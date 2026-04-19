@@ -223,3 +223,62 @@ $HOME/kodi-wasm-depends/wasm32-unknown-emscripten-release/
 For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten SDK environment. No WASM-only configure switches are required beyond `--host=wasm32-unknown-emscripten` and `--with-platform=wasm`.
 
 **[back to top](#table-of-contents)** | **[back to section top](#4-build-tools-and-dependencies)**
+
+## Audio Worklet Notes
+
+- The wasm build now links with `-sAUDIO_WORKLET` and `-sWASM_WORKERS`.
+- Browser audio output is provided via Web Audio / Wasm Audio Worklets and still requires the same COOP/COEP headers listed above.
+- As with normal browser autoplay policy, audio context resume requires a user interaction (keyboard, mouse, touch) before playback starts.
+- `-sSINGLE_FILE` is not compatible with Emscripten's standard Audio Worklet path.
+
+## Known Incomplete Areas
+
+- `tools/depends make` does not complete end-to-end yet for the WASM flow.
+- Main Kodi CMake configure currently blocks on missing dependencies from the depends prefix (for example `FriBidi`) until depends build fully succeeds.
+- Some dependency recipes still need WASM validation/tuning in `tools/depends/target/*`.
+
+## Experimental WebCodecs Video Decode Path
+
+The wasm build now includes an experimental `CDVDVideoCodecWebCodecs` backend.
+It is registered as a platform video codec and is selected before
+`CDVDVideoCodecFFmpeg` when all of the following are true:
+
+- Browser exposes `VideoDecoder` / `EncodedVideoChunk`.
+- Stream codec currently matches one of the supported WebCodecs mappings:
+  - H.264 (`AV_CODEC_ID_H264`)
+  - VP9 (`AV_CODEC_ID_VP9`)
+- Decoder configuration succeeds in JS (otherwise Kodi immediately falls back to FFmpeg decode).
+
+Current packet/config mapping details:
+
+- H.264:
+  - If FFmpeg demux provides AVCDecoderConfigurationRecord (`extradata[0] == 1`), Kodi builds an
+    `avc1.<profile><compat><level>` codec string and passes extradata as WebCodecs `description`.
+  - Otherwise Kodi switches to Annex-B mode (`config.avc.format = "annexb"`).
+- VP9:
+  - Uses baseline `vp09.00.10.08` codec string with demux packets forwarded as-is.
+- Timestamping:
+  - Packet `pts` / `duration` (seconds) are converted to WebCodecs microseconds on submit.
+  - Decoded frame timestamps are converted back to seconds for Kodi `VideoPicture`.
+
+Frame bridge strategy (phase 1 correctness-first):
+
+- WebCodecs output callback copies each `VideoFrame` to I420 in JS (`VideoFrame.copyTo`).
+- A compact frame queue is maintained in JS.
+- `GetPicture()` copies queued I420 bytes into `CVideoBufferSysMem` and publishes
+  `VideoPicture` with `AV_PIX_FMT_YUV420P`.
+
+This intentionally favors correctness and fallback safety over zero-copy performance.
+
+## WebCodecs Validation Checklist
+
+For manual validation use at least one H.264 MP4 and one VP9 WebM sample:
+
+1. Playback starts with A/V sync matching the existing audio master clock.
+2. Pause/resume keeps lip-sync stable.
+3. Repeated seeks (forward and backward) recover without permanent stalls.
+4. End-of-stream drain returns cleanly.
+5. Unsupported codec/configuration falls back to `CDVDVideoCodecFFmpeg`.
+
+The browser-side packet/seek probing helper is documented in
+`tools/wasm/mediabunny_spike.mjs`.
