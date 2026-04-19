@@ -31,11 +31,10 @@ set(USE_INTERNAL_LIBS ON)
 
 set(APP_BINARY_SUFFIX ".js")
 
-# emcc --profiling keeps function names in the build so browser DevTools can
-# attribute samples; it is off by default because it inflates the binary.
-option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in browser DevTools)" OFF)
-
 # Threading + memory (COOP/COEP headers required in HTML for pthreads).
+# Rendering flags (and why we don't set OFFSCREEN_FRAMEBUFFER,
+# OFFSCREENCANVASES_TO_PTHREAD, OFFSCREENCANVAS_SUPPORT, or ASYNCIFY) are
+# documented in docs/wasm/RENDERING.md §5.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   add_link_options(
     "SHELL:-sUSE_PTHREADS=1"
@@ -50,7 +49,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sMIN_WEBGL_VERSION=2"
     "SHELL:-sMAX_WEBGL_VERSION=2"
     "SHELL:-lidbfs.js"
-    "SHELL:-lembind"
+    "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/xbmc/platform/wasm/kodi_pre.js"
   )
 
   # ---------------------------------------------------------------------------
@@ -81,12 +80,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     message(STATUS "WASM: Debug build — SAFE_HEAP + DWARF symbols + source maps enabled")
   else()
     add_link_options("SHELL:-sASSERTIONS=1")
-  endif()
-
-  if(ENABLE_WASM_PROFILING)
-    add_compile_options(--profiling)
-    add_link_options(--profiling)
-    message(STATUS "WASM: Emscripten --profiling enabled (ENABLE_WASM_PROFILING=ON)")
   endif()
 endif()
 
