@@ -291,6 +291,31 @@ bool CWinSystemWasmGLESContext::SetFullScreen(bool fullScreen,
   return CreateNewWindow("", fullScreen, res);
 }
 
+void CWinSystemWasmGLESContext::ForceFullScreen(const RESOLUTION_INFO& resInfo)
+{
+  // AppInboundProtocol calls us with the cached RES_DESKTOP on browser resize,
+  // so resInfo is stale.  Re-query the live canvas CSS size and update
+  // RES_DESKTOP + the cached mouse resolution so mouse events (which arrive in
+  // CSS pixels) stay identity-mapped to Kodi's GUI coordinate space.
+  int w = 0;
+  int h = 0;
+  GetCanvasSize(&w, &h);
+  if (w <= 0 || h <= 0)
+    return;
+
+  RESOLUTION_INFO& desktop = CDisplaySettings::GetInstance().GetResolutionInfo(RES_DESKTOP);
+  desktop.iWidth = w;
+  desktop.iHeight = h;
+  desktop.iScreenWidth = w;
+  desktop.iScreenHeight = h;
+  desktop.iSubtitles = h;
+  GetGfxContext().ResetOverscan(desktop);
+
+  ResizeWindow(w, h, 0, 0);
+
+  GetGfxContext().ApplyModeChange(RES_DESKTOP);
+}
+
 bool CWinSystemWasmGLESContext::MessagePump()
 {
   if (m_winEvents)
