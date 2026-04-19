@@ -1,9 +1,6 @@
 /*
  *  Copyright (C) 2026 Team Kodi
- *  This file is part of Kodi - https://kodi.tv
- *
  *  SPDX-License-Identifier: GPL-2.0-or-later
- *  See LICENSES/README.md for more information.
  */
 
 #include "application/AppEnvironment.h"
@@ -12,7 +9,12 @@
 #include "platform/xbmc.h"
 
 #include <locale.h>
+#include <new>
 #include <stdlib.h>
+
+#include <emscripten/heap.h>
+#include <emscripten/threading.h>
+#include <unistd.h>
 
 int main(int argc, char* argv[])
 {
@@ -26,8 +28,12 @@ int main(int argc, char* argv[])
   appParamParser.GetAppParams()->SetLogTarget("console");
 
   CAppEnvironment::SetUp(appParamParser.GetAppParams());
+#ifndef TARGET_WASM
   const int status = XBMC_Run(true);
-  // Only reached when startup failed: emscripten_set_main_loop(..., 1) never returns.
   CAppEnvironment::TearDown();
   return status;
+#else
+  (void)XBMC_Run(true);
+  return 0;
+#endif
 }

@@ -1,20 +1,18 @@
 /*
  *  Copyright (C) 2026 Team Kodi
- *  This file is part of Kodi - https://kodi.tv
- *
  *  SPDX-License-Identifier: GPL-2.0-or-later
- *  See LICENSES/README.md for more information.
  */
 
-#include "application/AppEnvironment.h"
 #include "application/Application.h"
+
+#include "application/AppEnvironment.h"
 #include "application/ApplicationPowerHandling.h"
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
 
-#include <chrono>
-
 #include <emscripten.h>
+
+#include <chrono>
 
 // Built only for CORE_SYSTEM_NAME==wasm (see application/CMakeLists.txt).
 void CApplication::WasmRunIteration()
@@ -22,9 +20,9 @@ void CApplication::WasmRunIteration()
   if (m_bStop)
   {
     emscripten_cancel_main_loop();
-    CLog::Log(LOGINFO, "Exiting the application (WASM)...");
     Cleanup();
     CAppEnvironment::TearDown();
+    CLog::Log(LOGINFO, "Exiting the application (WASM)...");
     return;
   }
 
