@@ -67,6 +67,8 @@ EM_JS(int, WebCodecsCreateDecoder, (const char* codecPtr,
     errorMessage: "",
     lastTimestamp: 0,
     frames: [],
+    droppedFrames: 0,
+    highWaterMark: 0,
     decoder: null,
   };
 
@@ -109,9 +111,13 @@ EM_JS(int, WebCodecsCreateDecoder, (const char* codecPtr,
           durationSeconds: durationMicroseconds / 1000000.0,
           keyFrame: frame.type === 'key',
         });
+        state.highWaterMark = Math.max(state.highWaterMark, state.frames.length);
 
         if (state.frames.length > 8)
+        {
           state.frames.shift();
+          state.droppedFrames += 1;
+        }
       }
       catch (e)
       {
@@ -192,6 +198,8 @@ EM_JS(int, WebCodecsResetDecoder, (int decoderId), {
   {
     state.decoder.reset();
     state.frames.length = 0;
+    state.droppedFrames = 0;
+    state.highWaterMark = 0;
     state.failed = false;
     state.errorMessage = "";
     return 1;
@@ -298,6 +306,16 @@ EM_JS(int, WebCodecsCopyNextFrame, (int decoderId,
   state.frames.shift();
   return 1;
 });
+
+EM_JS(int, WebCodecsReadDecoderStats, (int decoderId, int* droppedPtr, int* highWaterPtr), {
+  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
+  if (!state)
+    return 0;
+
+  HEAP32[droppedPtr >> 2] = state.droppedFrames | 0;
+  HEAP32[highWaterPtr >> 2] = state.highWaterMark | 0;
+  return 1;
+});
 } // namespace
 
 CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
@@ -378,6 +396,8 @@ void CDVDVideoCodecWebCodecs::Dispose()
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
   m_drainPollsWithoutFrames = 0;
+  m_lastLoggedDroppedFrames = 0;
+  m_highWaterMark = 0;
 }
 
 bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
@@ -402,6 +422,8 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
   m_drainSubmitted = false;
   m_drainPollsWithoutFrames = 0;
   m_codecControlFlags = 0;
+  m_lastLoggedDroppedFrames = 0;
+  m_highWaterMark = 0;
   m_processInfo.SetVideoDecoderName(m_name, true);
   m_processInfo.SetVideoDimensions(hints.width, hints.height);
   CLog::Log(LOGINFO,
@@ -446,12 +468,38 @@ void CDVDVideoCodecWebCodecs::Reset()
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
   m_drainPollsWithoutFrames = 0;
+  m_lastLoggedDroppedFrames = 0;
+  m_highWaterMark = 0;
   CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::Reset - decoder reset after seek/flush");
 }
 
 void CDVDVideoCodecWebCodecs::SetCodecControl(int flags)
 {
   m_codecControlFlags = flags;
+}
+
+void CDVDVideoCodecWebCodecs::PollDecoderStats()
+{
+  if (m_decoderHandle == INVALID_DECODER_HANDLE)
+    return;
+
+  int droppedFrames = 0;
+  int highWaterMark = 0;
+  if (!WebCodecsReadDecoderStats(m_decoderHandle, &droppedFrames, &highWaterMark))
+    return;
+
+  if (highWaterMark > m_highWaterMark)
+    m_highWaterMark = highWaterMark;
+
+  constexpr int DROP_LOG_THRESHOLD = 8;
+  if ((droppedFrames - m_lastLoggedDroppedFrames) < DROP_LOG_THRESHOLD)
+    return;
+
+  CLog::Log(LOGWARNING,
+            "CDVDVideoCodecWebCodecs::GetPicture - dropped {} queued WebCodecs frames "
+            "(totalDropped={}, queueHighWater={})",
+            droppedFrames - m_lastLoggedDroppedFrames, droppedFrames, m_highWaterMark);
+  m_lastLoggedDroppedFrames = droppedFrames;
 }
 
 bool CDVDVideoCodecWebCodecs::AcquirePictureBuffer(int width,
@@ -575,6 +623,8 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   int copyStatus =
       WebCodecsCopyNextFrame(m_decoderHandle, videoBuffer->GetMemPtr(), frameSize, &width, &height, &yStride,
                              &uStride, &vStride, &keyFrame, &ptsSeconds, &durationSeconds);
+  if (m_drainSubmitted)
+    PollDecoderStats();
 
   if (copyStatus == 0)
   {

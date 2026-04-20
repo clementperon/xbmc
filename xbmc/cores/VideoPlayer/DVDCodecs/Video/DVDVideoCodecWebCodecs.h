@@ -34,6 +34,7 @@ private:
   void Dispose();
   bool SupportsCodec(const CDVDStreamInfo& hints) const;
   bool BuildCodecConfiguration(const CDVDStreamInfo& hints);
+  void PollDecoderStats();
   bool AcquirePictureBuffer(int width,
                             int height,
                             int yStride,
@@ -62,6 +63,8 @@ private:
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
   int m_codecControlFlags{0};
+  int m_lastLoggedDroppedFrames{0};
+  int m_highWaterMark{0};
 
   std::string m_codecString;
 };
