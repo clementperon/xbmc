@@ -16,13 +16,18 @@ namespace KODI::PLATFORM::WASM
 class CWasmAudioWorkletManager
 {
 public:
+  static constexpr unsigned int kMaxChannels = 8;
+
   static CWasmAudioWorkletManager& Instance();
 
   bool Initialize(unsigned int channels, unsigned int requestedSampleRate);
   void ResetBuffer();
   void Shutdown();
 
-  unsigned int WriteInterleaved(const float* source, unsigned int frames, unsigned int offsetFrames);
+  unsigned int WritePlanar(const float* const* planes,
+                           unsigned int channels,
+                           unsigned int frames,
+                           unsigned int offsetFrames);
   void Drain();
 
   double GetBufferedSeconds() const;
@@ -87,5 +92,9 @@ private:
   std::atomic<uint32_t> m_pipelineLatencyUs{0};
 
   std::atomic<uint64_t> m_underrunFrames{0};
+
+  // Prebuffer watermark
+  unsigned int m_prebufferFrames{0};
+  std::atomic<bool> m_prebufferComplete{false};
 };
 } // namespace KODI::PLATFORM::WASM
