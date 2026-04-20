@@ -10,6 +10,7 @@
 #include "cores/AudioEngine/Utils/AEUtil.h"
 #include "platform/wasm/WasmAudioWorkletManager.h"
 #include "utils/log.h"
+#include "utils/TimeUtils.h"
 
 using KODI::PLATFORM::WASM::CWasmAudioWorkletManager;
 
@@ -111,7 +112,10 @@ unsigned int CAESinkWasmAudioWorklet::AddPackets(uint8_t** data, unsigned int fr
 
 void CAESinkWasmAudioWorklet::GetDelay(AEDelayStatus& status)
 {
-  status.SetDelay(CWasmAudioWorkletManager::Instance().GetTotalDelaySeconds());
+  const double totalDelay = CWasmAudioWorkletManager::Instance().GetTotalDelaySeconds();
+  status.SetDelay(totalDelay);
+  status.maxcorrection = totalDelay;
+  status.tick = CurrentHostCounter();
 }
 
 void CAESinkWasmAudioWorklet::Drain()
