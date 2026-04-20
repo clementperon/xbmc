@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 
 #include <emscripten/em_asm.h>
@@ -21,8 +22,8 @@ namespace
 {
 constexpr char AUDIO_PROCESSOR_NAME[] = "kodi-audio-worklet";
 constexpr unsigned int BUFFER_TARGET_MS = 200;
-constexpr unsigned int MAX_CHANNELS = 8;
 constexpr unsigned int MIN_BUFFER_QUANTA = 2;
+constexpr unsigned int PREBUFFER_TARGET_MS = 40;
 constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
 
 int CreateAudioContextOnMain(int requestedSampleRate)
@@ -131,7 +132,7 @@ CWasmAudioWorkletManager& CWasmAudioWorkletManager::Instance()
 
 bool CWasmAudioWorkletManager::Initialize(unsigned int channels, unsigned int requestedSampleRate)
 {
-  if (channels == 0 || channels > MAX_CHANNELS)
+  if (channels == 0 || channels > kMaxChannels)
   {
     CLog::Log(LOGERROR, "WASM AudioWorklet: unsupported channel count {}", channels);
     return false;
@@ -152,12 +153,16 @@ bool CWasmAudioWorkletManager::Initialize(unsigned int channels, unsigned int re
   RefreshPipelineLatency();
 
   m_ready.store(true, std::memory_order_release);
+  const unsigned int sampleRateNow = std::max(m_sampleRate.load(std::memory_order_relaxed), 1U);
+  const double prebufMs =
+      static_cast<double>(m_prebufferFrames) * 1000.0 / static_cast<double>(sampleRateNow);
   CLog::Log(LOGINFO,
             "WASM AudioWorklet: initialized (channels={}, sampleRate={}, quantum={}, "
-            "pipelineLatency={:.3f} ms, ringCapacity={:.3f} ms)",
+            "pipelineLatency={:.3f} ms, ringCapacity={:.3f} ms, prebuffer={:.1f} ms)",
             channels, m_sampleRate.load(std::memory_order_relaxed),
             m_quantumSize.load(std::memory_order_relaxed),
-            GetPipelineLatencySeconds() * 1000.0, GetBufferCapacitySeconds() * 1000.0);
+            GetPipelineLatencySeconds() * 1000.0, GetBufferCapacitySeconds() * 1000.0,
+            prebufMs);
   return true;
 }
 
@@ -166,6 +171,7 @@ void CWasmAudioWorkletManager::ResetBuffer()
   const uint64_t currentWrite = m_writeFrame.load(std::memory_order_acquire);
   m_readFrame.store(currentWrite, std::memory_order_release);
   m_underrunFrames.store(0, std::memory_order_relaxed);
+  m_prebufferComplete.store(false, std::memory_order_release);
 }
 
 void CWasmAudioWorkletManager::Shutdown()
@@ -187,6 +193,8 @@ void CWasmAudioWorkletManager::Shutdown()
   m_workletThreadCreated.store(false, std::memory_order_release);
   m_processorCreated.store(false, std::memory_order_release);
   m_bufferCapacityFrames = 0;
+  m_prebufferFrames = 0;
+  m_prebufferComplete.store(false, std::memory_order_release);
   m_ringBuffer.clear();
   m_ringBuffer.shrink_to_fit();
   m_readFrame.store(0, std::memory_order_release);
@@ -195,16 +203,24 @@ void CWasmAudioWorkletManager::Shutdown()
   m_underrunFrames.store(0, std::memory_order_relaxed);
 }
 
-unsigned int CWasmAudioWorkletManager::WriteInterleaved(const float* source,
-                                                        unsigned int frames,
-                                                        unsigned int offsetFrames)
+unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
+                                                   unsigned int channels,
+                                                   unsigned int frames,
+                                                   unsigned int offsetFrames)
 {
-  if (!source || frames == 0 || !IsReady())
+  if (!planes || frames == 0 || !IsReady())
     return 0;
 
-  const unsigned int channels = m_channels.load(std::memory_order_relaxed);
-  if (channels == 0 || channels > MAX_CHANNELS || m_bufferCapacityFrames == 0)
+  const unsigned int configuredChannels = m_channels.load(std::memory_order_relaxed);
+  if (configuredChannels == 0 || configuredChannels > kMaxChannels ||
+      m_bufferCapacityFrames == 0)
     return 0;
+
+  const unsigned int copyChannels = std::min(channels, configuredChannels);
+  if (copyChannels == 0)
+    return 0;
+
+  const unsigned int capacityFrames = m_bufferCapacityFrames;
 
   unsigned int writtenFrames = 0;
   while (writtenFrames < frames)
@@ -212,25 +228,36 @@ unsigned int CWasmAudioWorkletManager::WriteInterleaved(const float* source,
     const uint64_t readFrame = m_readFrame.load(std::memory_order_acquire);
     const uint64_t writeFrame = m_writeFrame.load(std::memory_order_relaxed);
     const uint64_t usedFrames = writeFrame - readFrame;
-    if (usedFrames >= m_bufferCapacityFrames)
+    if (usedFrames >= capacityFrames)
     {
       emscripten_thread_sleep(1);
       continue;
     }
 
-    const uint64_t availableFrames = m_bufferCapacityFrames - usedFrames;
-    const uint64_t toWrite = std::min<uint64_t>(frames - writtenFrames, availableFrames);
-    const uint64_t dstStart = writeFrame % m_bufferCapacityFrames;
+    const uint64_t freeFrames = capacityFrames - usedFrames;
+    const uint64_t toWrite = std::min<uint64_t>(frames - writtenFrames, freeFrames);
+    const uint64_t dstStart = writeFrame % capacityFrames;
+    const uint64_t firstChunk = std::min<uint64_t>(toWrite, capacityFrames - dstStart);
+    const uint64_t secondChunk = toWrite - firstChunk;
 
-    for (uint64_t frame = 0; frame < toWrite; ++frame)
+    for (unsigned int ch = 0; ch < copyChannels; ++ch)
     {
-      const uint64_t dstFrame = (dstStart + frame) % m_bufferCapacityFrames;
-      const size_t dstOffset = static_cast<size_t>(dstFrame * channels);
-      const size_t srcOffset =
-          static_cast<size_t>((offsetFrames + writtenFrames + frame) * channels);
-
-      for (unsigned int ch = 0; ch < channels; ++ch)
-        m_ringBuffer[dstOffset + ch] = source[srcOffset + ch];
+      if (!planes[ch])
+        return writtenFrames;
+      float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
+      const float* const srcPlane = planes[ch] + offsetFrames + writtenFrames;
+      std::memcpy(dstPlane + dstStart, srcPlane, firstChunk * sizeof(float));
+      if (secondChunk > 0)
+        std::memcpy(dstPlane, srcPlane + firstChunk, secondChunk * sizeof(float));
+    }
+    // Zero any ring planes the writer did not fill (e.g. upmix headroom) so
+    // stale data never leaks into the browser output.
+    for (unsigned int ch = copyChannels; ch < configuredChannels; ++ch)
+    {
+      float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
+      std::memset(dstPlane + dstStart, 0, firstChunk * sizeof(float));
+      if (secondChunk > 0)
+        std::memset(dstPlane, 0, secondChunk * sizeof(float));
     }
 
     m_writeFrame.store(writeFrame + toWrite, std::memory_order_release);
@@ -484,6 +511,16 @@ void CWasmAudioWorkletManager::EnsureBufferAllocated()
   m_bufferCapacityFrames = static_cast<unsigned int>(std::max(targetFrames, minFrames));
   const size_t sampleCount = static_cast<size_t>(m_bufferCapacityFrames) * channels;
   m_ringBuffer.assign(sampleCount, 0.0f);
+
+  // Compute the prebuffer watermark. Clamp to half the ring so we always
+  // have room for new writes before output resumes.
+  const uint64_t prebuf =
+      (static_cast<uint64_t>(sampleRate) * PREBUFFER_TARGET_MS + 999ULL) / 1000ULL;
+  const uint64_t quantaInPrebuf = (prebuf + quantumSize - 1ULL) / quantumSize;
+  const uint64_t prebufRounded = quantaInPrebuf * quantumSize;
+  m_prebufferFrames =
+      static_cast<unsigned int>(std::min<uint64_t>(prebufRounded, m_bufferCapacityFrames / 2));
+  m_prebufferComplete.store(false, std::memory_order_release);
 }
 
 bool CWasmAudioWorkletManager::WaitForState(std::atomic<bool>& readyFlag, const char* stageName)
@@ -562,21 +599,36 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
   const uint64_t writeFrame = m_writeFrame.load(std::memory_order_acquire);
   const uint64_t availableFrames = writeFrame - readFrame;
   const uint64_t wantedFrames = static_cast<uint64_t>(samplesPerChannel);
+
+  if (!m_prebufferComplete.load(std::memory_order_acquire))
+  {
+    if (m_prebufferFrames == 0 || availableFrames >= m_prebufferFrames)
+      m_prebufferComplete.store(true, std::memory_order_release);
+    else
+      return true;
+  }
+
   const uint64_t toRead = std::min<uint64_t>(availableFrames, wantedFrames);
   if (toRead < wantedFrames)
     m_underrunFrames.fetch_add(wantedFrames - toRead, std::memory_order_relaxed);
   if (toRead == 0)
     return true;
 
+  // Planar memcpy per channel: ring buffer is laid out as
+  // [ch0 capacityFrames | ch1 capacityFrames | ...]. The browser's output
+  // buffer follows the same planar convention (outputs[0].data[ch*N + frame]).
+  // No per-sample reshuffling.
   const uint64_t srcStart = readFrame % capacityFrames;
-  for (uint64_t frame = 0; frame < toRead; ++frame)
+  const uint64_t firstChunk = std::min<uint64_t>(toRead, capacityFrames - srcStart);
+  const uint64_t secondChunk = toRead - firstChunk;
+  for (unsigned int ch = 0; ch < copyChannels; ++ch)
   {
-    const uint64_t srcFrame = (srcStart + frame) % capacityFrames;
-    const size_t srcOffset = static_cast<size_t>(srcFrame * channels);
-    for (unsigned int ch = 0; ch < copyChannels; ++ch)
-    {
-      outputData[ch * samplesPerChannel + frame] = m_ringBuffer[srcOffset + ch];
-    }
+    const float* const srcPlane =
+        &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
+    float* const dstPlane = outputData + static_cast<size_t>(ch) * samplesPerChannel;
+    std::memcpy(dstPlane, srcPlane + srcStart, firstChunk * sizeof(float));
+    if (secondChunk > 0)
+      std::memcpy(dstPlane + firstChunk, srcPlane, secondChunk * sizeof(float));
   }
 
   m_readFrame.store(readFrame + toRead, std::memory_order_release);

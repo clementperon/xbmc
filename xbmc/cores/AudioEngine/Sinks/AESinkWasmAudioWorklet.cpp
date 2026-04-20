@@ -12,6 +12,8 @@
 #include "utils/log.h"
 #include "utils/TimeUtils.h"
 
+#include <algorithm>
+
 using KODI::PLATFORM::WASM::CWasmAudioWorkletManager;
 
 void CAESinkWasmAudioWorklet::Register()
@@ -50,7 +52,7 @@ void CAESinkWasmAudioWorklet::EnumerateDevicesEx(AEDeviceInfoList& list, bool)
   info.m_deviceType = AE_DEVTYPE_PCM;
   info.m_channels = AE_CH_LAYOUT_7_1;
   info.m_sampleRates = {44100, 48000};
-  info.m_dataFormats = {AE_FMT_FLOAT};
+  info.m_dataFormats = {AE_FMT_FLOATP};
   info.m_wantsIECPassthrough = false;
   info.m_onlyPCM = true;
   list.push_back(info);
@@ -75,11 +77,27 @@ bool CAESinkWasmAudioWorklet::Initialize(AEAudioFormat& format, std::string& dev
     return false;
 
   device = "default";
-  format.m_dataFormat = AE_FMT_FLOAT;
+  format.m_dataFormat = AE_FMT_FLOATP;
   format.m_sampleRate = CWasmAudioWorkletManager::Instance().GetSampleRate();
-  format.m_frames = CWasmAudioWorkletManager::Instance().GetQuantumSize();
+
+  constexpr unsigned int TARGET_PERIOD_MS = 20;
+  const unsigned int quantum = CWasmAudioWorkletManager::Instance().GetQuantumSize();
+  const unsigned int targetFrames = (format.m_sampleRate * TARGET_PERIOD_MS + 999U) / 1000U;
+  unsigned int periodFrames = targetFrames;
+  if (quantum > 0)
+    periodFrames = ((targetFrames + quantum - 1U) / quantum) * quantum;
+  format.m_frames = std::max<unsigned int>(periodFrames, quantum);
+
   format.m_frameSize = channels * static_cast<unsigned int>(sizeof(float));
   m_initialized = true;
+
+  CLog::Log(LOGINFO,
+            "CAESinkWasmAudioWorklet: sink period set to {} frames ({:.2f} ms) "
+            "from worklet quantum {} @ {} Hz",
+            format.m_frames,
+            static_cast<double>(format.m_frames) * 1000.0 /
+                static_cast<double>(format.m_sampleRate),
+            quantum, format.m_sampleRate);
 
   return true;
 }
@@ -103,9 +121,24 @@ unsigned int CAESinkWasmAudioWorklet::AddPackets(uint8_t** data, unsigned int fr
   if (!m_initialized || !data || !data[0])
     return 0;
 
-  const auto* interleaved = reinterpret_cast<const float*>(data[0]);
+  const unsigned int channels = CWasmAudioWorkletManager::Instance().GetChannels();
+  if (channels == 0)
+    return 0;
+
+  // Build a plane-pointer array for the manager. ActiveAE passes planar data
+  // as one pointer per channel in data[0..channels-1] when the sink format is
+  // AE_FMT_FLOATP, and a single interleaved pointer in data[0] otherwise.
+  // Since we advertise AE_FMT_FLOATP we always take the planar path.
+  const float* planes[CWasmAudioWorkletManager::kMaxChannels]{};
+  for (unsigned int ch = 0; ch < channels; ++ch)
+  {
+    if (!data[ch])
+      return 0;
+    planes[ch] = reinterpret_cast<const float*>(data[ch]);
+  }
+
   const unsigned int written =
-      CWasmAudioWorkletManager::Instance().WriteInterleaved(interleaved, frames, offset);
+      CWasmAudioWorkletManager::Instance().WritePlanar(planes, channels, frames, offset);
   DrainUnderrunLog();
   return written;
 }
