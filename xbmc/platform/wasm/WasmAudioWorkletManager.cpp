@@ -21,9 +21,9 @@
 namespace
 {
 constexpr char AUDIO_PROCESSOR_NAME[] = "kodi-audio-worklet";
-constexpr unsigned int BUFFER_TARGET_MS = 200;
+constexpr unsigned int BUFFER_TARGET_MS = 50;
 constexpr unsigned int MIN_BUFFER_QUANTA = 2;
-constexpr unsigned int PREBUFFER_TARGET_MS = 40;
+constexpr unsigned int PREBUFFER_TARGET_MS = 10;
 constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
 
 int CreateAudioContextOnMain(int requestedSampleRate)
