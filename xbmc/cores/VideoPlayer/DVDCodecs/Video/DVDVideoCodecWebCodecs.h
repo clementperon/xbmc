@@ -35,16 +35,14 @@ private:
   bool SupportsCodec(const CDVDStreamInfo& hints) const;
   bool BuildCodecConfiguration(const CDVDStreamInfo& hints);
   void PollDecoderStats();
-  bool AcquirePictureBuffer(int width,
+  bool AcquirePictureBuffer(AVPixelFormat pixelFormat,
+                            int width,
                             int height,
-                            int yStride,
-                            int uStride,
-                            int vStride,
-                            CVideoBuffer*& outBuffer,
-                            int (&outPlaneOffsets)[YuvImage::MAX_PLANES],
-                            int& outBufferSize);
+                            int bufferSize,
+                            CVideoBuffer*& outBuffer);
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
+                           AVPixelFormat pixelFormat,
                            int width,
                            int height,
                            bool keyFrame,
@@ -62,9 +60,11 @@ private:
   int m_drainPollsWithoutFrames{0};
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
+  int m_nalLengthSize{0};
   int m_codecControlFlags{0};
   int m_lastLoggedDroppedFrames{0};
   int m_highWaterMark{0};
+  AVPixelFormat m_bufferPixelFormat{AV_PIX_FMT_YUV420P};
 
   std::string m_codecString;
 };
