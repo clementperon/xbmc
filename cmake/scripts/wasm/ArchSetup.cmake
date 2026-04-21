@@ -31,6 +31,9 @@ set(USE_INTERNAL_LIBS ON)
 
 set(APP_BINARY_SUFFIX ".js")
 
+# Optional: emcc --profiling keeps readable function names and debug-friendly
+option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in browser DevTools)" OFF)
+
 # Threading + memory (COOP/COEP headers required in HTML for pthreads).
 # Rendering flags (and why we don't set OFFSCREEN_FRAMEBUFFER,
 # OFFSCREENCANVASES_TO_PTHREAD, OFFSCREENCANVAS_SUPPORT, or ASYNCIFY) are
@@ -85,6 +88,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     message(STATUS "WASM: Debug build — SAFE_HEAP + DWARF symbols + source maps enabled")
   else()
     add_link_options("SHELL:-sASSERTIONS=1")
+  endif()
+
+  if(ENABLE_WASM_PROFILING)
+    add_compile_options(--profiling)
+    add_link_options(--profiling)
+    message(STATUS "WASM: Emscripten --profiling enabled (ENABLE_WASM_PROFILING=ON)")
   endif()
 endif()
 
