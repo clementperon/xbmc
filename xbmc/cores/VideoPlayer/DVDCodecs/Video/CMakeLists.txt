@@ -39,7 +39,8 @@ endif()
 
 if(CORE_SYSTEM_NAME STREQUAL wasm)
   list(APPEND SOURCES DVDVideoCodecWebCodecs.cpp)
-  list(APPEND HEADERS DVDVideoCodecWebCodecs.h)
+  list(APPEND HEADERS DVDVideoCodecWebCodecs.h
+                      DVDVideoCodecWebCodecsBridge.h)
 endif()
 
 if("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_LC)
