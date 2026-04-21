@@ -28,6 +28,35 @@
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
 
   <script>
+    // Intercept Tizen TV remote keys and map them to standard keyboard events
+    window.addEventListener('keydown', function(e) {
+      if (e.keyCode === 10009 || e.key === 'Back') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true
+        }));
+      }
+    }, true);
+
+    window.addEventListener('keyup', function(e) {
+      if (e.keyCode === 10009 || e.key === 'Back') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new KeyboardEvent('keyup', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true
+        }));
+      }
+    }, true);
+
     var statusEl = document.getElementById('status');
     var statusText = document.getElementById('statusText');
     var progressEl = document.getElementById('progress');
