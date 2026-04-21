@@ -7,34 +7,88 @@
 
 #include "DVDCodecs/DVDFactoryCodec.h"
 #include "DVDStreamInfo.h"
+#include "DVDVideoCodecWebCodecsBridge.h"
 #include "cores/VideoPlayer/Buffers/VideoBuffer.h"
+#include "cores/VideoPlayer/Interface/TimingConstants.h"
 #include "utils/log.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <string>
 
-#include <emscripten.h>
+#include <emscripten/bind.h>
+
+// Expose the bridge enums to JavaScript via Embind so the JS bridge can read
+// the canonical C++ values (Module.WebCodecsPixelFormat.NV12 etc.) instead of
+// duplicating them. Must live at global scope, hence outside any namespace.
+EMSCRIPTEN_BINDINGS(kodi_webcodecs_bridge)
+{
+  emscripten::enum_<WebCodecsPixelFormat>("WebCodecsPixelFormat")
+      .value("UNKNOWN", WEBCODECS_PIXFMT_UNKNOWN)
+      .value("YUV420P", WEBCODECS_PIXFMT_YUV420P)
+      .value("NV12", WEBCODECS_PIXFMT_NV12);
+
+  emscripten::enum_<WebCodecsPushStatus>("WebCodecsPushStatus")
+      .value("QUEUED", WEBCODECS_PUSH_QUEUED)
+      .value("EMPTY", WEBCODECS_PUSH_EMPTY)
+      .value("HANDLE_NOT_FOUND", WEBCODECS_PUSH_HANDLE_NOT_FOUND)
+      .value("DECODER_FAILED", WEBCODECS_PUSH_DECODER_FAILED)
+      .value("NOT_CONFIGURED", WEBCODECS_PUSH_NOT_CONFIGURED)
+      .value("DECODE_THREW", WEBCODECS_PUSH_DECODE_THREW)
+      .value("BUSY", WEBCODECS_PUSH_BUSY);
+}
 
 namespace
 {
 constexpr int INVALID_DECODER_HANDLE = 0;
 constexpr int DEFAULT_ALIGNMENT = 64;
+constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
+constexpr int MIN_PROBE_DIMENSION = 64;
+constexpr int STRIDE_ALIGNMENT = 2;
+constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
+constexpr int DRAIN_POLL_LIMIT = 8;
+constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
+constexpr int PICTURE_COLOR_BITS = 8;
+
+constexpr int CODEC_STRING_BUFFER_SIZE = 16;
+constexpr int H264_AVCC_MIN_EXTRADATA_SIZE = 7;
+constexpr uint8_t H264_AVCC_CONFIG_VERSION = 1;
+constexpr int H264_AVCC_PROFILE_OFFSET = 1;
+constexpr int H264_AVCC_COMPAT_OFFSET = 2;
+constexpr int H264_AVCC_LEVEL_OFFSET = 3;
+constexpr int H264_AVCC_LENGTH_SIZE_OFFSET = 4;
+constexpr uint8_t H264_AVCC_LENGTH_SIZE_MASK = 0x03;
+
+constexpr uint8_t H264_NAL_TYPE_MASK = 0x1F;
+constexpr uint8_t H264_NAL_TYPE_IDR = 5;
+
+constexpr uint8_t ANNEXB_START_CODE_BYTE = 0x01;
 
 int AlignUp(int value, int alignment)
 {
   return ((value + alignment - 1) / alignment) * alignment;
 }
 
+// An AVCDecoderConfigurationRecord is only complete once numOfSequenceParameterSets,
+// its last fixed field, is present at byte 6.
+bool HasAVCCExtradata(const CDVDStreamInfo& hints)
+{
+  return hints.extradata.GetSize() >= H264_AVCC_MIN_EXTRADATA_SIZE &&
+         hints.extradata.GetData()[0] == H264_AVCC_CONFIG_VERSION;
+}
+
 std::string BuildH264CodecString(const CDVDStreamInfo& hints)
 {
-  if (hints.extradata.GetSize() >= 4 && hints.extradata.GetData()[0] == 1)
+  const auto& extradata = hints.extradata;
+  if (HasAVCCExtradata(hints))
   {
-    const uint8_t profile = hints.extradata.GetData()[1];
-    const uint8_t compat = hints.extradata.GetData()[2];
-    const uint8_t level = hints.extradata.GetData()[3];
+    const uint8_t profile = extradata.GetData()[H264_AVCC_PROFILE_OFFSET];
+    const uint8_t compat = extradata.GetData()[H264_AVCC_COMPAT_OFFSET];
+    const uint8_t level = extradata.GetData()[H264_AVCC_LEVEL_OFFSET];
 
-    char buffer[16];
+    char buffer[CODEC_STRING_BUFFER_SIZE];
     std::snprintf(buffer, sizeof(buffer), "avc1.%02X%02X%02X", profile, compat, level);
     return buffer;
   }
@@ -42,280 +96,80 @@ std::string BuildH264CodecString(const CDVDStreamInfo& hints)
   return "avc1.42E01E";
 }
 
-EM_JS(int, WebCodecsCreateDecoder, (const char* codecPtr,
-                                    int width,
-                                    int height,
-                                    const uint8_t* extraDataPtr,
-                                    int extraDataSize,
-                                    int annexB), {
-  if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined')
-    return 0;
+// Returns true if the H.264 sample contains an IDR NAL unit.
+bool H264SampleContainsIDR(const uint8_t* data, int size, int nalLengthSize)
+{
+  if (!data || size <= 0)
+    return false;
 
-  Module.__kodiWebCodecs = Module.__kodiWebCodecs || {
-    nextId: 1,
-    decoders: new Map(),
-  };
-
-  const codec = UTF8ToString(codecPtr);
-  const decoders = Module.__kodiWebCodecs.decoders;
-  const id = Module.__kodiWebCodecs.nextId++;
-
-  const state = {
-    id,
-    codec,
-    failed: false,
-    errorMessage: "",
-    lastTimestamp: 0,
-    frames: [],
-    droppedFrames: 0,
-    highWaterMark: 0,
-    decoder: null,
-  };
-
-  const outputCallback = (frame) => {
-    const codedWidth = frame.codedWidth;
-    const codedHeight = frame.codedHeight;
-    const yStride = codedWidth;
-    const uvWidth = (codedWidth + 1) >> 1;
-    const uvHeight = (codedHeight + 1) >> 1;
-    const uvStride = uvWidth;
-    const ySize = yStride * codedHeight;
-    const uSize = uvStride * uvHeight;
-    const vSize = uvStride * uvHeight;
-    const payload = new Uint8Array(ySize + uSize + vSize);
-    const layout = [
-      { offset: 0, stride: yStride },
-      { offset: ySize, stride: uvStride },
-      { offset: ySize + uSize, stride: uvStride },
-    ];
-
-    const timestampMicroseconds = Number.isFinite(frame.timestamp)
-      ? Number(frame.timestamp) : state.lastTimestamp;
-    const durationMicroseconds = Number.isFinite(frame.duration)
-      ? Number(frame.duration) : 0;
-
-    state.lastTimestamp = timestampMicroseconds;
-
-    (async () => {
-      try
-      {
-        await frame.copyTo(payload, { layout, format: 'I420' });
-        state.frames.push({
-          payload,
-          width: codedWidth,
-          height: codedHeight,
-          yStride,
-          uStride: uvStride,
-          vStride: uvStride,
-          ptsSeconds: timestampMicroseconds / 1000000.0,
-          durationSeconds: durationMicroseconds / 1000000.0,
-          keyFrame: frame.type === 'key',
-        });
-        state.highWaterMark = Math.max(state.highWaterMark, state.frames.length);
-
-        if (state.frames.length > 8)
-        {
-          state.frames.shift();
-          state.droppedFrames += 1;
-        }
-      }
-      catch (e)
-      {
-        state.failed = true;
-        state.errorMessage = `frame copy failed: ${String(e)}`;
-      }
-      finally
-      {
-        frame.close();
-      }
-    })();
-  };
-
-  const errorCallback = (error) => {
-    state.failed = true;
-    state.errorMessage = String(error);
-  };
-
-  try
+  if (nalLengthSize > 0)
   {
-    const config = {
-      codec,
-      codedWidth: width > 0 ? width : undefined,
-      codedHeight: height > 0 ? height : undefined,
-      optimizeForLatency: true,
-      hardwareAcceleration: 'prefer-hardware',
-    };
-
-    if (codec.startsWith('avc1'))
-      config.avc = { format: annexB ? 'annexb' : 'avc' };
-
-    if (extraDataSize > 0)
-      config.description = HEAPU8.slice(extraDataPtr, extraDataPtr + extraDataSize);
-
-    state.decoder = new VideoDecoder({
-      output: outputCallback,
-      error: errorCallback,
-    });
-    state.decoder.configure(config);
-    decoders.set(id, state);
-    return id;
-  }
-  catch (e)
-  {
-    console.warn('WASM WebCodecs: create/configure decoder failed', e);
-    return 0;
-  }
-});
-
-EM_JS(int, WebCodecsDestroyDecoder, (int decoderId), {
-  const registry = Module.__kodiWebCodecs;
-  if (!registry)
-    return 0;
-
-  const state = registry.decoders.get(decoderId);
-  if (!state)
-    return 0;
-
-  try
-  {
-    state.decoder.close();
-  }
-  catch (e)
-  {
-    console.warn('WASM WebCodecs: decoder close failed', e);
+    int offset = 0;
+    while (offset + nalLengthSize <= size)
+    {
+      uint32_t nalSize = 0;
+      for (int i = 0; i < nalLengthSize; ++i)
+        nalSize = (nalSize << 8) | data[offset + i];
+      offset += nalLengthSize;
+      if (nalSize == 0 || offset + static_cast<int>(nalSize) > size)
+        break;
+      if ((data[offset] & H264_NAL_TYPE_MASK) == H264_NAL_TYPE_IDR)
+        return true;
+      offset += nalSize;
+    }
+    return false;
   }
 
-  registry.decoders.delete(decoderId);
-  return 1;
-});
-
-EM_JS(int, WebCodecsResetDecoder, (int decoderId), {
-  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
-  if (!state)
-    return 0;
-
-  try
+  for (int i = 0; i + 3 < size; ++i)
   {
-    state.decoder.reset();
-    state.frames.length = 0;
-    state.droppedFrames = 0;
-    state.highWaterMark = 0;
-    state.failed = false;
-    state.errorMessage = "";
-    return 1;
+    const bool threeByteStart = data[i] == 0x00 && data[i + 1] == 0x00 &&
+                                data[i + 2] == ANNEXB_START_CODE_BYTE;
+    const bool fourByteStart = data[i] == 0x00 && data[i + 1] == 0x00 && data[i + 2] == 0x00 &&
+                               data[i + 3] == ANNEXB_START_CODE_BYTE;
+    if (!threeByteStart && !fourByteStart)
+      continue;
+
+    const int nalStart = threeByteStart ? i + 3 : i + 4;
+    if (nalStart < size && (data[nalStart] & H264_NAL_TYPE_MASK) == H264_NAL_TYPE_IDR)
+      return true;
   }
-  catch (e)
+  return false;
+}
+
+// Reads any pending diagnostic string from the JS decoder side.
+std::string ReadDecoderError(int decoderHandle)
+{
+  if (decoderHandle == INVALID_DECODER_HANDLE)
+    return {};
+  char buffer[DECODER_ERROR_BUFFER_SIZE];
+  const int written = webcodecs_take_error(decoderHandle, buffer, sizeof(buffer));
+  if (written <= 0)
+    return {};
+  buffer[sizeof(buffer) - 1] = '\0';
+  return std::string(buffer);
+}
+
+const char* PushStatusToString(int status)
+{
+  switch (status)
   {
-    state.failed = true;
-    state.errorMessage = `reset failed: ${String(e)}`;
-    return 0;
+    case WEBCODECS_PUSH_QUEUED:
+      return "queued";
+    case WEBCODECS_PUSH_EMPTY:
+      return "empty packet";
+    case WEBCODECS_PUSH_HANDLE_NOT_FOUND:
+      return "decoder handle not found";
+    case WEBCODECS_PUSH_DECODER_FAILED:
+      return "decoder in failed state";
+    case WEBCODECS_PUSH_NOT_CONFIGURED:
+      return "decoder not configured";
+    case WEBCODECS_PUSH_DECODE_THREW:
+      return "decode threw";
+    case WEBCODECS_PUSH_BUSY:
+      return "decoder busy (backpressure)";
   }
-});
-
-EM_JS(int, WebCodecsPushPacket, (int decoderId,
-                                 const uint8_t* dataPtr,
-                                 int dataSize,
-                                 int keyFrame,
-                                 double ptsSeconds,
-                                 double durationSeconds), {
-  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
-  if (!state || state.failed || !state.decoder)
-    return 0;
-
-  if (dataSize <= 0)
-    return 1;
-
-  const timestampMicros = Math.max(0, Math.round(ptsSeconds * 1000000.0));
-  const durationMicros = Math.max(0, Math.round(durationSeconds * 1000000.0));
-  const payload = HEAPU8.slice(dataPtr, dataPtr + dataSize);
-
-  try
-  {
-    state.decoder.decode(new EncodedVideoChunk({
-      type: keyFrame ? 'key' : 'delta',
-      timestamp: timestampMicros,
-      duration: durationMicros > 0 ? durationMicros : undefined,
-      data: payload,
-    }));
-    return 1;
-  }
-  catch (e)
-  {
-    state.failed = true;
-    state.errorMessage = `decode failed: ${String(e)}`;
-    return 0;
-  }
-});
-
-EM_JS(int, WebCodecsDrainDecoder, (int decoderId), {
-  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
-  if (!state || !state.decoder)
-    return 0;
-
-  try
-  {
-    state.decoder.flush().catch((error) => {
-      state.failed = true;
-      state.errorMessage = `flush failed: ${String(error)}`;
-    });
-    return 1;
-  }
-  catch (e)
-  {
-    state.failed = true;
-    state.errorMessage = `flush failed: ${String(e)}`;
-    return 0;
-  }
-});
-
-EM_JS(int, WebCodecsCopyNextFrame, (int decoderId,
-                                    uint8_t* dstPtr,
-                                    int dstSize,
-                                    int* widthPtr,
-                                    int* heightPtr,
-                                    int* yStridePtr,
-                                    int* uStridePtr,
-                                    int* vStridePtr,
-                                    int* keyFramePtr,
-                                    double* ptsSecondsPtr,
-                                    double* durationSecondsPtr), {
-  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
-  if (!state)
-    return 0;
-
-  if (state.failed)
-    return -1;
-
-  if (state.frames.length === 0)
-    return 0;
-
-  const frame = state.frames[0];
-  if (!frame || frame.payload.byteLength > dstSize)
-    return 0;
-
-  HEAPU8.set(frame.payload, dstPtr);
-  HEAP32[widthPtr >> 2] = frame.width;
-  HEAP32[heightPtr >> 2] = frame.height;
-  HEAP32[yStridePtr >> 2] = frame.yStride;
-  HEAP32[uStridePtr >> 2] = frame.uStride;
-  HEAP32[vStridePtr >> 2] = frame.vStride;
-  HEAP32[keyFramePtr >> 2] = frame.keyFrame ? 1 : 0;
-  HEAPF64[ptsSecondsPtr >> 3] = frame.ptsSeconds;
-  HEAPF64[durationSecondsPtr >> 3] = frame.durationSeconds;
-
-  state.frames.shift();
-  return 1;
-});
-
-EM_JS(int, WebCodecsReadDecoderStats, (int decoderId, int* droppedPtr, int* highWaterPtr), {
-  const state = Module.__kodiWebCodecs?.decoders.get(decoderId);
-  if (!state)
-    return 0;
-
-  HEAP32[droppedPtr >> 2] = state.droppedFrames | 0;
-  HEAP32[highWaterPtr >> 2] = state.highWaterMark | 0;
-  return 1;
-});
+  return "unknown";
+}
 } // namespace
 
 CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
@@ -349,12 +203,23 @@ bool CDVDVideoCodecWebCodecs::BuildCodecConfiguration(const CDVDStreamInfo& hint
 {
   m_codecString.clear();
   m_annexB = false;
+  m_nalLengthSize = 0;
 
   if (hints.codec == AV_CODEC_ID_H264)
   {
     m_codecString = BuildH264CodecString(hints);
-    if (!(hints.extradata.GetSize() >= 4 && hints.extradata.GetData()[0] == 1))
+    if (HasAVCCExtradata(hints))
+    {
+      m_annexB = false;
+      m_nalLengthSize =
+          (hints.extradata.GetData()[H264_AVCC_LENGTH_SIZE_OFFSET] & H264_AVCC_LENGTH_SIZE_MASK) +
+          1;
+    }
+    else
+    {
       m_annexB = true;
+      m_nalLengthSize = 0;
+    }
     return true;
   }
 
@@ -372,12 +237,15 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
   const uint8_t* extraData = m_hints.extradata.GetData();
   const int extraDataSize = static_cast<int>(m_hints.extradata.GetSize());
 
-  m_decoderHandle = WebCodecsCreateDecoder(m_codecString.c_str(), m_hints.width, m_hints.height,
-                                           extraData, extraDataSize, m_annexB ? 1 : 0);
+  m_decoderHandle = webcodecs_create_decoder(m_codecString.c_str(), m_hints.width, m_hints.height,
+                                             extraData, extraDataSize, m_annexB ? 1 : 0);
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
   {
-    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::CreateDecoder - unable to configure decoder for {}",
-              m_codecString);
+    CLog::Log(LOGDEBUG,
+              "CDVDVideoCodecWebCodecs::CreateDecoder - unable to configure decoder for {} "
+              "(annexB={}, extradataSize={}, {}x{}): check that VideoDecoder is available and "
+              "that the codec/description match the stream",
+              m_codecString, m_annexB, extraDataSize, m_hints.width, m_hints.height);
     return false;
   }
 
@@ -388,7 +256,7 @@ void CDVDVideoCodecWebCodecs::Dispose()
 {
   if (m_decoderHandle != INVALID_DECODER_HANDLE)
   {
-    WebCodecsDestroyDecoder(m_decoderHandle);
+    webcodecs_destroy_decoder(m_decoderHandle);
     m_decoderHandle = INVALID_DECODER_HANDLE;
   }
   m_opened = false;
@@ -398,6 +266,7 @@ void CDVDVideoCodecWebCodecs::Dispose()
   m_drainPollsWithoutFrames = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
+  m_bufferPixelFormat = AV_PIX_FMT_YUV420P;
 }
 
 bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
@@ -440,15 +309,46 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (packet.iSize <= 0 || packet.pData == nullptr)
     return true;
 
+  // Non-H264 samples from MP4 are treated as key frames.
+  bool isKeyFrame = true;
+  if (m_hints.codec == AV_CODEC_ID_H264)
+    isKeyFrame = H264SampleContainsIDR(packet.pData, packet.iSize, m_nalLengthSize);
+
+  // Feeding a delta before the first IDR would permanently fail the decoder.
+  if (m_waitingForKeyFrame && !isKeyFrame)
+    return true;
+
+  double ptsSeconds = 0.0;
+  if (packet.pts != DVD_NOPTS_VALUE && std::isfinite(packet.pts))
+    ptsSeconds = packet.pts / static_cast<double>(DVD_TIME_BASE);
+
+  double durationSeconds = 0.0;
+  if (packet.duration > 0.0 && std::isfinite(packet.duration))
+    durationSeconds = packet.duration / static_cast<double>(DVD_TIME_BASE);
+
+  const int status = webcodecs_push_packet(m_decoderHandle, packet.pData, packet.iSize,
+                                           isKeyFrame ? 1 : 0, ptsSeconds, durationSeconds);
+
+  // Backpressure: decoder is saturated, let VideoPlayer re-queue this packet.
+  // Don't clear EOF/drain state; the packet wasn't consumed.
+  if (status == WEBCODECS_PUSH_BUSY)
+    return false;
+
   m_eof = false;
   m_drainSubmitted = false;
   m_drainPollsWithoutFrames = 0;
 
-  const bool isKeyFrame = packet.recoveryPoint || m_waitingForKeyFrame;
-  if (!WebCodecsPushPacket(m_decoderHandle, packet.pData, packet.iSize, isKeyFrame ? 1 : 0, packet.pts,
-                           packet.duration))
+  if (status <= 0)
   {
-    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::AddData - decode rejected packet");
+    if (status == WEBCODECS_PUSH_EMPTY)
+      return true;
+
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGDEBUG,
+              "CDVDVideoCodecWebCodecs::AddData - decode rejected packet (size={}, pts={:.6f}s, "
+              "key={}, status={} [{}]): {}",
+              packet.iSize, ptsSeconds, isKeyFrame, status, PushStatusToString(status),
+              error.empty() ? "<no js error>" : error);
     return false;
   }
 
@@ -463,7 +363,7 @@ void CDVDVideoCodecWebCodecs::Reset()
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
     return;
 
-  WebCodecsResetDecoder(m_decoderHandle);
+  webcodecs_reset_decoder(m_decoderHandle);
   m_eof = false;
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
@@ -485,14 +385,13 @@ void CDVDVideoCodecWebCodecs::PollDecoderStats()
 
   int droppedFrames = 0;
   int highWaterMark = 0;
-  if (!WebCodecsReadDecoderStats(m_decoderHandle, &droppedFrames, &highWaterMark))
+  if (!webcodecs_read_stats(m_decoderHandle, &droppedFrames, &highWaterMark))
     return;
 
   if (highWaterMark > m_highWaterMark)
     m_highWaterMark = highWaterMark;
 
-  constexpr int DROP_LOG_THRESHOLD = 8;
-  if ((droppedFrames - m_lastLoggedDroppedFrames) < DROP_LOG_THRESHOLD)
+  if ((droppedFrames - m_lastLoggedDroppedFrames) < DROPPED_FRAMES_LOG_THRESHOLD)
     return;
 
   CLog::Log(LOGWARNING,
@@ -502,37 +401,22 @@ void CDVDVideoCodecWebCodecs::PollDecoderStats()
   m_lastLoggedDroppedFrames = droppedFrames;
 }
 
-bool CDVDVideoCodecWebCodecs::AcquirePictureBuffer(int width,
+bool CDVDVideoCodecWebCodecs::AcquirePictureBuffer(AVPixelFormat pixelFormat,
+                                                   int width,
                                                    int height,
-                                                   int yStride,
-                                                   int uStride,
-                                                   int vStride,
-                                                   CVideoBuffer*& outBuffer,
-                                                   int (&outPlaneOffsets)[YuvImage::MAX_PLANES],
-                                                   int& outBufferSize)
+                                                   int bufferSize,
+                                                   CVideoBuffer*& outBuffer)
 {
-  const int chromaHeight = (height + 1) >> 1;
-  const int ySize = yStride * height;
-  const int uSize = uStride * chromaHeight;
-  const int vSize = vStride * chromaHeight;
-  outBufferSize = ySize + uSize + vSize;
-
-  m_videoBufferPool->Configure(AV_PIX_FMT_YUV420P, AlignUp(outBufferSize, DEFAULT_ALIGNMENT));
+  m_videoBufferPool->Configure(pixelFormat, AlignUp(bufferSize, DEFAULT_ALIGNMENT));
   outBuffer = m_videoBufferPool->Get();
   if (!outBuffer || !outBuffer->GetMemPtr())
     return false;
-
-  const int strides[YuvImage::MAX_PLANES] = {yStride, uStride, vStride};
-  outPlaneOffsets[0] = 0;
-  outPlaneOffsets[1] = ySize;
-  outPlaneOffsets[2] = ySize + uSize;
-  outBuffer->SetPixelFormat(AV_PIX_FMT_YUV420P);
-  outBuffer->SetDimensions(width, height, strides, outPlaneOffsets);
   return true;
 }
 
 void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
                                                   CVideoBuffer* videoBuffer,
+                                                  AVPixelFormat pixelFormat,
                                                   int width,
                                                   int height,
                                                   bool keyFrame,
@@ -541,23 +425,26 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
 {
   pVideoPicture->Reset();
   pVideoPicture->videoBuffer = videoBuffer;
-  pVideoPicture->pixelFormat = AV_PIX_FMT_YUV420P;
+  pVideoPicture->pixelFormat = pixelFormat;
   pVideoPicture->iWidth = width;
   pVideoPicture->iHeight = height;
 
   double aspect = m_hints.aspect > 0.0 ? m_hints.aspect
                                        : (height > 0 ? static_cast<double>(width) / height : 1.0);
-  pVideoPicture->iDisplayWidth = (static_cast<int>(std::lrint(height * aspect))) & -3;
+  pVideoPicture->iDisplayWidth =
+      static_cast<int>(std::lrint(height * aspect)) & DISPLAY_WIDTH_ALIGN_MASK;
   pVideoPicture->iDisplayHeight = height;
   if (pVideoPicture->iDisplayWidth > static_cast<unsigned int>(width))
   {
     pVideoPicture->iDisplayWidth = width;
-    pVideoPicture->iDisplayHeight = (static_cast<int>(std::lrint(width / aspect))) & -3;
+    pVideoPicture->iDisplayHeight =
+        static_cast<int>(std::lrint(width / aspect)) & DISPLAY_WIDTH_ALIGN_MASK;
   }
 
-  pVideoPicture->pts = ptsSeconds;
+  // VideoPicture::pts / iDuration are in DVD_TIME_BASE units (microseconds).
+  pVideoPicture->pts = std::isfinite(ptsSeconds) ? ptsSeconds * DVD_TIME_BASE : DVD_NOPTS_VALUE;
   pVideoPicture->dts = DVD_NOPTS_VALUE;
-  pVideoPicture->iDuration = durationSeconds;
+  pVideoPicture->iDuration = durationSeconds > 0.0 ? durationSeconds * DVD_TIME_BASE : 0.0;
   pVideoPicture->iRepeatPicture = 0.0;
   pVideoPicture->iFlags = 0;
   pVideoPicture->iFrameType = keyFrame ? FRAME_TYPE_I : FRAME_TYPE_P;
@@ -575,7 +462,7 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
   pVideoPicture->m_originalColorPrimaries = pVideoPicture->color_primaries;
   pVideoPicture->color_range = m_hints.colorRange == AVCOL_RANGE_JPEG;
   pVideoPicture->chroma_position = AVCHROMA_LOC_LEFT;
-  pVideoPicture->colorBits = 8;
+  pVideoPicture->colorBits = PICTURE_COLOR_BITS;
 }
 
 CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVideoPicture)
@@ -587,57 +474,47 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   {
     if (!m_drainSubmitted)
     {
-      WebCodecsDrainDecoder(m_decoderHandle);
+      webcodecs_drain_decoder(m_decoderHandle);
       m_drainSubmitted = true;
       m_drainPollsWithoutFrames = 0;
       CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested");
     }
   }
-
-  int width = 0;
-  int height = 0;
-  int yStride = 0;
-  int uStride = 0;
-  int vStride = 0;
-  int keyFrame = 0;
-  double ptsSeconds = DVD_NOPTS_VALUE;
-  double durationSeconds = 0.0;
+  else if (m_drainSubmitted)
+  {
+    // Input resumed after a stillframe/drain - clear the EOF state.
+    m_drainSubmitted = false;
+    m_drainPollsWithoutFrames = 0;
+    m_eof = false;
+  }
 
   CVideoBuffer* videoBuffer = nullptr;
-  int planeOffsets[YuvImage::MAX_PLANES] = {0, 0, 0};
-  int frameSize = 0;
+  // YUV420P and NV12 both need width*height*3/2 bytes.
+  const int probeWidth = std::max(m_hints.width, MIN_PROBE_DIMENSION);
+  const int probeHeight = std::max(m_hints.height, MIN_PROBE_DIMENSION);
+  const int probeStride = AlignUp(probeWidth, STRIDE_ALIGNMENT);
+  const int probeBufferSize = probeStride * probeHeight * 3 / 2;
 
-  // Probe with a conservative allocation from stream hints first.
-  const int probeWidth = std::max(m_hints.width, 64);
-  const int probeHeight = std::max(m_hints.height, 64);
-  const int probeYStride = AlignUp(probeWidth, 2);
-  const int probeUStride = AlignUp((probeWidth + 1) / 2, 2);
-  const int probeVStride = probeUStride;
-
-  if (!AcquirePictureBuffer(probeWidth, probeHeight, probeYStride, probeUStride, probeVStride,
-                            videoBuffer, planeOffsets, frameSize))
+  if (!AcquirePictureBuffer(m_bufferPixelFormat, probeWidth, probeHeight, probeBufferSize,
+                            videoBuffer))
   {
     return VC_NOBUFFER;
   }
 
-  int copyStatus =
-      WebCodecsCopyNextFrame(m_decoderHandle, videoBuffer->GetMemPtr(), frameSize, &width, &height, &yStride,
-                             &uStride, &vStride, &keyFrame, &ptsSeconds, &durationSeconds);
+  WebCodecsFrameInfo info{};
+  const int copyStatus =
+      webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), probeBufferSize, &info);
   if (m_drainSubmitted)
     PollDecoderStats();
 
   if (copyStatus == 0)
   {
     videoBuffer->Release();
-    if (m_drainSubmitted)
+    if (m_drainSubmitted && ++m_drainPollsWithoutFrames >= DRAIN_POLL_LIMIT)
     {
-      constexpr int drainPollLimit = 8;
-      if (++m_drainPollsWithoutFrames >= drainPollLimit)
-      {
-        m_eof = true;
-        CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
-        return VC_EOF;
-      }
+      m_eof = true;
+      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
+      return VC_EOF;
     }
     return VC_BUFFER;
   }
@@ -645,21 +522,41 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   if (copyStatus < 0)
   {
     videoBuffer->Release();
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - decoder entered failed state: {}",
+              error.empty() ? "<no js error>" : error);
     return VC_ERROR;
   }
 
-  // Reapply actual dimensions/strides from JS copy.
-  const int strides[YuvImage::MAX_PLANES] = {yStride, uStride, vStride};
-  const int ySize = yStride * height;
-  const int uSize = uStride * ((height + 1) >> 1);
-  planeOffsets[0] = 0;
-  planeOffsets[1] = ySize;
-  planeOffsets[2] = ySize + uSize;
-  videoBuffer->SetPixelFormat(AV_PIX_FMT_YUV420P);
-  videoBuffer->SetDimensions(width, height, strides, planeOffsets);
+  AVPixelFormat pixelFormat = AV_PIX_FMT_NONE;
+  switch (info.pixelFormat)
+  {
+    case WEBCODECS_PIXFMT_YUV420P:
+      pixelFormat = AV_PIX_FMT_YUV420P;
+      break;
+    case WEBCODECS_PIXFMT_NV12:
+      pixelFormat = AV_PIX_FMT_NV12;
+      break;
+    case WEBCODECS_PIXFMT_UNKNOWN:
+    default:
+      break;
+  }
+  if (pixelFormat == AV_PIX_FMT_NONE)
+  {
+    videoBuffer->Release();
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
+              info.pixelFormat);
+    return VC_ERROR;
+  }
 
-  FillPictureMetadata(pVideoPicture, videoBuffer, width, height, keyFrame != 0, ptsSeconds,
-                      durationSeconds);
+  m_bufferPixelFormat = pixelFormat;
+  const int strides[YuvImage::MAX_PLANES] = {info.yStride, info.uStride, info.vStride};
+  const int planeOffsets[YuvImage::MAX_PLANES] = {0, info.uOffset, info.vOffset};
+  videoBuffer->SetPixelFormat(pixelFormat);
+  videoBuffer->SetDimensions(info.width, info.height, strides, planeOffsets);
+
+  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info.width, info.height,
+                      info.keyFrame != 0, info.ptsSeconds, info.durationSeconds);
   m_eof = false;
   m_drainPollsWithoutFrames = 0;
   return VC_PICTURE;
