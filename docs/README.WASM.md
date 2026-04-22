@@ -237,6 +237,29 @@ For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten 
 - Main Kodi CMake configure currently blocks on missing dependencies from the depends prefix (for example `FriBidi`) until depends build fully succeeds.
 - Some dependency recipes still need WASM validation/tuning in `tools/depends/target/*`.
 
+## Tizen Packaging Staging
+
+Tizen packaging templates are stored in:
+
+```text
+tools/wasm/tizen/
+```
+
+When configuring Kodi with the WASM platform, CMake adds a `package_tizen`
+target that stages Tizen-ready files under:
+
+```text
+<build-dir>/packaging/tizen/
+```
+
+Use:
+
+```bash
+cmake --build <build-dir> --target package_tizen
+```
+
+Then package/sign/install the staged app with Tizen CLI (or Tizen Studio).
+
 ## Experimental WebCodecs Video Decode Path
 
 The wasm build now includes an experimental `CDVDVideoCodecWebCodecs` backend.
