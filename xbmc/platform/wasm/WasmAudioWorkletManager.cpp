@@ -221,41 +221,58 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
     return 0;
 
   const unsigned int capacityFrames = m_bufferCapacityFrames;
+  const unsigned int sampleRate = std::max(m_sampleRate.load(std::memory_order_relaxed), 1U);
+  const unsigned int quantum = std::max(m_quantumSize.load(std::memory_order_relaxed), 1U);
+  // When the ring is full, sleep for approximately one audio quantum so
+  // we wake up right when space becomes available, instead of busy-looping
+  // with 1 ms sleeps that burn CPU on the writer thread.
+  const int quantumMs =
+      std::max(1, static_cast<int>((static_cast<uint64_t>(quantum) * 1000ULL + sampleRate - 1ULL) /
+                                   sampleRate));
 
-  const uint64_t readFrame = m_readFrame.load(std::memory_order_acquire);
-  const uint64_t writeFrame = m_writeFrame.load(std::memory_order_relaxed);
-  const uint64_t usedFrames = writeFrame - readFrame;
-  if (usedFrames >= capacityFrames)
-    return 0;
-
-  const uint64_t freeFrames = capacityFrames - usedFrames;
-  const uint64_t toWrite = std::min<uint64_t>(frames, freeFrames);
-  const uint64_t dstStart = writeFrame % capacityFrames;
-  const uint64_t firstChunk = std::min<uint64_t>(toWrite, capacityFrames - dstStart);
-  const uint64_t secondChunk = toWrite - firstChunk;
-
-  for (unsigned int ch = 0; ch < copyChannels; ++ch)
+  unsigned int writtenFrames = 0;
+  while (writtenFrames < frames)
   {
-    if (!planes[ch])
-      return 0;
-    float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
-    const float* const srcPlane = planes[ch] + offsetFrames;
-    std::memcpy(dstPlane + dstStart, srcPlane, firstChunk * sizeof(float));
-    if (secondChunk > 0)
-      std::memcpy(dstPlane, srcPlane + firstChunk, secondChunk * sizeof(float));
-  }
-  // Zero any ring planes the writer did not fill (e.g. upmix headroom) so
-  // stale data never leaks into the browser output.
-  for (unsigned int ch = copyChannels; ch < configuredChannels; ++ch)
-  {
-    float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
-    std::memset(dstPlane + dstStart, 0, firstChunk * sizeof(float));
-    if (secondChunk > 0)
-      std::memset(dstPlane, 0, secondChunk * sizeof(float));
+    const uint64_t readFrame = m_readFrame.load(std::memory_order_acquire);
+    const uint64_t writeFrame = m_writeFrame.load(std::memory_order_relaxed);
+    const uint64_t usedFrames = writeFrame - readFrame;
+    if (usedFrames >= capacityFrames)
+    {
+      emscripten_thread_sleep(quantumMs);
+      continue;
+    }
+
+    const uint64_t freeFrames = capacityFrames - usedFrames;
+    const uint64_t toWrite = std::min<uint64_t>(frames - writtenFrames, freeFrames);
+    const uint64_t dstStart = writeFrame % capacityFrames;
+    const uint64_t firstChunk = std::min<uint64_t>(toWrite, capacityFrames - dstStart);
+    const uint64_t secondChunk = toWrite - firstChunk;
+
+    for (unsigned int ch = 0; ch < copyChannels; ++ch)
+    {
+      if (!planes[ch])
+        return writtenFrames;
+      float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
+      const float* const srcPlane = planes[ch] + offsetFrames + writtenFrames;
+      std::memcpy(dstPlane + dstStart, srcPlane, firstChunk * sizeof(float));
+      if (secondChunk > 0)
+        std::memcpy(dstPlane, srcPlane + firstChunk, secondChunk * sizeof(float));
+    }
+    // Zero any ring planes the writer did not fill (e.g. upmix headroom) so
+    // stale data never leaks into the browser output.
+    for (unsigned int ch = copyChannels; ch < configuredChannels; ++ch)
+    {
+      float* const dstPlane = &m_ringBuffer[static_cast<size_t>(ch) * capacityFrames];
+      std::memset(dstPlane + dstStart, 0, firstChunk * sizeof(float));
+      if (secondChunk > 0)
+        std::memset(dstPlane, 0, secondChunk * sizeof(float));
+    }
+
+    m_writeFrame.store(writeFrame + toWrite, std::memory_order_release);
+    writtenFrames += static_cast<unsigned int>(toWrite);
   }
 
-  m_writeFrame.store(writeFrame + toWrite, std::memory_order_release);
-  return static_cast<unsigned int>(toWrite);
+  return writtenFrames;
 }
 
 void CWasmAudioWorkletManager::Drain()
