@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdint>
+#include <cstring>
 
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -134,6 +135,9 @@ uint16_t TranslateUnicode(const EmscriptenKeyboardEvent* e)
 
 XBMCKey TranslateDomKey(const EmscriptenKeyboardEvent* e)
 {
+  if (std::strcmp(e->key, "Back") == 0)
+    return XBMCK_ESCAPE;
+
   if (e->location == DOM_KEY_LOCATION_NUMPAD)
   {
     if (e->keyCode >= DOM_VK_NUMPAD0 && e->keyCode <= DOM_VK_NUMPAD9)
@@ -171,6 +175,8 @@ XBMCKey TranslateDomKey(const EmscriptenKeyboardEvent* e)
 
   switch (e->keyCode)
   {
+    case 10009: // Tizen TV hardware Back key
+      return XBMCK_ESCAPE;
     case DOM_VK_BACK_SPACE:
       return XBMCK_BACKSPACE;
     case DOM_VK_TAB:

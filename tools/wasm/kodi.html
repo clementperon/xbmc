@@ -3,89 +3,631 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d0720">
   <title>Kodi — WebAssembly</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; }
-    #status {
-      position: fixed; top: 0; left: 0; right: 0;
-      padding: 12px 16px; background: rgba(0,0,0,.85);
-      color: #eee; font: 14px/1.4 system-ui, sans-serif;
-      z-index: 10; transition: opacity .4s;
+    /* =====================================================================
+       Theme: Kodi 22 "Piers" splash
+         - Deep purple / navy background
+         - Magenta + cyan accents
+         - Cyan→magenta "K" mark with glow
+         - Floating translucent diamond shapes behind the logo
+         - Faint contributor-style word cloud across the background
+    ===================================================================== */
+
+    :root {
+      --bg-0: #04020b;
+      --bg-1: #0d0720;
+      --bg-2: #1a0f2e;
+      --piers-cyan:       #4dd0e1;
+      --piers-cyan-deep:  #17a2e8;
+      --piers-magenta:    #c837ab;
+      --piers-magenta-hi: #e054ff;
+      --piers-pink:       #ff4db8;
+      --error:            #ff5a5a;
     }
-    #status.hidden { opacity: 0; pointer-events: none; }
-    #progress { margin-top: 6px; width: 100%; height: 6px; appearance: none; }
-    #progress::-webkit-progress-bar { background: #333; border-radius: 3px; }
-    #progress::-webkit-progress-value { background: #17a2e8; border-radius: 3px; }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: var(--bg-0);
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   'Helvetica Neue', Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      color: #fff;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      outline: none;
+    }
+
+    /* ---------- Splash overlay ---------- */
+
+    #splash {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse at 50% 45%,
+                        var(--bg-2) 0%,
+                        var(--bg-1) 45%,
+                        var(--bg-0) 100%);
+      transition: opacity .8s ease, visibility 0s linear .8s;
+      overflow: hidden;
+    }
+
+    #splash.hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    /* Magenta + cyan color washes drifting slowly */
+    #splash::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 20% 30%,
+                        rgba(200, 55, 171, .30), transparent 42%),
+        radial-gradient(circle at 80% 72%,
+                        rgba( 77, 208, 225, .22), transparent 42%),
+        radial-gradient(circle at 65% 18%,
+                        rgba(224, 84, 255, .15), transparent 38%);
+      animation: drift 16s ease-in-out infinite alternate;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    @keyframes drift {
+      0%   { transform: translate(0, 0)    scale(1);    }
+      100% { transform: translate(-5%, -3%) scale(1.08); }
+    }
+
+    /* Faint contributor word cloud — evokes the Piers splash artwork.
+       Text is baked into a CSS background so there's nothing to fetch. */
+    #splash::after {
+      content: '';
+      position: absolute;
+      inset: -5%;
+      pointer-events: none;
+      z-index: 0;
+      background-image: var(--word-cloud-url);
+      background-size: 820px auto;
+      background-repeat: repeat;
+      opacity: .18;
+      mix-blend-mode: screen;
+      mask-image: radial-gradient(ellipse at 50% 50%,
+                                  black 0%, black 40%, transparent 78%);
+      -webkit-mask-image: radial-gradient(ellipse at 50% 50%,
+                                          black 0%, black 40%, transparent 78%);
+      animation: wordscroll 120s linear infinite;
+    }
+
+    @keyframes wordscroll {
+      from { background-position: 0 0;        }
+      to   { background-position: -820px 0;   }
+    }
+
+    /* Floating diamond shapes (translucent, slowly rotating) */
+    .diamond {
+      position: absolute;
+      width: 160px;
+      height: 160px;
+      border: 1px solid currentColor;
+      transform: rotate(45deg);
+      opacity: .18;
+      pointer-events: none;
+      z-index: 0;
+      background: linear-gradient(135deg,
+                                  rgba(255,255,255,.04),
+                                  rgba(255,255,255,0) 70%);
+      box-shadow: 0 0 40px currentColor;
+      animation: floaty 14s ease-in-out infinite alternate;
+    }
+    .diamond.d1 { top: 18%; left: 14%;  color: var(--piers-magenta);    width: 180px; height: 180px; animation-delay: -2s; }
+    .diamond.d2 { top: 62%; left:  6%;  color: var(--piers-cyan);       width: 120px; height: 120px; animation-delay: -6s; }
+    .diamond.d3 { top: 14%; right: 12%; color: var(--piers-cyan-deep);  width: 140px; height: 140px; animation-delay: -4s; }
+    .diamond.d4 { top: 66%; right:  8%; color: var(--piers-magenta-hi); width: 200px; height: 200px; animation-delay: -9s; }
+    .diamond.d5 { top: 42%; right: 28%; color: var(--piers-pink);       width:  80px; height:  80px; animation-delay: -1s; opacity: .12; }
+
+    @keyframes floaty {
+      0%   { transform: rotate(45deg) translate(0, 0); }
+      100% { transform: rotate(49deg) translate(-12px, -18px); }
+    }
+
+    /* ---------- Foreground content ---------- */
+
+    .splash-content {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      width: 90%;
+      max-width: 460px;
+      padding: 24px;
+    }
+
+    /* Logo + spinning rings */
+
+    .logo-wrap {
+      position: relative;
+      width: 148px;
+      height: 148px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo-wrap .logo-svg {
+      width: 104px;
+      height: 104px;
+      filter: drop-shadow(0 0 30px rgba(77, 208, 225, .55))
+              drop-shadow(0 0 40px rgba(200, 55, 171, .45));
+      animation: pulse 3.4s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        filter: drop-shadow(0 0 22px rgba( 77,208,225,.45))
+                drop-shadow(0 0 30px rgba(200, 55,171,.35));
+      }
+      50% {
+        filter: drop-shadow(0 0 40px rgba( 77,208,225,.85))
+                drop-shadow(0 0 60px rgba(224, 84,255,.65));
+      }
+    }
+
+    .ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      pointer-events: none;
+    }
+    .ring.inner {
+      inset: 6px;
+      border-top-color: var(--piers-cyan);
+      border-right-color: rgba(77, 208, 225, .35);
+      animation: spin 1.4s linear infinite;
+    }
+    .ring.outer {
+      inset: -10px;
+      border-top-color: var(--piers-magenta-hi);
+      border-left-color: rgba(224, 84, 255, .18);
+      animation: spin 2.6s linear infinite reverse;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---------- Wordmark ---------- */
+
+    .title-block {
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    .wordmark {
+      font-size: 46px;
+      font-weight: 300;
+      letter-spacing: 14px;
+      text-transform: uppercase;
+      padding-left: 14px; /* optical centering for tracking */
+      background: linear-gradient(180deg, #ffffff 0%, #c7e7f4 65%, #e8b6ea 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: #fff; /* fallback */
+      line-height: 1;
+      text-shadow: 0 0 28px rgba(77, 208, 225, .25);
+    }
+
+    .version {
+      margin-top: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 5px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,.55);
+    }
+    .version .codename {
+      display: inline-block;
+      margin-left: 10px;
+      padding: 2px 8px;
+      border: 1px solid rgba(224, 84, 255, .45);
+      border-radius: 3px;
+      color: #f0b6ff;
+      background: rgba(200, 55, 171, .12);
+      letter-spacing: 4px;
+    }
+
+    /* ---------- Progress ---------- */
+
+    .progress-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      max-width: 340px;
+      margin-top: 6px;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 3px;
+      background: rgba(255,255,255,.08);
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg,
+                                  var(--piers-cyan) 0%,
+                                  var(--piers-magenta-hi) 100%);
+      border-radius: 3px;
+      transition: width .3s ease;
+      box-shadow: 0 0 14px rgba(200, 55, 171, .65),
+                  0 0 18px rgba( 77, 208, 225, .5);
+    }
+
+    .progress-fill.indeterminate {
+      width: 40%;
+      animation: slide 1.6s ease-in-out infinite;
+      transition: none;
+    }
+
+    @keyframes slide {
+      0%   { transform: translateX(-120%); }
+      100% { transform: translateX(260%);  }
+    }
+
+    .status-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      width: 100%;
+      font-size: 12px;
+      color: rgba(255,255,255,.55);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .status-text {
+      letter-spacing: .4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 70%;
+    }
+
+    .status-pct {
+      font-weight: 600;
+      color: var(--piers-cyan);
+      min-width: 3ch;
+      text-align: right;
+    }
+
+    /* ---------- Footer ---------- */
+
+    .footer {
+      position: fixed;
+      bottom: 18px;
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 10px;
+      color: rgba(255,255,255,.28);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      z-index: 2;
+    }
+
+    /* ---------- Error state ---------- */
+
+    #splash.error .ring,
+    #splash.error .progress-fill,
+    #splash.error .diamond { animation: none; }
+    #splash.error .logo-svg {
+      filter: drop-shadow(0 0 24px rgba(255,90,90,.65)) grayscale(.3);
+      animation: none;
+    }
+    #splash.error .progress-fill {
+      background: linear-gradient(90deg, #ff5a5a 0%, #ff9b9b 100%);
+      box-shadow: 0 0 14px rgba(255,90,90,.55);
+      width: 100% !important;
+    }
+    #splash.error .status-text,
+    #splash.error .status-pct { color: #ff9b9b; }
+
+    /* ---------- Small screens / TV-safe ---------- */
+
+    @media (max-width: 480px) {
+      .wordmark  { font-size: 36px; letter-spacing: 10px; padding-left: 10px; }
+      .logo-wrap { width: 120px; height: 120px; }
+      .logo-wrap .logo-svg { width: 86px; height: 86px; }
+      .diamond   { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #splash::before,
+      #splash::after,
+      .diamond,
+      .ring,
+      .logo-svg,
+      .progress-fill.indeterminate { animation: none !important; }
+    }
   </style>
 </head>
 <body>
-  <div id="status">
-    <div id="statusText">Downloading…</div>
-    <progress id="progress" value="0" max="100"></progress>
+  <div id="splash" role="status" aria-live="polite" aria-label="Loading Kodi">
+    <!-- Floating diamond shapes (background decoration) -->
+    <div class="diamond d1" aria-hidden="true"></div>
+    <div class="diamond d2" aria-hidden="true"></div>
+    <div class="diamond d3" aria-hidden="true"></div>
+    <div class="diamond d4" aria-hidden="true"></div>
+    <div class="diamond d5" aria-hidden="true"></div>
+
+    <div class="splash-content">
+      <div class="logo-wrap">
+        <div class="ring outer"></div>
+        <div class="ring inner"></div>
+        <!-- Inline "K" mark with the Piers cyan→magenta palette. -->
+        <svg class="logo-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="kGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%"   stop-color="#4dd0e1"/>
+              <stop offset="55%"  stop-color="#b93eb7"/>
+              <stop offset="100%" stop-color="#e054ff"/>
+            </linearGradient>
+            <linearGradient id="kTile" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="#16082c"/>
+              <stop offset="100%" stop-color="#0a0518"/>
+            </linearGradient>
+            <linearGradient id="kEdge" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%"   stop-color="rgba(77, 208, 225, .65)"/>
+              <stop offset="100%" stop-color="rgba(224, 84, 255, .65)"/>
+            </linearGradient>
+          </defs>
+          <rect x="4" y="4" width="92" height="92" rx="20" ry="20"
+                fill="url(#kTile)" stroke="url(#kEdge)" stroke-width="1.5"/>
+          <!-- Stylised "K" glyph -->
+          <path d="M 26 20
+                   L 38 20
+                   L 38 46
+                   L 64 20
+                   L 80 20
+                   L 52 48
+                   L 80 80
+                   L 64 80
+                   L 38 54
+                   L 38 80
+                   L 26 80
+                   Z"
+                fill="url(#kGrad)"/>
+        </svg>
+      </div>
+
+      <div class="title-block">
+        <div class="wordmark">Kodi</div>
+        <div class="version">
+          v.&nbsp;22.0 &nbsp;·&nbsp; WebAssembly
+          <span class="codename">Piers</span>
+        </div>
+      </div>
+
+      <div class="progress-block">
+        <div class="progress-track">
+          <div class="progress-fill indeterminate" id="progressFill"></div>
+        </div>
+        <div class="status-line">
+          <span class="status-text" id="statusText">Starting up…</span>
+          <span class="status-pct" id="statusPct"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Kodi — open source home theater · WebAssembly Edition</div>
   </div>
+
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
 
   <script>
-    // Intercept Tizen TV remote keys and map them to standard keyboard events
-    window.addEventListener('keydown', function(e) {
-      if (e.keyCode === 10009 || e.key === 'Back') {
-        e.preventDefault();
-        e.stopPropagation();
-        window.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Escape',
-          code: 'Escape',
-          keyCode: 27,
-          which: 27,
-          bubbles: true
-        }));
+    // ---------------------------------------------------------------------
+    // Build the faint background "word cloud" as a data-URL SVG so the
+    // splash stays fully self-contained (nothing to fetch at load time).
+    // ---------------------------------------------------------------------
+    (function buildWordCloud() {
+      var words = [
+        'KODI', 'PIERS', 'v22', 'WEBASSEMBLY', 'OPEN SOURCE', 'MEDIA CENTER',
+        'VIDEO', 'MUSIC', 'TV', 'PVR', 'RADIO', 'PHOTOS', 'GAMES',
+        'ADDONS', 'SKINS', 'LIBRARY', 'STREAM', 'PLAYLIST', 'REMOTE',
+        'FFMPEG', 'WEBGL', 'EMSCRIPTEN', 'PTHREAD', 'WORKLET',
+        'TEAM KODI', 'XBMC', 'COMMUNITY', 'CONTRIBUTORS',
+        'THANK YOU', 'OMEGA', 'NEXUS', 'MATRIX', 'LEIA', 'KRYPTON'
+      ];
+      var palette = ['#7ee8fa', '#e054ff', '#c837ab', '#4dd0e1',
+                     '#ffffff', '#b497ff'];
+      var W = 820, H = 460;
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" ' +
+                'width="' + W + '" height="' + H + '" ' +
+                'viewBox="0 0 ' + W + ' ' + H + '">';
+      // Deterministic pseudo-random so the layout is stable across reloads.
+      var seed = 1;
+      function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+
+      for (var i = 0; i < 90; i++) {
+        var w = words[i % words.length];
+        var x = Math.floor(rnd() * W);
+        var y = Math.floor(rnd() * H) + 14;
+        var size = 9 + Math.floor(rnd() * 13);
+        var color = palette[Math.floor(rnd() * palette.length)];
+        var opacity = (0.35 + rnd() * 0.55).toFixed(2);
+        svg += '<text x="' + x + '" y="' + y + '" ' +
+               'font-family="-apple-system,Segoe UI,Roboto,sans-serif" ' +
+               'font-weight="700" ' +
+               'font-size="' + size + '" ' +
+               'fill="' + color + '" ' +
+               'fill-opacity="' + opacity + '" ' +
+               'letter-spacing="1.5">' + w + '</text>';
       }
-    }, true);
+      svg += '</svg>';
+      var url = 'url("data:image/svg+xml;utf8,' +
+                encodeURIComponent(svg).replace(/'/g, '%27') + '")';
+      document.documentElement.style.setProperty('--word-cloud-url', url);
+    })();
 
-    window.addEventListener('keyup', function(e) {
-      if (e.keyCode === 10009 || e.key === 'Back') {
-        e.preventDefault();
-        e.stopPropagation();
-        window.dispatchEvent(new KeyboardEvent('keyup', {
-          key: 'Escape',
-          code: 'Escape',
-          keyCode: 27,
-          which: 27,
-          bubbles: true
-        }));
+    // ---------------------------------------------------------------------
+    // Tizen TV remote: keep the hardware "Back" key (VK_BACK = 10009)
+    // inside the app. Kodi maps it to Escape in the wasm input layer.
+    // ---------------------------------------------------------------------
+    (function () {
+      ['keydown', 'keyup'].forEach(function (type) {
+        window.addEventListener(type, function (e) {
+          if (e.keyCode === 10009 || e.key === 'Back') {
+            e.preventDefault();
+          }
+        }, true);
+      });
+    })();
+
+    // ---------------------------------------------------------------------
+    // Splash / loader controller
+    // ---------------------------------------------------------------------
+    var splashEl     = document.getElementById('splash');
+    var statusTextEl = document.getElementById('statusText');
+    var statusPctEl  = document.getElementById('statusPct');
+    var progressFill = document.getElementById('progressFill');
+    var canvas       = document.getElementById('canvas');
+
+    function setProgress(pct) {
+      if (pct == null || isNaN(pct)) {
+        progressFill.classList.add('indeterminate');
+        statusPctEl.textContent = '';
+        return;
       }
-    }, true);
+      pct = Math.max(0, Math.min(100, pct));
+      progressFill.classList.remove('indeterminate');
+      progressFill.style.width = pct.toFixed(1) + '%';
+      statusPctEl.textContent = Math.round(pct) + '%';
+    }
 
-    var statusEl = document.getElementById('status');
-    var statusText = document.getElementById('statusText');
-    var progressEl = document.getElementById('progress');
-    var canvas = document.getElementById('canvas');
+    function setStatusText(text) {
+      statusTextEl.textContent = text || '';
+    }
 
+    function hideSplash() {
+      if (splashEl.classList.contains('hidden')) return;
+      splashEl.classList.add('hidden');
+      setTimeout(function () {
+        splashEl.setAttribute('aria-hidden', 'true');
+      }, 900);
+    }
+
+    function showError(message) {
+      splashEl.classList.add('error');
+      splashEl.classList.remove('hidden');
+      progressFill.classList.remove('indeterminate');
+      setStatusText(message || 'Failed to load Kodi');
+      statusPctEl.textContent = '!';
+    }
+    window.showError = showError;
+
+    // Parse Emscripten setStatus strings. Common forms:
+    //   "Downloading data... (1234567/9876543)"
+    //   "Preparing... (3/7)"
+    //   "Running..."
+    //   ""  (empty → runtime ready)
+    var EMSCRIPTEN_PROGRESS_RE = /\((\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\)/;
+
+    function applyEmscriptenStatus(text) {
+      if (!text) return; // empty string means "ready"
+
+      var m = text.match(EMSCRIPTEN_PROGRESS_RE);
+      var label = text.replace(EMSCRIPTEN_PROGRESS_RE, '').trim();
+      if (m) {
+        var cur = parseFloat(m[1]);
+        var tot = parseFloat(m[2]);
+        if (tot > 0) setProgress((cur / tot) * 100);
+        if (!label) label = 'Loading assets…';
+      } else {
+        setProgress(null);
+      }
+      setStatusText(label || text);
+    }
+
+    // ---------------------------------------------------------------------
+    // Emscripten Module
+    // ---------------------------------------------------------------------
     var Module = {
       canvas: canvas,
-      print: function(text) { console.log(text); },
-      printErr: function(text) { console.error(text); },
-      setStatus: function(text) {
-        if (!text) {
-          statusEl.classList.add('hidden');
-          return;
-        }
-        statusText.textContent = text;
-        var m = text.match(/(\d+(\.\d+)?)\//);
-        if (m) {
-          var pct = Math.min(100, (parseFloat(m[1]) / parseFloat(text.split('/')[1])) * 100);
-          progressEl.value = pct;
+      print:    function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); },
+
+      setStatus: function (text) {
+        if (splashEl.classList.contains('error')) return;
+        applyEmscriptenStatus(text);
+      },
+
+      monitorRunDependencies: function (remaining) {
+        if (splashEl.classList.contains('error')) return;
+        if (remaining > 0) {
+          setStatusText('Preparing runtime… (' + remaining + ' left)');
+          setProgress(null);
         }
       },
-      onRuntimeInitialized: function() {
-        statusEl.classList.add('hidden');
-        canvas.focus();
+
+      onAbort: function (what) {
+        showError('Kodi aborted: ' + (what || 'unknown error'));
+      },
+
+      onRuntimeInitialized: function () {
+        setStatusText('Starting Kodi…');
+        setProgress(100);
+
+        // Give Kodi a handful of frames to produce its first image before
+        // we uncover it, so the user doesn't see a black flash.
+        var frames = 0;
+        (function tick() {
+          if (++frames >= 3) {
+            canvas.focus();
+            hideSplash();
+            return;
+          }
+          requestAnimationFrame(tick);
+        })();
+        setTimeout(function () {
+          canvas.focus();
+          hideSplash();
+        }, 2500);
       }
     };
 
-    Module.setStatus('Downloading…');
+    window.addEventListener('error', function (e) {
+      if (e && e.filename && /kodi\.(js|wasm|data)(\?|$)/i.test(e.filename)) {
+        showError('Failed to load ' + e.filename.split('/').pop());
+      }
+    });
+
+    setStatusText('Downloading Kodi…');
+    setProgress(null);
   </script>
-  <script async src="kodi.js"></script>
+
+  <script async src="kodi.js" onerror="showError('Could not load kodi.js')"></script>
 </body>
 </html>
