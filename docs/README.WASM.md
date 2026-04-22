@@ -260,6 +260,19 @@ cmake --build <build-dir> --target package_tizen
 
 Then package/sign/install the staged app with Tizen CLI (or Tizen Studio).
 
+If `tz` is available, you can package directly from CMake:
+
+```bash
+cmake --build <build-dir> --target package_tizen_wgt
+```
+
+`tz` is resolved from these environment variables first:
+
+- `TIZEN_CLI_PATH`
+- `TIZEN_TOOLS_PATH`
+- `TIZEN_SDK`
+- `TIZEN_SDK_ROOT`
+
 ## Experimental WebCodecs Video Decode Path
 
 The wasm build now includes an experimental `CDVDVideoCodecWebCodecs` backend.

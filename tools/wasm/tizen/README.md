@@ -30,3 +30,18 @@ The stage includes:
 
 Package/sign/install to TV using Tizen CLI or Tizen Studio from the staged
 directory.
+
+## Direct WGT packaging target
+
+If `tz` is available, CMake also exposes:
+
+```bash
+cmake --build <build-dir> --target package_tizen_wgt
+```
+
+`tz` is discovered from environment variables first:
+
+- `TIZEN_CLI_PATH`
+- `TIZEN_TOOLS_PATH`
+- `TIZEN_SDK`
+- `TIZEN_SDK_ROOT`

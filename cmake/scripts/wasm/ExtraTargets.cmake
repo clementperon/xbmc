@@ -20,3 +20,31 @@ add_custom_target(package_tizen
 )
 
 set_target_properties(package_tizen PROPERTIES FOLDER "Build Utilities")
+
+# Resolve Tizen CLI (tz) from environment-driven SDK paths first.
+find_program(WASM_TIZEN_TZ_EXECUTABLE
+  NAMES tz
+  HINTS
+    "$ENV{TIZEN_CLI_PATH}"
+    "$ENV{TIZEN_TOOLS_PATH}/tizen-core"
+    "$ENV{TIZEN_SDK}/tools/tizen-core"
+    "$ENV{TIZEN_SDK_ROOT}/tools/tizen-core"
+  NO_DEFAULT_PATH
+)
+
+# Fallback to PATH lookup if env-based lookup did not resolve tz.
+if(NOT WASM_TIZEN_TZ_EXECUTABLE)
+  find_program(WASM_TIZEN_TZ_EXECUTABLE NAMES tz)
+endif()
+
+if(WASM_TIZEN_TZ_EXECUTABLE)
+  add_custom_target(package_tizen_wgt
+    COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" pack -w "${WASM_TIZEN_STAGE_DIR}" -t wgt
+    DEPENDS package_tizen
+    COMMENT "Packaging Tizen WGT via ${WASM_TIZEN_TZ_EXECUTABLE}"
+    VERBATIM
+  )
+  set_target_properties(package_tizen_wgt PROPERTIES FOLDER "Build Utilities")
+else()
+  message(STATUS "WASM: tz CLI not found. Set TIZEN_CLI_PATH/TIZEN_TOOLS_PATH/TIZEN_SDK/TIZEN_SDK_ROOT to enable package_tizen_wgt.")
+endif()
