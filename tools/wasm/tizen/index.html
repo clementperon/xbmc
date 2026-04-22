@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kodi - WebAssembly</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #status {
+      position: fixed; top: 0; left: 0; right: 0;
+      padding: 12px 16px; background: rgba(0,0,0,.85);
+      color: #eee; font: 14px/1.4 system-ui, sans-serif;
+      z-index: 10; transition: opacity .4s;
+    }
+    #status.hidden { opacity: 0; pointer-events: none; }
+    #progress { margin-top: 6px; width: 100%; height: 6px; appearance: none; }
+    #progress::-webkit-progress-bar { background: #333; border-radius: 3px; }
+    #progress::-webkit-progress-value { background: #17a2e8; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="status">
+    <div id="statusText">Downloading...</div>
+    <progress id="progress" value="0" max="100"></progress>
+  </div>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+
+  <script>
+    // Intercept Tizen TV remote keys and map them to standard keyboard events.
+    window.addEventListener('keydown', function(e) {
+      if (e.keyCode === 10009 || e.key === 'Back') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true
+        }));
+      }
+    }, true);
+
+    window.addEventListener('keyup', function(e) {
+      if (e.keyCode === 10009 || e.key === 'Back') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new KeyboardEvent('keyup', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true
+        }));
+      }
+    }, true);
+
+    var statusEl = document.getElementById('status');
+    var statusText = document.getElementById('statusText');
+    var progressEl = document.getElementById('progress');
+    var canvas = document.getElementById('canvas');
+
+    var Module = {
+      canvas: canvas,
+      print: function(text) { console.log(text); },
+      printErr: function(text) { console.error(text); },
+      setStatus: function(text) {
+        if (!text) {
+          statusEl.classList.add('hidden');
+          return;
+        }
+        statusText.textContent = text;
+        var m = text.match(/(\d+(\.\d+)?)\//);
+        if (m) {
+          var pct = Math.min(100, (parseFloat(m[1]) / parseFloat(text.split('/')[1])) * 100);
+          progressEl.value = pct;
+        }
+      },
+      onRuntimeInitialized: function() {
+        statusEl.classList.add('hidden');
+        canvas.focus();
+      }
+    };
+
+    Module.setStatus('Downloading...');
+  </script>
+  <script async src="kodi.js"></script>
+</body>
+</html>
