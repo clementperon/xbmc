@@ -45,8 +45,26 @@ void InstallVsyncPump()
   MAIN_THREAD_EM_ASM(
       {
         const idx = $0 >> 2;
-        const tick = () =>
+        let lastTimestamp = 0.0;
+        let measuredRefreshRate = 0.0;
+        globalThis.__kodiRefreshRate = 60.0;
+        const tick = (timestamp) =>
         {
+          if (lastTimestamp > 0.0)
+          {
+            const intervalMs = timestamp - lastTimestamp;
+            if (intervalMs > 0.0)
+            {
+              const hz = 1000.0 / intervalMs;
+              if (hz >= 20.0 && hz <= 240.0)
+              {
+                measuredRefreshRate =
+                  measuredRefreshRate > 0.0 ? measuredRefreshRate * 0.9 + hz * 0.1 : hz;
+                globalThis.__kodiRefreshRate = measuredRefreshRate;
+              }
+            }
+          }
+          lastTimestamp = timestamp;
           Atomics.add(HEAP32, idx, 1);
           Atomics.notify(HEAP32, idx, 1);
           requestAnimationFrame(tick);
@@ -167,6 +185,16 @@ void GetCanvasSize(int* width, int* height)
   if (*height <= 0)
     *height = 720;
 }
+
+double GetBrowserRefreshRate()
+{
+  const double refreshRate = MAIN_THREAD_EM_ASM_DOUBLE(
+      {
+        const rate = globalThis.__kodiRefreshRate;
+        return Number.isFinite(rate) && rate >= 20.0 && rate <= 240.0 ? rate : 60.0;
+      });
+  return refreshRate;
+}
 } // namespace
 
 void CWinSystemWasmGLESContext::Register()
@@ -243,7 +271,7 @@ bool CWinSystemWasmGLESContext::CreateNewWindow(const std::string& name,
   int h = 0;
   GetCanvasSize(&w, &h);
 
-  UpdateDesktopResolution(res, "Browser", w, h, 60.0f, 0);
+  UpdateDesktopResolution(res, "Browser", w, h, static_cast<float>(GetBrowserRefreshRate()), 0);
   res.bFullScreen = fullScreen;
 
   ResizeWorkerGLContext(w, h);
@@ -304,11 +332,10 @@ void CWinSystemWasmGLESContext::ForceFullScreen(const RESOLUTION_INFO& resInfo)
     return;
 
   RESOLUTION_INFO& desktop = CDisplaySettings::GetInstance().GetResolutionInfo(RES_DESKTOP);
-  desktop.iWidth = w;
-  desktop.iHeight = h;
-  desktop.iScreenWidth = w;
-  desktop.iScreenHeight = h;
-  desktop.iSubtitles = h;
+  const std::string output = desktop.strOutput.empty() ? "Browser" : desktop.strOutput;
+  const uint32_t flags = desktop.dwFlags;
+  UpdateDesktopResolution(desktop, output, w, h, static_cast<float>(GetBrowserRefreshRate()),
+                          flags);
   GetGfxContext().ResetOverscan(desktop);
 
   ResizeWindow(w, h, 0, 0);
