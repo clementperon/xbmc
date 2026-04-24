@@ -21,9 +21,9 @@
 namespace
 {
 constexpr char AUDIO_PROCESSOR_NAME[] = "kodi-audio-worklet";
-constexpr unsigned int BUFFER_TARGET_MS = 50;
+constexpr unsigned int BUFFER_TARGET_MS = 100;
 constexpr unsigned int MIN_BUFFER_QUANTA = 2;
-constexpr unsigned int PREBUFFER_TARGET_MS = 10;
+constexpr unsigned int PREBUFFER_TARGET_MS = 40;
 constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
 
 int CreateAudioContextOnMain(int requestedSampleRate)
@@ -138,6 +138,8 @@ bool CWasmAudioWorkletManager::Initialize(unsigned int channels, unsigned int re
     return false;
   }
 
+  m_ready.store(false, std::memory_order_release);
+
   if (!EnsureContext(requestedSampleRate))
     return false;
 
@@ -193,6 +195,9 @@ void CWasmAudioWorkletManager::Shutdown()
   m_workletThreadCreated.store(false, std::memory_order_release);
   m_processorCreated.store(false, std::memory_order_release);
   m_bufferCapacityFrames = 0;
+  m_bufferChannels = 0;
+  m_bufferSampleRate = 0;
+  m_bufferQuantumSize = 0;
   m_prebufferFrames = 0;
   m_prebufferComplete.store(false, std::memory_order_release);
   m_ringBuffer.clear();
@@ -507,17 +512,23 @@ void CWasmAudioWorkletManager::InstallResumeHooks() const
 
 void CWasmAudioWorkletManager::EnsureBufferAllocated()
 {
-  if (m_bufferCapacityFrames > 0)
-    return;
-
   const unsigned int sampleRate = std::max(m_sampleRate.load(std::memory_order_relaxed), 1U);
   const unsigned int quantumSize = std::max(m_quantumSize.load(std::memory_order_relaxed), 1U);
   const unsigned int channels = std::max(m_channels.load(std::memory_order_relaxed), 1U);
   const uint64_t targetFrames =
       (static_cast<uint64_t>(sampleRate) * BUFFER_TARGET_MS + 999ULL) / 1000ULL;
   const uint64_t minFrames = static_cast<uint64_t>(quantumSize) * MIN_BUFFER_QUANTA;
-  m_bufferCapacityFrames = static_cast<unsigned int>(std::max(targetFrames, minFrames));
-  const size_t sampleCount = static_cast<size_t>(m_bufferCapacityFrames) * channels;
+  const unsigned int capacityFrames =
+      static_cast<unsigned int>(std::max(targetFrames, minFrames));
+  if (m_bufferCapacityFrames == capacityFrames && m_bufferChannels == channels &&
+      m_bufferSampleRate == sampleRate && m_bufferQuantumSize == quantumSize)
+    return;
+
+  m_bufferCapacityFrames = capacityFrames;
+  m_bufferChannels = channels;
+  m_bufferSampleRate = sampleRate;
+  m_bufferQuantumSize = quantumSize;
+  const size_t sampleCount = static_cast<size_t>(capacityFrames) * channels;
   m_ringBuffer.assign(sampleCount, 0.0f);
 
   // Compute the prebuffer watermark. Clamp to half the ring so we always
@@ -527,7 +538,7 @@ void CWasmAudioWorkletManager::EnsureBufferAllocated()
   const uint64_t quantaInPrebuf = (prebuf + quantumSize - 1ULL) / quantumSize;
   const uint64_t prebufRounded = quantaInPrebuf * quantumSize;
   m_prebufferFrames =
-      static_cast<unsigned int>(std::min<uint64_t>(prebufRounded, m_bufferCapacityFrames / 2));
+      static_cast<unsigned int>(std::min<uint64_t>(prebufRounded, capacityFrames / 2));
   m_prebufferComplete.store(false, std::memory_order_release);
 }
 
@@ -581,12 +592,7 @@ bool CWasmAudioWorkletManager::ProcessAudio(
 bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw)
 {
   auto* outputs = static_cast<AudioSampleFrame*>(outputsRaw);
-  if (!IsReady() || numOutputs <= 0 || !outputs)
-    return true;
-
-  const unsigned int channels = m_channels.load(std::memory_order_relaxed);
-  const unsigned int capacityFrames = m_bufferCapacityFrames;
-  if (channels == 0 || capacityFrames == 0)
+  if (numOutputs <= 0 || !outputs)
     return true;
 
   const int samplesPerChannel = outputs[0].samplesPerChannel;
@@ -594,19 +600,37 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
     return true;
 
   const int outputChannels = outputs[0].numberOfChannels;
-  const unsigned int copyChannels = std::min<unsigned int>(channels, std::max(outputChannels, 0));
-  float* outputData = outputs[0].data;
+  if (outputChannels <= 0)
+    return true;
 
-  const uint64_t readFrame = m_readFrame.load(std::memory_order_relaxed);
-  const uint64_t writeFrame = m_writeFrame.load(std::memory_order_acquire);
-  const uint64_t availableFrames = writeFrame - readFrame;
-  const uint64_t wantedFrames = static_cast<uint64_t>(samplesPerChannel);
+  float* outputData = outputs[0].data;
 
   auto zeroOutput = [&]()
   {
     const int totalSamples = outputChannels * samplesPerChannel;
     std::fill(outputData, outputData + totalSamples, 0.0f);
   };
+
+  if (!IsReady())
+  {
+    zeroOutput();
+    return true;
+  }
+
+  const unsigned int channels = m_channels.load(std::memory_order_relaxed);
+  const unsigned int capacityFrames = m_bufferCapacityFrames;
+  if (channels == 0 || capacityFrames == 0)
+  {
+    zeroOutput();
+    return true;
+  }
+
+  const unsigned int copyChannels = std::min<unsigned int>(channels, outputChannels);
+
+  const uint64_t readFrame = m_readFrame.load(std::memory_order_relaxed);
+  const uint64_t writeFrame = m_writeFrame.load(std::memory_order_acquire);
+  const uint64_t availableFrames = writeFrame - readFrame;
+  const uint64_t wantedFrames = static_cast<uint64_t>(samplesPerChannel);
 
   if (!m_prebufferComplete.load(std::memory_order_acquire))
   {
