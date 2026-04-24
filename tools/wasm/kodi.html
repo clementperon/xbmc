@@ -493,25 +493,14 @@
     })();
 
     // ---------------------------------------------------------------------
-    // Tizen TV remote: map the hardware "Back" key (VK_BACK = 10009) to a
-    // standard Escape key event so Kodi's input layer picks it up.
+    // Tizen TV remote: keep the hardware "Back" key (VK_BACK = 10009)
+    // inside the app. Kodi maps it to Escape in the wasm input layer.
     // ---------------------------------------------------------------------
     (function () {
-      function redispatchAsEscape(type) {
-        window.dispatchEvent(new KeyboardEvent(type, {
-          key: 'Escape',
-          code: 'Escape',
-          keyCode: 27,
-          which: 27,
-          bubbles: true
-        }));
-      }
       ['keydown', 'keyup'].forEach(function (type) {
         window.addEventListener(type, function (e) {
           if (e.keyCode === 10009 || e.key === 'Back') {
             e.preventDefault();
-            e.stopPropagation();
-            redispatchAsEscape(type);
           }
         }, true);
       });
