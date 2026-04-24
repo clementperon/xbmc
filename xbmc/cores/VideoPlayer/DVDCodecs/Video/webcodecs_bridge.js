@@ -192,6 +192,21 @@ mergeInto(LibraryManager.library, {
         config.description = state.description;
       return config;
     },
+
+    writeFrameInfo: function(infoPtr, frame) {
+      HEAP32[(infoPtr + this.FI_PIXFMT) >> 2] = frame.pixelFormat | 0;
+      HEAP32[(infoPtr + this.FI_WIDTH) >> 2] = frame.width | 0;
+      HEAP32[(infoPtr + this.FI_HEIGHT) >> 2] = frame.height | 0;
+      HEAP32[(infoPtr + this.FI_Y_STRIDE) >> 2] = frame.yStride | 0;
+      HEAP32[(infoPtr + this.FI_U_STRIDE) >> 2] = frame.uStride | 0;
+      HEAP32[(infoPtr + this.FI_V_STRIDE) >> 2] = frame.vStride | 0;
+      HEAP32[(infoPtr + this.FI_U_OFFSET) >> 2] = frame.uOffset | 0;
+      HEAP32[(infoPtr + this.FI_V_OFFSET) >> 2] = frame.vOffset | 0;
+      HEAP32[(infoPtr + this.FI_KEYFRAME) >> 2] = frame.keyFrame ? 1 : 0;
+      HEAP32[(infoPtr + this.FI_PAYLOAD_SIZE) >> 2] = frame.payload.byteLength | 0;
+      HEAPF64[(infoPtr + this.FI_PTS) >> 3] = frame.ptsSeconds;
+      HEAPF64[(infoPtr + this.FI_DURATION) >> 3] = frame.durationSeconds;
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -227,6 +242,8 @@ mergeInto(LibraryManager.library, {
       lastTimestamp: 0,
       frames: [],
       bufferPool: [],
+      pendingCopies: 0,
+      generation: 0,
       droppedFrames: 0,
       highWaterMark: 0,
       decoder: null,
@@ -247,8 +264,11 @@ mergeInto(LibraryManager.library, {
                                                                 : state.lastTimestamp;
       const durationMicros = Number.isFinite(frame.duration) ? Number(frame.duration) : 0;
       state.lastTimestamp = timestampMicros;
+      const generation = state.generation;
 
+      state.pendingCopies += 1;
       (async () => {
+        let copied = null;
         try {
           // Safety valve: drop if the queue is already full. In steady state
           // push_packet returns BUSY long before we reach this point.
@@ -256,7 +276,12 @@ mergeInto(LibraryManager.library, {
             state.droppedFrames += 1;
             return;
           }
-          const copied = await WebCodecsBridge.copyFrameNative(state, frame, codedWidth, codedHeight);
+          copied = await WebCodecsBridge.copyFrameNative(state, frame, codedWidth, codedHeight);
+          if (state.generation !== generation) {
+            WebCodecsBridge.releasePayloadBuffer(state, copied.payload);
+            return;
+          }
+
           state.frames.push({
             payload: copied.payload,
             pixelFormat: copied.pixelFormat,
@@ -274,10 +299,14 @@ mergeInto(LibraryManager.library, {
           if (state.frames.length > state.highWaterMark)
             state.highWaterMark = state.frames.length;
         } catch (e) {
-          state.failed = true;
-          state.errorMessage = 'frame copy failed: ' + String(e);
+          if (state.generation === generation) {
+            state.failed = true;
+            state.errorMessage = 'frame copy failed: ' + String(e);
+          }
         } finally {
           frame.close();
+          if (state.generation === generation && state.pendingCopies > 0)
+            state.pendingCopies -= 1;
         }
       })();
     };
@@ -329,6 +358,9 @@ mergeInto(LibraryManager.library, {
   webcodecs_destroy_decoder: function(handle) {
     const state = WebCodecsBridge.getState(handle);
     if (!state) return;
+    state.generation += 1;
+    state.pendingCopies = 0;
+    state.frames.length = 0;
     try {
       if (state.decoder) state.decoder.close();
     } catch (e) {
@@ -346,7 +378,9 @@ mergeInto(LibraryManager.library, {
     if (!state || !state.decoder) return 0;
     try {
       state.decoder.reset();
+      state.generation += 1;
       state.frames.length = 0;
+      state.pendingCopies = 0;
       state.droppedFrames = 0;
       state.highWaterMark = 0;
       state.failed = false;
@@ -409,7 +443,7 @@ mergeInto(LibraryManager.library, {
   webcodecs_drain_decoder: function(handle) {
     const state = WebCodecsBridge.getState(handle);
     if (!state || !state.decoder) return 0;
-    return state.frames.length | 0;
+    return (state.frames.length + state.decoder.decodeQueueSize + state.pendingCopies) | 0;
   },
 
   // ---------------------------------------------------------------------------
@@ -424,22 +458,14 @@ mergeInto(LibraryManager.library, {
     if (state.frames.length === 0) return 0;
 
     const frame = state.frames[0];
-    if (!frame || frame.payload.byteLength > dstSize) return 0;
+    if (!frame) return 0;
+    if (frame.payload.byteLength > dstSize) {
+      B.writeFrameInfo(infoPtr, frame);
+      return -2;
+    }
 
     HEAPU8.set(frame.payload, dstPtr);
-
-    HEAP32[(infoPtr + B.FI_PIXFMT) >> 2] = frame.pixelFormat | 0;
-    HEAP32[(infoPtr + B.FI_WIDTH) >> 2] = frame.width | 0;
-    HEAP32[(infoPtr + B.FI_HEIGHT) >> 2] = frame.height | 0;
-    HEAP32[(infoPtr + B.FI_Y_STRIDE) >> 2] = frame.yStride | 0;
-    HEAP32[(infoPtr + B.FI_U_STRIDE) >> 2] = frame.uStride | 0;
-    HEAP32[(infoPtr + B.FI_V_STRIDE) >> 2] = frame.vStride | 0;
-    HEAP32[(infoPtr + B.FI_U_OFFSET) >> 2] = frame.uOffset | 0;
-    HEAP32[(infoPtr + B.FI_V_OFFSET) >> 2] = frame.vOffset | 0;
-    HEAP32[(infoPtr + B.FI_KEYFRAME) >> 2] = frame.keyFrame ? 1 : 0;
-    HEAP32[(infoPtr + B.FI_PAYLOAD_SIZE) >> 2] = frame.payload.byteLength | 0;
-    HEAPF64[(infoPtr + B.FI_PTS) >> 3] = frame.ptsSeconds;
-    HEAPF64[(infoPtr + B.FI_DURATION) >> 3] = frame.durationSeconds;
+    B.writeFrameInfo(infoPtr, frame);
 
     state.frames.shift();
     B.releasePayloadBuffer(state, frame.payload);

@@ -1105,6 +1105,9 @@ DemuxPacket* CDVDDemuxFFmpeg::ReadInternal(bool keep)
               ConvertTimestamp(m_pkt.pkt.dts, stream->time_base.den, stream->time_base.num);
           pPacket->duration = DVD_SEC_TO_TIME((double)m_pkt.pkt.duration * stream->time_base.num /
                                               stream->time_base.den);
+          pPacket->recoveryPoint = stream->codecpar &&
+                                   stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                                   (m_pkt.pkt.flags & AV_PKT_FLAG_KEY) != 0;
 
           CDVDDemuxUtils::StoreSideData(pPacket, &m_pkt.pkt);
 
@@ -1187,7 +1190,7 @@ DemuxPacket* CDVDDemuxFFmpeg::ReadInternal(bool keep)
         stream = AddStream(pPacket->iStreamId);
       }
       if (stream && stream->codec == AV_CODEC_ID_H264)
-        pPacket->recoveryPoint = m_seekToKeyFrame;
+        pPacket->recoveryPoint = pPacket->recoveryPoint || m_seekToKeyFrame;
       m_seekToKeyFrame = false;
     }
     if (!stream)

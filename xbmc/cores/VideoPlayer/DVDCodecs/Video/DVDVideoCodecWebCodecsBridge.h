@@ -110,8 +110,8 @@ int webcodecs_push_packet(int handle,
 int webcodecs_drain_decoder(int handle);
 
 // Copies the next queued frame into [dst, dst+dstSize) and fills *info.
-// Returns 1 on success, 0 if no frame available / too small buffer, -1 on
-// decoder failure.
+// Returns 1 on success, 0 if no frame is available, -1 on decoder failure,
+// and -2 if *info was filled but dst is too small for info->payloadSize.
 int webcodecs_copy_next_frame(int handle,
                               uint8_t* dst,
                               int dstSize,
