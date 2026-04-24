@@ -8,11 +8,6 @@
 
 #include "Application.h"
 
-#ifdef TARGET_WASM
-#include <emscripten.h>
-extern "C" void kodi_wasm_jsonrpc_notify_ready();
-#endif
-
 #include "Autorun.h"
 #include "CompileInfo.h"
 #include "DatabaseManager.h"
@@ -758,10 +753,6 @@ bool CApplication::Initialize()
   // Must stay above the window activation below: that can raise a modal dialog, whose nested
   // render loop reaches anything after it only once the dialog has been dismissed.
   CJSONRPC::Initialize();
-
-#ifdef TARGET_WASM
-  kodi_wasm_jsonrpc_notify_ready();
-#endif
 
   CServiceBroker::RegisterSpeechRecognition(speech::ISpeechRecognition::CreateInstance());
 
