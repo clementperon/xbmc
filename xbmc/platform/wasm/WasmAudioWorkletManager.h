@@ -86,6 +86,9 @@ private:
 
   std::vector<float> m_ringBuffer;
   unsigned int m_bufferCapacityFrames{0};
+  unsigned int m_bufferChannels{0};
+  unsigned int m_bufferSampleRate{0};
+  unsigned int m_bufferQuantumSize{0};
   std::atomic<uint64_t> m_readFrame{0};
   std::atomic<uint64_t> m_writeFrame{0};
 
