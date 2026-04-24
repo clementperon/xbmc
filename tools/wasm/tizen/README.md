@@ -45,3 +45,17 @@ cmake --build <build-dir> --target package_tizen_wgt
 - `TIZEN_TOOLS_PATH`
 - `TIZEN_SDK`
 - `TIZEN_SDK_ROOT`
+
+## Install target
+
+If `tz` is available, CMake exposes:
+
+```bash
+cmake --build <build-dir> --target install_tizen_wgt
+```
+
+This runs `tz install --package-path <build-dir>/packaging/tizen/Debug/tizen.wgt`
+and uses one of:
+
+- `WASM_TIZEN_INSTALL_TARGET` (or env `TIZEN_TARGET_NAME`)
+- `WASM_TIZEN_INSTALL_SERIAL` (or env `TIZEN_TARGET_SERIAL`)

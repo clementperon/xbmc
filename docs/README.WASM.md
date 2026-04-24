@@ -273,6 +273,17 @@ cmake --build <build-dir> --target package_tizen_wgt
 - `TIZEN_SDK`
 - `TIZEN_SDK_ROOT`
 
+You can also install from CMake:
+
+```bash
+cmake --build <build-dir> --target install_tizen_wgt
+```
+
+Set one of these before configuring (or as CMake cache vars):
+
+- `TIZEN_TARGET_NAME` (or `WASM_TIZEN_INSTALL_TARGET`)
+- `TIZEN_TARGET_SERIAL` (or `WASM_TIZEN_INSTALL_SERIAL`)
+
 ## Experimental WebCodecs Video Decode Path
 
 The wasm build now includes an experimental `CDVDVideoCodecWebCodecs` backend.
