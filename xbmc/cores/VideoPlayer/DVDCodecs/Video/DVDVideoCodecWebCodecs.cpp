@@ -48,11 +48,11 @@ constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
 constexpr int MIN_PROBE_DIMENSION = 64;
 constexpr int STRIDE_ALIGNMENT = 2;
 constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
-constexpr int DRAIN_POLL_LIMIT = 8;
+constexpr int DRAIN_POLL_LIMIT = 120;
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
 
-constexpr int CODEC_STRING_BUFFER_SIZE = 16;
+constexpr int CODEC_STRING_BUFFER_SIZE = 24;
 constexpr int H264_AVCC_MIN_EXTRADATA_SIZE = 7;
 constexpr uint8_t H264_AVCC_CONFIG_VERSION = 1;
 constexpr int H264_AVCC_PROFILE_OFFSET = 1;
@@ -65,6 +65,10 @@ constexpr uint8_t H264_NAL_TYPE_MASK = 0x1F;
 constexpr uint8_t H264_NAL_TYPE_IDR = 5;
 
 constexpr uint8_t ANNEXB_START_CODE_BYTE = 0x01;
+
+constexpr int VP9_FRAME_MARKER = 2;
+constexpr int VP9_PROFILE_WITH_RESERVED_BIT = 3;
+constexpr int VP9_FRAME_TYPE_KEY = 0;
 
 int AlignUp(int value, int alignment)
 {
@@ -94,6 +98,41 @@ std::string BuildH264CodecString(const CDVDStreamInfo& hints)
   }
 
   return "avc1.42E01E";
+}
+
+int ClampTwoDigitCodecValue(int value, int fallback)
+{
+  if (value < 0)
+    value = fallback;
+  return std::clamp(value, 0, 99);
+}
+
+int VP9ProfileFromHints(const CDVDStreamInfo& hints)
+{
+  switch (hints.profile)
+  {
+    case AV_PROFILE_VP9_0:
+      return 0;
+    case AV_PROFILE_VP9_1:
+      return 1;
+    case AV_PROFILE_VP9_2:
+      return 2;
+    case AV_PROFILE_VP9_3:
+      return 3;
+    default:
+      return hints.bitdepth > 8 ? 2 : 0;
+  }
+}
+
+std::string BuildVP9CodecString(const CDVDStreamInfo& hints)
+{
+  const int profile = ClampTwoDigitCodecValue(VP9ProfileFromHints(hints), 0);
+  const int level = ClampTwoDigitCodecValue(hints.level, 10);
+  const int bitDepth = ClampTwoDigitCodecValue(hints.bitdepth > 0 ? hints.bitdepth : 8, 8);
+
+  char buffer[CODEC_STRING_BUFFER_SIZE];
+  std::snprintf(buffer, sizeof(buffer), "vp09.%02d.%02d.%02d", profile, level, bitDepth);
+  return buffer;
 }
 
 // Returns true if the H.264 sample contains an IDR NAL unit.
@@ -136,6 +175,58 @@ bool H264SampleContainsIDR(const uint8_t* data, int size, int nalLengthSize)
   return false;
 }
 
+bool VP8SampleIsKeyFrame(const uint8_t* data, int size)
+{
+  return data && size > 0 && (data[0] & 0x01) == 0;
+}
+
+bool VP9SampleIsKeyFrame(const uint8_t* data, int size)
+{
+  if (!data || size <= 0)
+    return false;
+
+  // The VP9 uncompressed header is a plain f(n) bit stream, read MSB first, so the
+  // first field starts at bit 7. Everything needed to classify the frame fits in the
+  // first byte.
+  const uint8_t firstByte = data[0];
+  int bit = 7;
+  const auto readBit = [&firstByte, &bit]() { return (firstByte >> bit--) & 0x01; };
+
+  const int markerHigh = readBit();
+  const int markerLow = readBit();
+  if (((markerHigh << 1) | markerLow) != VP9_FRAME_MARKER)
+    return false;
+
+  const int profileLowBit = readBit();
+  const int profileHighBit = readBit();
+  if (((profileHighBit << 1) | profileLowBit) == VP9_PROFILE_WITH_RESERVED_BIT)
+    readBit(); // reserved_zero
+
+  const bool showExistingFrame = readBit() != 0;
+  if (showExistingFrame)
+    return false;
+
+  return readBit() == VP9_FRAME_TYPE_KEY;
+}
+
+bool PacketIsKeyFrame(const CDVDStreamInfo& hints,
+                      const uint8_t* data,
+                      int size,
+                      int nalLengthSize)
+{
+  switch (hints.codec)
+  {
+    case AV_CODEC_ID_H264:
+      return H264SampleContainsIDR(data, size, nalLengthSize);
+    case AV_CODEC_ID_VP8:
+      return VP8SampleIsKeyFrame(data, size);
+    case AV_CODEC_ID_VP9:
+      return VP9SampleIsKeyFrame(data, size);
+    default:
+      return true;
+  }
+}
+
 // Reads any pending diagnostic string from the JS decoder side.
 std::string ReadDecoderError(int decoderHandle)
 {
@@ -170,6 +261,20 @@ const char* PushStatusToString(int status)
   }
   return "unknown";
 }
+
+AVPixelFormat PixelFormatFromWebCodecs(int pixelFormat)
+{
+  switch (pixelFormat)
+  {
+    case WEBCODECS_PIXFMT_YUV420P:
+      return AV_PIX_FMT_YUV420P;
+    case WEBCODECS_PIXFMT_NV12:
+      return AV_PIX_FMT_NV12;
+    case WEBCODECS_PIXFMT_UNKNOWN:
+    default:
+      return AV_PIX_FMT_NONE;
+  }
+}
 } // namespace
 
 CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
@@ -196,7 +301,8 @@ bool CDVDVideoCodecWebCodecs::Register()
 
 bool CDVDVideoCodecWebCodecs::SupportsCodec(const CDVDStreamInfo& hints) const
 {
-  return hints.codec == AV_CODEC_ID_H264 || hints.codec == AV_CODEC_ID_VP9;
+  return hints.codec == AV_CODEC_ID_H264 || hints.codec == AV_CODEC_ID_VP8 ||
+         hints.codec == AV_CODEC_ID_VP9;
 }
 
 bool CDVDVideoCodecWebCodecs::BuildCodecConfiguration(const CDVDStreamInfo& hints)
@@ -225,7 +331,13 @@ bool CDVDVideoCodecWebCodecs::BuildCodecConfiguration(const CDVDStreamInfo& hint
 
   if (hints.codec == AV_CODEC_ID_VP9)
   {
-    m_codecString = "vp09.00.10.08";
+    m_codecString = BuildVP9CodecString(hints);
+    return true;
+  }
+
+  if (hints.codec == AV_CODEC_ID_VP8)
+  {
+    m_codecString = "vp8";
     return true;
   }
 
@@ -309,10 +421,8 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (packet.iSize <= 0 || packet.pData == nullptr)
     return true;
 
-  // Non-H264 samples from MP4 are treated as key frames.
-  bool isKeyFrame = true;
-  if (m_hints.codec == AV_CODEC_ID_H264)
-    isKeyFrame = H264SampleContainsIDR(packet.pData, packet.iSize, m_nalLengthSize);
+  const bool isKeyFrame =
+      packet.m_keyFrame || PacketIsKeyFrame(m_hints, packet.pData, packet.iSize, m_nalLengthSize);
 
   // Feeding a delta before the first IDR would permanently fail the decoder.
   if (m_waitingForKeyFrame && !isKeyFrame)
@@ -502,19 +612,61 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   }
 
   WebCodecsFrameInfo info{};
-  const int copyStatus =
+  int copyStatus =
       webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), probeBufferSize, &info);
   if (m_drainSubmitted)
     PollDecoderStats();
 
+  if (copyStatus == -2)
+  {
+    videoBuffer->Release();
+    const AVPixelFormat requiredPixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+    if (requiredPixelFormat == AV_PIX_FMT_NONE || info.payloadSize <= 0)
+    {
+      CLog::Log(LOGERROR,
+                "CDVDVideoCodecWebCodecs::GetPicture - invalid frame metadata for larger "
+                "WebCodecs frame (pixelFormat={}, payloadSize={})",
+                info.pixelFormat, info.payloadSize);
+      return VC_ERROR;
+    }
+
+    if (!AcquirePictureBuffer(requiredPixelFormat, info.width, info.height, info.payloadSize,
+                              videoBuffer))
+    {
+      return VC_NOBUFFER;
+    }
+
+    copyStatus =
+        webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), info.payloadSize, &info);
+    if (copyStatus <= 0)
+    {
+      videoBuffer->Release();
+      return copyStatus == 0 ? VC_BUFFER : VC_ERROR;
+    }
+  }
+
   if (copyStatus == 0)
   {
     videoBuffer->Release();
-    if (m_drainSubmitted && ++m_drainPollsWithoutFrames >= DRAIN_POLL_LIMIT)
+    if (m_drainSubmitted)
     {
-      m_eof = true;
-      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
-      return VC_EOF;
+      const int pendingWork = webcodecs_drain_decoder(m_decoderHandle);
+      if (pendingWork <= 0)
+      {
+        m_eof = true;
+        CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
+        return VC_EOF;
+      }
+
+      if (++m_drainPollsWithoutFrames >= DRAIN_POLL_LIMIT)
+      {
+        m_eof = true;
+        CLog::Log(LOGWARNING,
+                  "CDVDVideoCodecWebCodecs::GetPicture - drain timed out with {} pending "
+                  "WebCodecs operations",
+                  pendingWork);
+        return VC_EOF;
+      }
     }
     return VC_BUFFER;
   }
@@ -528,19 +680,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     return VC_ERROR;
   }
 
-  AVPixelFormat pixelFormat = AV_PIX_FMT_NONE;
-  switch (info.pixelFormat)
-  {
-    case WEBCODECS_PIXFMT_YUV420P:
-      pixelFormat = AV_PIX_FMT_YUV420P;
-      break;
-    case WEBCODECS_PIXFMT_NV12:
-      pixelFormat = AV_PIX_FMT_NV12;
-      break;
-    case WEBCODECS_PIXFMT_UNKNOWN:
-    default:
-      break;
-  }
+  const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
   if (pixelFormat == AV_PIX_FMT_NONE)
   {
     videoBuffer->Release();
