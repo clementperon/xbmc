@@ -8,11 +8,6 @@
 
 #include "Application.h"
 
-#ifdef TARGET_WASM
-#include <emscripten.h>
-extern "C" void kodi_wasm_jsonrpc_notify_ready();
-#endif
-
 #include "Autorun.h"
 #include "CompileInfo.h"
 #include "DatabaseManager.h"
@@ -183,6 +178,10 @@ extern "C" void kodi_wasm_jsonrpc_notify_ready();
 #include <cstdint>
 #include <memory>
 #include <mutex>
+
+#ifdef TARGET_WASM
+#include <emscripten.h>
+#endif
 
 #include <tinyxml.h>
 
@@ -776,10 +775,6 @@ bool CApplication::Initialize()
   }
 
   CJSONRPC::Initialize();
-
-#ifdef TARGET_WASM
-  kodi_wasm_jsonrpc_notify_ready();
-#endif
 
   CServiceBroker::RegisterSpeechRecognition(speech::ISpeechRecognition::CreateInstance());
 
