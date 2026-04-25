@@ -9,8 +9,9 @@ Minimal HTTP server for Kodi WASM builds.
 Usage:
   cd build-wasm
   cp ../tools/wasm/kodi.html .
-  python3 ../tools/wasm/serve.py          # http://localhost:8080
+  python3 ../tools/wasm/serve.py          # http://127.0.0.1:8080
   python3 ../tools/wasm/serve.py 9000
+  python3 ../tools/wasm/serve.py 0.0.0.0:8080  # expose on the local network
 """
 
 import http.server
@@ -94,7 +95,13 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    print(f"Serving http://localhost:{port}/kodi.html  (Ctrl-C to stop)")
-    print(f"Proxy:   http://localhost:{port}/proxy?u=<url-encoded>")
-    ThreadingServer(("", port), Handler).serve_forever()
+    bind = "127.0.0.1"
+    port_arg = sys.argv[1] if len(sys.argv) > 1 else "8080"
+    if ":" in port_arg:
+        bind, port_text = port_arg.rsplit(":", 1)
+        port = int(port_text)
+    else:
+        port = int(port_arg)
+    print(f"Serving http://{bind}:{port}/kodi.html  (Ctrl-C to stop)")
+    print(f"Proxy:   http://{bind}:{port}/proxy?u=<url-encoded>")
+    ThreadingServer((bind, port), Handler).serve_forever()
