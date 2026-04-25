@@ -36,6 +36,14 @@ using namespace XFILE;
 
 namespace
 {
+constexpr int DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
+constexpr double MAX_EAGER_RESPONSE_BYTES = 64.0 * 1024.0 * 1024.0;
+
+int EffectiveTimeout(int timeoutSeconds)
+{
+  return timeoutSeconds > 0 ? timeoutSeconds : DEFAULT_REQUEST_TIMEOUT_SECONDS;
+}
+
 // JS-side request/response store. Synchronous XHR on a pthread fully serializes
 // per-thread; concurrent instances on the *same* thread don't overlap either
 // (each request() finishes before the next one starts). Cross-thread contention
@@ -372,12 +380,31 @@ bool CCurlFile::Open(const CURL& url)
   const std::string headers = FlattenHeaders(m_requestheaders, m_cookie, m_acceptencoding,
                                              m_acceptCharset);
   const std::string body = m_postdataset ? Base64::Decode(m_postdata) : std::string();
+  const int timeout = EffectiveTimeout(m_connecttimeout);
+
+  if (method == "GET")
+  {
+    const int headStatus = kodi_curl_wasm_request(
+        "HEAD", m_url.c_str(), nullptr, 0,
+        headers.empty() ? nullptr : headers.c_str(),
+        m_userAgent.c_str(), m_referer.c_str(), timeout, 0);
+    const double contentLength = kodi_curl_wasm_content_length();
+    if (headStatus > 0 && contentLength > MAX_EAGER_RESPONSE_BYTES)
+    {
+      CLog::Log(LOGERROR,
+                "CCurlFile::{} - refusing to eager-load {:.1f} MiB from <{}>; range-backed "
+                "WASM HTTP reads are not implemented yet",
+                __FUNCTION__, contentLength / (1024.0 * 1024.0), url.GetRedacted());
+      m_inError = true;
+      return false;
+    }
+  }
 
   m_httpresponse = kodi_curl_wasm_request(
       method.c_str(), m_url.c_str(),
       body.empty() ? nullptr : body.data(), static_cast<int>(body.size()),
       headers.empty() ? nullptr : headers.c_str(),
-      m_userAgent.c_str(), m_referer.c_str(), m_connecttimeout, 1);
+      m_userAgent.c_str(), m_referer.c_str(), timeout, 1);
 
   if (m_httpresponse <= 0)
   {
@@ -386,6 +413,15 @@ bool CCurlFile::Open(const CURL& url)
   }
 
   const int bodySize = kodi_curl_wasm_body_size();
+  if (bodySize > MAX_EAGER_RESPONSE_BYTES)
+  {
+    CLog::Log(LOGERROR,
+              "CCurlFile::{} - refusing to keep {:.1f} MiB response from <{}> in WASM heap",
+              __FUNCTION__, static_cast<double>(bodySize) / (1024.0 * 1024.0), url.GetRedacted());
+    m_inError = true;
+    return false;
+  }
+
   delete[] m_state->m_overflowBuffer;
   m_state->m_overflowBuffer = nullptr;
   m_state->m_overflowSize = 0;
@@ -433,7 +469,7 @@ bool CCurlFile::Exists(const CURL& url)
     return false;
   int status = kodi_curl_wasm_request("HEAD", url.Get().c_str(), nullptr, 0, nullptr,
                                       m_userAgent.c_str(), m_referer.c_str(),
-                                      m_connecttimeout, 0);
+                                      EffectiveTimeout(m_connecttimeout), 0);
   return status > 0 && status < 400;
 }
 
@@ -447,7 +483,7 @@ int CCurlFile::Stat(const CURL& url, struct __stat64* buffer)
 
   int status = kodi_curl_wasm_request("HEAD", url.Get().c_str(), nullptr, 0, nullptr,
                                       m_userAgent.c_str(), m_referer.c_str(),
-                                      m_connecttimeout, 0);
+                                      EffectiveTimeout(m_connecttimeout), 0);
   if (status <= 0 || status >= 400)
   {
     errno = ENOENT;
