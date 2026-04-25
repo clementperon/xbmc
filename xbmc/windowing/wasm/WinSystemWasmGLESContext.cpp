@@ -35,6 +35,7 @@ namespace
 // to pace to the browser compositor.
 volatile uint32_t g_vsyncTick = 0;
 bool g_vsyncPumpInstalled = false;
+double g_vsyncWaitTimeoutMs = 100.0;
 
 void InstallVsyncPump()
 {
@@ -72,6 +73,17 @@ void InstallVsyncPump()
         requestAnimationFrame(tick);
       },
       &g_vsyncTick);
+}
+
+bool IsTizenRuntime()
+{
+  return MAIN_THREAD_EM_ASM_INT(
+             {
+               const ua = globalThis.navigator && globalThis.navigator.userAgent
+                            ? globalThis.navigator.userAgent
+                            : "";
+               return !!(globalThis.tizen || globalThis.webapis || /Tizen/i.test(ua));
+             }) != 0;
 }
 
 // Creates a standalone OffscreenCanvas + WebGL2 context on the current
@@ -245,6 +257,13 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   }
 
   InstallVsyncPump();
+  if (IsTizenRuntime())
+  {
+    // Tizen TV runtimes can stop delivering rAF ticks consistently while
+    // modal UI is active. Keep the wait short so input and dialog loops do
+    // not appear frozen behind a long compositor wait.
+    g_vsyncWaitTimeoutMs = 8.0;
+  }
 
   CLog::Log(LOGINFO, "WASM: using standalone OffscreenCanvas + transferToImageBitmap ({}x{})",
             initW, initH);
@@ -370,17 +389,20 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
     }
   }
 
-  // Flush so transferToImageBitmap() below sees a fully-rendered frame.
-  glFlush();
-
-  PostFrameBitmap();
-
   // Pace to main-thread rAF (see docs/wasm/RENDERING.md §2.3); 100 ms
   // timeout keeps Kodi running when rAF is throttled.
   const uint32_t current = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
   if (current == m_lastVsyncSeen)
-    emscripten_futex_wait(const_cast<uint32_t*>(&g_vsyncTick), current, 100.0);
-  m_lastVsyncSeen = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
+    emscripten_futex_wait(const_cast<uint32_t*>(&g_vsyncTick), current, g_vsyncWaitTimeoutMs);
+
+  const uint32_t next = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
+  if (next == m_lastVsyncSeen)
+    return;
+  m_lastVsyncSeen = next;
+
+  // Flush so transferToImageBitmap() below sees a fully-rendered frame.
+  glFlush();
+  PostFrameBitmap();
 }
 
 int CWinSystemWasmGLESContext::GetBufferAge()

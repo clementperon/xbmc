@@ -41,7 +41,7 @@ option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in br
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   add_link_options(
     "SHELL:-sUSE_PTHREADS=1"
-    "SHELL:-sPTHREAD_POOL_SIZE=16"
+    "SHELL:-sPTHREAD_POOL_SIZE=4"
     "SHELL:-sAUDIO_WORKLET"
     "SHELL:-sWASM_WORKERS"
     "SHELL:-sINITIAL_MEMORY=512MB"

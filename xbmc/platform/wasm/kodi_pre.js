@@ -155,6 +155,17 @@
   // Only ever present the most recent bitmap; drop any older undisplayed one.
   var pendingBitmap = null;
   var pendingDrawScheduled = false;
+  var firstFramePresented = false;
+
+  function notifyFirstFramePresented() {
+    if (firstFramePresented) {
+      return;
+    }
+    firstFramePresented = true;
+    if (typeof Module.onKodiFirstFramePresented === 'function') {
+      try { Module.onKodiFirstFramePresented(); } catch (e) { console.error(e); }
+    }
+  }
 
   function presentPending() {
     pendingDrawScheduled = false;
@@ -174,6 +185,7 @@
         bitmapCtx.drawImage(bm, 0, 0);
         bm.close();
       }
+      notifyFirstFramePresented();
     } catch (e) {
       console.error('[kodi] Failed to present frame:', e);
       try { bm.close(); } catch (_) {}
@@ -185,6 +197,7 @@
       try { pendingBitmap.close(); } catch (_) {}
     }
     pendingBitmap = bitmap;
+    notifyFirstFramePresented();
     if (!pendingDrawScheduled) {
       pendingDrawScheduled = true;
       requestAnimationFrame(presentPending);

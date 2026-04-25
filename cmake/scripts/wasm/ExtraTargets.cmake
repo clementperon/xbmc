@@ -1,19 +1,35 @@
 # Stage a Tizen web app wrapper around wasm build artifacts.
 set(WASM_TIZEN_TEMPLATE_DIR "${CMAKE_SOURCE_DIR}/tools/wasm/tizen")
-set(WASM_TIZEN_STAGE_DIR "${CMAKE_BINARY_DIR}/packaging/tizen")
+set(WASM_TIZEN_STAGE_DIR "${CMAKE_BINARY_DIR}/tizen_packaging/Kodi")
 set(WASM_TIZEN_OUTPUT_NAME "Kodi")
-set(WASM_TIZEN_DEFAULT_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/Debug/tizen.wgt")
-set(WASM_TIZEN_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/Debug/${WASM_TIZEN_OUTPUT_NAME}.wgt")
+set(WASM_TIZEN_BUILD_TYPE "Debug")
+set(WASM_TIZEN_PROFILE "tv-samsung")
+set(WASM_TIZEN_API_VERSION "10.0")
+set(WASM_TIZEN_PROJECT_YAML "${WASM_TIZEN_STAGE_DIR}/tizen_web_project.yaml")
+set(WASM_TIZEN_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/${WASM_TIZEN_BUILD_TYPE}/${WASM_TIZEN_OUTPUT_NAME}.wgt")
+
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/packaging")
+configure_file(
+  "${WASM_TIZEN_TEMPLATE_DIR}/tizen_web_project.yaml.in"
+  "${WASM_TIZEN_PROJECT_YAML}"
+  @ONLY)
 
 add_custom_target(package_tizen
   COMMAND ${CMAKE_COMMAND} -E make_directory "${WASM_TIZEN_STAGE_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${WASM_TIZEN_TEMPLATE_DIR}/.project"
+          "${WASM_TIZEN_TEMPLATE_DIR}/.tproject"
           "${WASM_TIZEN_TEMPLATE_DIR}/config.xml"
-          "${WASM_TIZEN_TEMPLATE_DIR}/tizen_web_project.yaml"
           "${WASM_TIZEN_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${WASM_TIZEN_PROJECT_YAML}"
+          "${WASM_TIZEN_STAGE_DIR}/tizen_web_project.yaml"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_SOURCE_DIR}/tools/wasm/kodi.html"
           "${WASM_TIZEN_STAGE_DIR}/index.html"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/media/splash.jpg"
+          "${WASM_TIZEN_STAGE_DIR}/splash.jpg"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.js"
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.wasm"
@@ -44,12 +60,9 @@ endif()
 
 if(WASM_TIZEN_TZ_EXECUTABLE)
   add_custom_target(package_tizen_wgt
-    COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/Debug"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/${WASM_TIZEN_BUILD_TYPE}"
     COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" pack -w "${WASM_TIZEN_STAGE_DIR}" -t wgt
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${WASM_TIZEN_DEFAULT_WGT_PATH}"
-            "${WASM_TIZEN_WGT_PATH}"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/Debug/projects"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/${WASM_TIZEN_BUILD_TYPE}/projects"
     DEPENDS package_tizen
     COMMENT "Packaging Tizen WGT via ${WASM_TIZEN_TZ_EXECUTABLE}"
     VERBATIM
