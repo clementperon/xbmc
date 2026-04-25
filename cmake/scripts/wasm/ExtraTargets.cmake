@@ -1,6 +1,8 @@
 # Stage a Tizen web app wrapper around wasm build artifacts.
 set(WASM_TIZEN_TEMPLATE_DIR "${CMAKE_SOURCE_DIR}/tools/wasm/tizen")
 set(WASM_TIZEN_STAGE_DIR "${CMAKE_BINARY_DIR}/packaging/tizen")
+set(WASM_TIZEN_OUTPUT_NAME "Kodi")
+set(WASM_TIZEN_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/Debug/${WASM_TIZEN_OUTPUT_NAME}.wgt")
 
 add_custom_target(package_tizen
   COMMAND ${CMAKE_COMMAND} -E make_directory "${WASM_TIZEN_STAGE_DIR}"
@@ -56,7 +58,7 @@ if(WASM_TIZEN_TZ_EXECUTABLE)
   if(WASM_TIZEN_INSTALL_TARGET)
     add_custom_target(install_tizen_wgt
       COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
-              --package-path "${WASM_TIZEN_STAGE_DIR}/Debug/tizen.wgt"
+              --package-path "${WASM_TIZEN_WGT_PATH}"
               --target "${WASM_TIZEN_INSTALL_TARGET}"
       DEPENDS package_tizen_wgt
       COMMENT "Installing Tizen WGT to target ${WASM_TIZEN_INSTALL_TARGET}"
@@ -65,7 +67,7 @@ if(WASM_TIZEN_TZ_EXECUTABLE)
   elseif(WASM_TIZEN_INSTALL_SERIAL)
     add_custom_target(install_tizen_wgt
       COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
-              --package-path "${WASM_TIZEN_STAGE_DIR}/Debug/tizen.wgt"
+              --package-path "${WASM_TIZEN_WGT_PATH}"
               --serial "${WASM_TIZEN_INSTALL_SERIAL}"
       DEPENDS package_tizen_wgt
       COMMENT "Installing Tizen WGT to serial ${WASM_TIZEN_INSTALL_SERIAL}"
