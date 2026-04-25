@@ -107,7 +107,7 @@ void CAESinkWasmAudioWorklet::Deinitialize()
   if (!m_initialized)
     return;
 
-  CWasmAudioWorkletManager::Instance().ResetBuffer();
+  CWasmAudioWorkletManager::Instance().Shutdown();
   m_initialized = false;
 }
 

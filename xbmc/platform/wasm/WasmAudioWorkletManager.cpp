@@ -24,6 +24,7 @@ constexpr char AUDIO_PROCESSOR_NAME[] = "kodi-audio-worklet";
 constexpr unsigned int BUFFER_TARGET_MS = 100;
 constexpr unsigned int MIN_BUFFER_QUANTA = 2;
 constexpr unsigned int PREBUFFER_TARGET_MS = 40;
+constexpr unsigned int WRITE_STALL_LIMIT_MS = 500;
 constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
 
 int CreateAudioContextOnMain(int requestedSampleRate)
@@ -120,6 +121,24 @@ void DestroyAudioNodeOnMain(int audioNode)
   emscripten_destroy_web_audio_node(audioNode);
 }
 
+void ClearResumeHooksOnMain(int audioContext)
+{
+  EM_ASM(
+      {
+        const ctx = emscriptenGetAudioObject($0);
+        if (!ctx || !ctx.__kodiResumeHandler)
+          return;
+        const handler = ctx.__kodiResumeHandler;
+        window.removeEventListener("pointerdown", handler, true);
+        window.removeEventListener("keydown", handler, true);
+        window.removeEventListener("touchstart", handler, true);
+        document.removeEventListener("visibilitychange", handler, true);
+        ctx.__kodiResumeHandler = null;
+        ctx.__kodiResumeHooksInstalled = false;
+      },
+      audioContext);
+}
+
 } // namespace
 
 namespace KODI::PLATFORM::WASM
@@ -141,13 +160,22 @@ bool CWasmAudioWorkletManager::Initialize(unsigned int channels, unsigned int re
   m_ready.store(false, std::memory_order_release);
 
   if (!EnsureContext(requestedSampleRate))
+  {
+    Shutdown();
     return false;
+  }
 
   if (!EnsureWorkletProcessor())
+  {
+    Shutdown();
     return false;
+  }
 
   if (!ConfigureNode(channels))
+  {
+    Shutdown();
     return false;
+  }
 
   EnsureBufferAllocated();
   ResetBuffer();
@@ -179,6 +207,9 @@ void CWasmAudioWorkletManager::ResetBuffer()
 void CWasmAudioWorkletManager::Shutdown()
 {
   m_ready.store(false, std::memory_order_release);
+  for (unsigned int i = 0; i < 100 && m_activeCallbacks.load(std::memory_order_acquire) > 0; ++i)
+    emscripten_thread_sleep(1);
+
   if (m_workletNode != 0)
   {
     emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VI, DestroyAudioNodeOnMain,
@@ -187,6 +218,7 @@ void CWasmAudioWorkletManager::Shutdown()
   }
   if (m_audioContext != 0)
   {
+    ClearResumeHooks();
     emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VI, DestroyAudioContextOnMain,
                                                m_audioContext);
     m_audioContext = 0;
@@ -194,14 +226,17 @@ void CWasmAudioWorkletManager::Shutdown()
 
   m_workletThreadCreated.store(false, std::memory_order_release);
   m_processorCreated.store(false, std::memory_order_release);
-  m_bufferCapacityFrames = 0;
-  m_bufferChannels = 0;
-  m_bufferSampleRate = 0;
-  m_bufferQuantumSize = 0;
-  m_prebufferFrames = 0;
-  m_prebufferComplete.store(false, std::memory_order_release);
-  m_ringBuffer.clear();
-  m_ringBuffer.shrink_to_fit();
+  {
+    std::unique_lock lock(m_bufferMutex);
+    m_bufferCapacityFrames = 0;
+    m_bufferChannels = 0;
+    m_bufferSampleRate = 0;
+    m_bufferQuantumSize = 0;
+    m_prebufferFrames = 0;
+    m_prebufferComplete.store(false, std::memory_order_release);
+    m_ringBuffer.clear();
+    m_ringBuffer.shrink_to_fit();
+  }
   m_readFrame.store(0, std::memory_order_release);
   m_writeFrame.store(0, std::memory_order_release);
   m_pipelineLatencyUs.store(0, std::memory_order_relaxed);
@@ -217,15 +252,13 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
     return 0;
 
   const unsigned int configuredChannels = m_channels.load(std::memory_order_relaxed);
-  if (configuredChannels == 0 || configuredChannels > kMaxChannels ||
-      m_bufferCapacityFrames == 0)
+  if (configuredChannels == 0 || configuredChannels > kMaxChannels)
     return 0;
 
   const unsigned int copyChannels = std::min(channels, configuredChannels);
   if (copyChannels == 0)
     return 0;
 
-  const unsigned int capacityFrames = m_bufferCapacityFrames;
   const unsigned int sampleRate = std::max(m_sampleRate.load(std::memory_order_relaxed), 1U);
   const unsigned int quantum = std::max(m_quantumSize.load(std::memory_order_relaxed), 1U);
   // When the ring is full, sleep for approximately one audio quantum so
@@ -236,16 +269,30 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
                                    sampleRate));
 
   unsigned int writtenFrames = 0;
+  unsigned int stalledMs = 0;
   while (writtenFrames < frames)
   {
+    if (!IsReady())
+      return writtenFrames;
+
+    std::unique_lock lock(m_bufferMutex);
+    const unsigned int capacityFrames = m_bufferCapacityFrames;
+    if (capacityFrames == 0 || m_ringBuffer.empty())
+      return writtenFrames;
+
     const uint64_t readFrame = m_readFrame.load(std::memory_order_acquire);
     const uint64_t writeFrame = m_writeFrame.load(std::memory_order_relaxed);
     const uint64_t usedFrames = writeFrame - readFrame;
     if (usedFrames >= capacityFrames)
     {
+      lock.unlock();
+      stalledMs += static_cast<unsigned int>(quantumMs);
+      if (stalledMs >= WRITE_STALL_LIMIT_MS)
+        return writtenFrames;
       emscripten_thread_sleep(quantumMs);
       continue;
     }
+    stalledMs = 0;
 
     const uint64_t freeFrames = capacityFrames - usedFrames;
     const uint64_t toWrite = std::min<uint64_t>(frames - writtenFrames, freeFrames);
@@ -499,8 +546,10 @@ void CWasmAudioWorkletManager::InstallResumeHooks() const
             window.removeEventListener("touchstart", tryResume, true);
             document.removeEventListener("visibilitychange", tryResume, true);
             ctx.__kodiResumeHooksInstalled = false;
+            ctx.__kodiResumeHandler = null;
           }
         };
+        ctx.__kodiResumeHandler = tryResume;
 
         window.addEventListener("pointerdown", tryResume, true);
         window.addEventListener("keydown", tryResume, true);
@@ -508,6 +557,15 @@ void CWasmAudioWorkletManager::InstallResumeHooks() const
         document.addEventListener("visibilitychange", tryResume, true);
       }),
       m_audioContext);
+}
+
+void CWasmAudioWorkletManager::ClearResumeHooks() const
+{
+  if (m_audioContext == 0)
+    return;
+
+  emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VI, ClearResumeHooksOnMain,
+                                             m_audioContext);
 }
 
 void CWasmAudioWorkletManager::EnsureBufferAllocated()
@@ -524,6 +582,7 @@ void CWasmAudioWorkletManager::EnsureBufferAllocated()
       m_bufferSampleRate == sampleRate && m_bufferQuantumSize == quantumSize)
     return;
 
+  std::unique_lock lock(m_bufferMutex);
   m_bufferCapacityFrames = capacityFrames;
   m_bufferChannels = channels;
   m_bufferSampleRate = sampleRate;
@@ -586,7 +645,10 @@ bool CWasmAudioWorkletManager::ProcessAudio(
   if (!self)
     return false;
 
-  return self->ProcessAudioImpl(numOutputs, outputs);
+  self->m_activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+  const bool result = self->ProcessAudioImpl(numOutputs, outputs);
+  self->m_activeCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+  return result;
 }
 
 bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw)
@@ -617,9 +679,10 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
     return true;
   }
 
+  std::unique_lock lock(m_bufferMutex);
   const unsigned int channels = m_channels.load(std::memory_order_relaxed);
   const unsigned int capacityFrames = m_bufferCapacityFrames;
-  if (channels == 0 || capacityFrames == 0)
+  if (channels == 0 || capacityFrames == 0 || m_ringBuffer.empty())
   {
     zeroOutput();
     return true;

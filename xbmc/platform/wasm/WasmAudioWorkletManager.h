@@ -53,6 +53,7 @@ private:
   bool EnsureWorkletProcessor();
   bool ConfigureNode(unsigned int channels);
   void InstallResumeHooks() const;
+  void ClearResumeHooks() const;
   void EnsureBufferAllocated();
   void RefreshPipelineLatency();
 
@@ -84,6 +85,7 @@ private:
   std::atomic<unsigned int> m_sampleRate{48000};
   std::atomic<unsigned int> m_quantumSize{128};
 
+  mutable std::mutex m_bufferMutex;
   std::vector<float> m_ringBuffer;
   unsigned int m_bufferCapacityFrames{0};
   unsigned int m_bufferChannels{0};
@@ -95,6 +97,7 @@ private:
   std::atomic<uint32_t> m_pipelineLatencyUs{0};
 
   std::atomic<uint64_t> m_underrunFrames{0};
+  std::atomic<unsigned int> m_activeCallbacks{0};
 
   // Prebuffer watermark
   unsigned int m_prebufferFrames{0};
