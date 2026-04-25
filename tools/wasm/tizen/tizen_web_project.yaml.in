@@ -2,14 +2,14 @@
 project_type: web_app
 
 # Default profile, Tizen API version
-profile: tv-samsung
-api_version: "10.0"
+profile: @WASM_TIZEN_PROFILE@
+api_version: "@WASM_TIZEN_API_VERSION@"
 
 # Build type [Debug/ Release/ Test]
-build_type: Debug
+build_type: @WASM_TIZEN_BUILD_TYPE@
 
 # Output name for application
-output_name: Kodi
+output_name: @WASM_TIZEN_OUTPUT_NAME@
 
 # Output path for build
 output_path: ""
@@ -28,6 +28,7 @@ trust_anchor: []
 # list of files in web project (.html,.css etc) and resources
 files:
   - index.html
+  - splash.jpg
   - kodi.js
   - kodi.wasm
   - kodi.data
@@ -36,6 +37,8 @@ files:
 excludes:
   - Build/*
   - Debug/*
+  - Release/*
+  - Test/*
   - Directory.Build.targets
   - \.Build/.*
   - \.buildResult/.*
