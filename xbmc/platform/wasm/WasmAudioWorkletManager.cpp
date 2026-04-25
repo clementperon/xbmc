@@ -701,7 +701,14 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
     return true;
   }
 
-  std::unique_lock lock(m_bufferMutex);
+  std::unique_lock lock(m_bufferMutex, std::try_to_lock);
+  if (!lock.owns_lock())
+  {
+    m_underrunFrames.fetch_add(static_cast<uint64_t>(samplesPerChannel), std::memory_order_relaxed);
+    zeroOutput();
+    return true;
+  }
+
   const unsigned int channels = m_channels.load(std::memory_order_relaxed);
   const unsigned int capacityFrames = m_bufferCapacityFrames;
   if (channels == 0 || capacityFrames == 0 || m_ringBuffer.empty())
