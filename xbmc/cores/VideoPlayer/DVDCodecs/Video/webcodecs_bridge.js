@@ -26,8 +26,9 @@ mergeInto(LibraryManager.library, {
     MICROSECONDS_PER_SECOND: 1000000.0,
     FRAME_QUEUE_HIGH_WATER: 24,
     BUFFER_POOL_MAX: 32,
-    // Cap total in-flight work (decoder backlog + queued frames). Beyond
-    // this, push_packet reports BUSY so VideoPlayer re-queues the demux
+    // Cap decoder-side work. Queued frames are deliberately excluded so
+    // VideoPlayer can continue draining output after a successful AddData().
+    // Beyond this, push_packet reports BUSY so VideoPlayer re-queues the demux
     // packet instead of the decoder silently buffering up frames we would
     // then have to drop.
     MAX_INFLIGHT: 12,
@@ -125,17 +126,21 @@ mergeInto(LibraryManager.library, {
     // sourced from the pool. Returns strides/offsets and the pixel-format id.
     // Hardware decoders usually output NV12; forcing I420 via copyTo throws
     // NotSupportedError on Chrome.
-    copyFrameNative: async function(state, frame, codedWidth, codedHeight) {
+    copyFrameNative: async function(state, frame, width, height, visibleRect) {
       const frameFormat = frame.format || 'I420';
-      const yStride = codedWidth;
-      const uvHeight = (codedHeight + 1) >> 1;
-      const ySize = yStride * codedHeight;
+      const copyOptions = {};
+      if (visibleRect)
+        copyOptions.rect = visibleRect;
+      const yStride = width;
+      const uvHeight = (height + 1) >> 1;
+      const ySize = yStride * height;
 
       if (frameFormat === 'NV12') {
         const uvStride = yStride;
         const uvSize = uvStride * uvHeight;
         const payload = this.acquirePayloadBuffer(state, ySize + uvSize);
         await frame.copyTo(payload, {
+          ...copyOptions,
           layout: [
             { offset: 0, stride: yStride },
             { offset: ySize, stride: uvStride },
@@ -153,10 +158,11 @@ mergeInto(LibraryManager.library, {
       }
 
       if (frameFormat === 'I420' || frameFormat === 'I420A') {
-        const uvStride = (codedWidth + 1) >> 1;
+        const uvStride = (width + 1) >> 1;
         const uvSize = uvStride * uvHeight;
         const payload = this.acquirePayloadBuffer(state, ySize + uvSize * 2);
         await frame.copyTo(payload, {
+          ...copyOptions,
           layout: [
             { offset: 0, stride: yStride },
             { offset: ySize, stride: uvStride },
@@ -258,8 +264,9 @@ mergeInto(LibraryManager.library, {
     };
 
     const outputCallback = (frame) => {
-      const codedWidth = frame.codedWidth;
-      const codedHeight = frame.codedHeight;
+      const visibleRect = frame.visibleRect || null;
+      const width = visibleRect ? visibleRect.width : frame.codedWidth;
+      const height = visibleRect ? visibleRect.height : frame.codedHeight;
       const timestampMicros = Number.isFinite(frame.timestamp) ? Number(frame.timestamp)
                                                                 : state.lastTimestamp;
       const durationMicros = Number.isFinite(frame.duration) ? Number(frame.duration) : 0;
@@ -276,7 +283,7 @@ mergeInto(LibraryManager.library, {
             state.droppedFrames += 1;
             return;
           }
-          copied = await WebCodecsBridge.copyFrameNative(state, frame, codedWidth, codedHeight);
+          copied = await WebCodecsBridge.copyFrameNative(state, frame, width, height, visibleRect);
           if (state.generation !== generation) {
             WebCodecsBridge.releasePayloadBuffer(state, copied.payload);
             return;
@@ -285,8 +292,8 @@ mergeInto(LibraryManager.library, {
           state.frames.push({
             payload: copied.payload,
             pixelFormat: copied.pixelFormat,
-            width: codedWidth,
-            height: codedHeight,
+            width,
+            height,
             yStride: copied.yStride,
             uStride: copied.uStride,
             vStride: copied.vStride,
@@ -421,7 +428,7 @@ mergeInto(LibraryManager.library, {
     if (dataSize <= 0)
       return B.PUSH_EMPTY;
 
-    if (state.decoder.decodeQueueSize + state.frames.length >= B.MAX_INFLIGHT)
+    if (state.decoder.decodeQueueSize + state.pendingCopies >= B.MAX_INFLIGHT)
       return B.PUSH_BUSY;
 
     const tsMicros = Math.max(0, Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND));
