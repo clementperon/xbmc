@@ -7,7 +7,9 @@ web app from a WASM Kodi build.
 
 - `config.xml`: Tizen widget metadata.
 - `tizen_web_project.yaml`: Tizen web project config.
-- `index.html`: Web entry page that loads `kodi.js`.
+
+The staged `index.html` is copied from the shared browser shell at
+`tools/wasm/kodi.html` so browser and Tizen builds use the same entry page.
 
 ## CMake staging target
 
@@ -26,6 +28,7 @@ This creates a staging directory at:
 The stage includes:
 
 - Tizen template files from this directory.
+- Shared web entry page staged as `index.html`.
 - Built WASM artifacts: `kodi.js`, `kodi.wasm`, `kodi.data`.
 
 Package/sign/install to TV using Tizen CLI or Tizen Studio from the staged

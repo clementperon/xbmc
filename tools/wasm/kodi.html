@@ -574,8 +574,15 @@
     // ---------------------------------------------------------------------
     // Emscripten Module
     // ---------------------------------------------------------------------
+    var isTizenRuntime =
+      typeof window !== 'undefined' &&
+      (typeof window.tizen !== 'undefined' ||
+       typeof window.webapis !== 'undefined' ||
+       /Tizen/i.test(navigator.userAgent || ''));
+
     var Module = {
       canvas: canvas,
+      kodiHttpProxy: isTizenRuntime ? null : undefined,
       print:    function (t) { console.log(t); },
       printErr: function (t) { console.error(t); },
 

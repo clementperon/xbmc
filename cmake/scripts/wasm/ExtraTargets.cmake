@@ -2,15 +2,18 @@
 set(WASM_TIZEN_TEMPLATE_DIR "${CMAKE_SOURCE_DIR}/tools/wasm/tizen")
 set(WASM_TIZEN_STAGE_DIR "${CMAKE_BINARY_DIR}/packaging/tizen")
 set(WASM_TIZEN_OUTPUT_NAME "Kodi")
+set(WASM_TIZEN_DEFAULT_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/Debug/tizen.wgt")
 set(WASM_TIZEN_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/Debug/${WASM_TIZEN_OUTPUT_NAME}.wgt")
 
 add_custom_target(package_tizen
   COMMAND ${CMAKE_COMMAND} -E make_directory "${WASM_TIZEN_STAGE_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${WASM_TIZEN_TEMPLATE_DIR}/config.xml"
-          "${WASM_TIZEN_TEMPLATE_DIR}/index.html"
           "${WASM_TIZEN_TEMPLATE_DIR}/tizen_web_project.yaml"
           "${WASM_TIZEN_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/tools/wasm/kodi.html"
+          "${WASM_TIZEN_STAGE_DIR}/index.html"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.js"
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.wasm"
@@ -40,14 +43,12 @@ if(NOT WASM_TIZEN_TZ_EXECUTABLE)
 endif()
 
 if(WASM_TIZEN_TZ_EXECUTABLE)
-  set(WASM_TIZEN_INSTALL_TARGET "$ENV{TIZEN_TARGET_NAME}" CACHE STRING
-      "Tizen target device name used by install_tizen_wgt (tz --target)")
-  set(WASM_TIZEN_INSTALL_SERIAL "$ENV{TIZEN_TARGET_SERIAL}" CACHE STRING
-      "Tizen device serial used by install_tizen_wgt (tz --serial)")
-
   add_custom_target(package_tizen_wgt
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/Debug"
     COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" pack -w "${WASM_TIZEN_STAGE_DIR}" -t wgt
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WASM_TIZEN_DEFAULT_WGT_PATH}"
+            "${WASM_TIZEN_WGT_PATH}"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${WASM_TIZEN_STAGE_DIR}/Debug/projects"
     DEPENDS package_tizen
     COMMENT "Packaging Tizen WGT via ${WASM_TIZEN_TZ_EXECUTABLE}"
@@ -55,36 +56,13 @@ if(WASM_TIZEN_TZ_EXECUTABLE)
   )
   set_target_properties(package_tizen_wgt PROPERTIES FOLDER "Build Utilities")
 
-  if(WASM_TIZEN_INSTALL_TARGET)
-    add_custom_target(install_tizen_wgt
-      COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
-              --package-path "${WASM_TIZEN_WGT_PATH}"
-              --target "${WASM_TIZEN_INSTALL_TARGET}"
-      DEPENDS package_tizen_wgt
-      COMMENT "Installing Tizen WGT to target ${WASM_TIZEN_INSTALL_TARGET}"
-      VERBATIM
-    )
-  elseif(WASM_TIZEN_INSTALL_SERIAL)
-    add_custom_target(install_tizen_wgt
-      COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
-              --package-path "${WASM_TIZEN_WGT_PATH}"
-              --serial "${WASM_TIZEN_INSTALL_SERIAL}"
-      DEPENDS package_tizen_wgt
-      COMMENT "Installing Tizen WGT to serial ${WASM_TIZEN_INSTALL_SERIAL}"
-      VERBATIM
-    )
-  else()
-    add_custom_target(install_tizen_wgt
-      COMMAND ${CMAKE_COMMAND} -E echo
-              "WASM: install_tizen_wgt requires WASM_TIZEN_INSTALL_TARGET or WASM_TIZEN_INSTALL_SERIAL."
-      COMMAND ${CMAKE_COMMAND} -E echo
-              "Set cache vars or env vars TIZEN_TARGET_NAME / TIZEN_TARGET_SERIAL, then reconfigure."
-      COMMAND ${CMAKE_COMMAND} -E false
-      DEPENDS package_tizen_wgt
-      COMMENT "Missing install target/serial configuration"
-      VERBATIM
-    )
-  endif()
+  add_custom_target(install_tizen_wgt
+    COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
+            --package-path "${WASM_TIZEN_WGT_PATH}"
+    DEPENDS package_tizen_wgt
+    COMMENT "Installing Tizen WGT"
+    VERBATIM
+  )
   set_target_properties(install_tizen_wgt PROPERTIES FOLDER "Build Utilities")
 else()
   message(STATUS "WASM: tz CLI not found. Set TIZEN_CLI_PATH/TIZEN_TOOLS_PATH/TIZEN_SDK/TIZEN_SDK_ROOT to enable package_tizen_wgt.")
