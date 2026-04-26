@@ -8,8 +8,6 @@
 
 #include "CPUInfoWasm.h"
 
-#include <emscripten.h>
-
 std::shared_ptr<CCPUInfo> CCPUInfo::GetCPUInfo()
 {
   return std::make_shared<CCPUInfoWasm>();
@@ -17,22 +15,10 @@ std::shared_ptr<CCPUInfo> CCPUInfo::GetCPUInfo()
 
 CCPUInfoWasm::CCPUInfoWasm()
 {
-  m_cpuCount = EM_ASM_INT({
-    if (typeof navigator !== "undefined" && Number.isFinite(navigator.hardwareConcurrency) &&
-        navigator.hardwareConcurrency > 0)
-      return Math.floor(navigator.hardwareConcurrency);
-
-    return 1;
-  });
-
+  m_cpuCount = 1;
   m_cpuModel = "WebAssembly";
-
-  for (int core = 0; core < m_cpuCount; core++)
-  {
-    CoreInfo coreInfo;
-    coreInfo.m_id = core;
-    m_cores.emplace_back(coreInfo);
-  }
+  m_cores.emplace_back();
+  m_cores.back().m_id = 0;
 }
 
 int CCPUInfoWasm::GetUsedPercentage()
