@@ -195,7 +195,11 @@
       ['keydown', 'keyup'].forEach(function (type) {
         window.addEventListener(type, function (e) {
           if (isTizenRuntime && (tizenRemoteKeys[e.keyCode] || e.key === 'Back')) {
-            e.preventDefault();
+            // Keep directional navigation in-app, but let Back keep its
+            // platform behavior when Kodi doesn't explicitly consume it.
+            if (!(e.keyCode === 10009 || e.key === 'Back')) {
+              e.preventDefault();
+            }
           }
         }, true);
       });

@@ -35,6 +35,9 @@
 #include "music/windows/GUIWindowVisualisation.h"
 #include "pictures/GUIWindowPictures.h"
 #include "pictures/GUIWindowSlideShow.h"
+#if defined(TARGET_WASM)
+#include "platform/wasm/DebugLog.h"
+#endif
 #include "profiles/windows/GUIWindowSettingsProfile.h"
 #include "programs/GUIWindowPrograms.h"
 #include "settings/AdvancedSettings.h"
@@ -67,6 +70,9 @@
 #include "windows/GUIWindowStartup.h"
 #include "windows/GUIWindowSystemInfo.h"
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <mutex>
 
 // Dialog includes
@@ -1266,13 +1272,53 @@ bool RenderOrderSortFunction(const std::shared_ptr<CGUIWindow>& first,
 void CGUIWindowManager::Process(unsigned int currentTime)
 {
   assert(CServiceBroker::GetAppMessenger()->IsProcessThread());
+#if defined(TARGET_WASM)
+  using KODI::PLATFORM::WASM::DEBUGLOG::NowMs;
+  using KODI::PLATFORM::WASM::DEBUGLOG::Post;
+  static std::atomic<double> s_lastReportMs{0.0};
+  static std::atomic<uint64_t> s_calls{0};
+  static std::atomic<uint64_t> s_lockUsTotal{0};
+  static std::atomic<uint64_t> s_activeWindowUsTotal{0};
+  static std::atomic<uint64_t> s_dialogsUsTotal{0};
+  static std::atomic<uint64_t> s_depthUsTotal{0};
+  static std::atomic<uint64_t> s_dirtyUsTotal{0};
+  static std::atomic<uint64_t> s_totalUsTotal{0};
+  static std::atomic<uint64_t> s_maxLockUs{0};
+  static std::atomic<uint64_t> s_maxActiveWindowUs{0};
+  static std::atomic<uint64_t> s_maxDialogsUs{0};
+  static std::atomic<uint64_t> s_maxSingleDialogUs{0};
+  static std::atomic<uint64_t> s_maxSingleDialogId{0};
+  static std::atomic<uint64_t> s_maxDepthUs{0};
+  static std::atomic<uint64_t> s_maxDirtyUs{0};
+  static std::atomic<uint64_t> s_maxTotalUs{0};
+  static std::atomic<uint64_t> s_maxDialogCount{0};
+  static std::atomic<uint64_t> s_maxDirtyRegionCount{0};
+  auto updateMax = [](std::atomic<uint64_t>& target, uint64_t value)
+  {
+    uint64_t cur = target.load();
+    while (value > cur && !target.compare_exchange_weak(cur, value))
+    {
+    }
+  };
+  auto elapsedUs = [](const auto& end, const auto& start) -> uint64_t
+  {
+    return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  };
+  const auto processT0 = std::chrono::steady_clock::now();
+#endif
   std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+#if defined(TARGET_WASM)
+  const auto processTLock = std::chrono::steady_clock::now();
+#endif
 
   m_dirtyregions.clear();
 
   CGUIWindow* pWindow = GetWindow(GetActiveWindow());
   if (pWindow)
     pWindow->DoProcess(currentTime, m_dirtyregions);
+#if defined(TARGET_WASM)
+  const auto processTActive = std::chrono::steady_clock::now();
+#endif
 
   // process all dialogs - visibility may change etc.
   // copy shared_ptrs to ensure windows stay alive during iteration even if map is modified
@@ -1284,8 +1330,26 @@ void CGUIWindowManager::Process(unsigned int currentTime)
   for (const auto& window : windows)
   {
     if (window && window->IsDialog())
+    {
+#if defined(TARGET_WASM)
+      const auto dialogT0 = std::chrono::steady_clock::now();
+#endif
       window->DoProcess(currentTime, m_dirtyregions);
+#if defined(TARGET_WASM)
+      const auto dialogT1 = std::chrono::steady_clock::now();
+      const uint64_t dialogUs = elapsedUs(dialogT1, dialogT0);
+      const uint64_t curMax = s_maxSingleDialogUs.load();
+      if (dialogUs > curMax)
+      {
+        updateMax(s_maxSingleDialogUs, dialogUs);
+        s_maxSingleDialogId.store(static_cast<uint64_t>(window->GetID()), std::memory_order_relaxed);
+      }
+#endif
+    }
   }
+#if defined(TARGET_WASM)
+  const auto processTDialogs = std::chrono::steady_clock::now();
+#endif
 
   // assign depth values to all active controls
   if (pWindow)
@@ -1299,9 +1363,78 @@ void CGUIWindowManager::Process(unsigned int currentTime)
     if (window->IsDialogRunning())
       window->AssignDepth();
   }
+#if defined(TARGET_WASM)
+  const auto processTDepth = std::chrono::steady_clock::now();
+#endif
 
   for (auto& itr : m_dirtyregions)
     m_tracker.MarkDirtyRegion(itr);
+#if defined(TARGET_WASM)
+  const auto processTEnd = std::chrono::steady_clock::now();
+  const uint64_t lockUs = elapsedUs(processTLock, processT0);
+  const uint64_t activeWindowUs = elapsedUs(processTActive, processTLock);
+  const uint64_t dialogsUs = elapsedUs(processTDialogs, processTActive);
+  const uint64_t depthUs = elapsedUs(processTDepth, processTDialogs);
+  const uint64_t dirtyUs = elapsedUs(processTEnd, processTDepth);
+  const uint64_t totalUs = elapsedUs(processTEnd, processT0);
+  const uint64_t dialogCount =
+      static_cast<uint64_t>(std::count_if(windows.begin(), windows.end(),
+                                          [](const std::shared_ptr<CGUIWindow>& window)
+                                          { return window && window->IsDialog(); }));
+  const uint64_t dirtyRegionCount = static_cast<uint64_t>(m_dirtyregions.size());
+
+  s_calls.fetch_add(1, std::memory_order_relaxed);
+  s_lockUsTotal.fetch_add(lockUs, std::memory_order_relaxed);
+  s_activeWindowUsTotal.fetch_add(activeWindowUs, std::memory_order_relaxed);
+  s_dialogsUsTotal.fetch_add(dialogsUs, std::memory_order_relaxed);
+  s_depthUsTotal.fetch_add(depthUs, std::memory_order_relaxed);
+  s_dirtyUsTotal.fetch_add(dirtyUs, std::memory_order_relaxed);
+  s_totalUsTotal.fetch_add(totalUs, std::memory_order_relaxed);
+  updateMax(s_maxLockUs, lockUs);
+  updateMax(s_maxActiveWindowUs, activeWindowUs);
+  updateMax(s_maxDialogsUs, dialogsUs);
+  updateMax(s_maxDepthUs, depthUs);
+  updateMax(s_maxDirtyUs, dirtyUs);
+  updateMax(s_maxTotalUs, totalUs);
+  updateMax(s_maxDialogCount, dialogCount);
+  updateMax(s_maxDirtyRegionCount, dirtyRegionCount);
+
+  const double nowMs = NowMs();
+  double last = s_lastReportMs.load();
+  if (nowMs - last >= 1000.0 && s_lastReportMs.compare_exchange_strong(last, nowMs))
+  {
+    const uint64_t calls = s_calls.exchange(0);
+    char buf[1024];
+    std::snprintf(buf, sizeof(buf),
+                  "{\"calls\":%llu,\"avgLockUs\":%llu,\"maxLockUs\":%llu,"
+                  "\"avgActiveWindowUs\":%llu,\"maxActiveWindowUs\":%llu,"
+                  "\"avgDialogsUs\":%llu,\"maxDialogsUs\":%llu,"
+                  "\"maxSingleDialogUs\":%llu,\"maxSingleDialogId\":%llu,"
+                  "\"avgDepthUs\":%llu,\"maxDepthUs\":%llu,"
+                  "\"avgDirtyUs\":%llu,\"maxDirtyUs\":%llu,"
+                  "\"avgTotalUs\":%llu,\"maxTotalUs\":%llu,"
+                  "\"maxDialogCount\":%llu,\"maxDirtyRegionCount\":%llu}",
+                  static_cast<unsigned long long>(calls),
+                  static_cast<unsigned long long>(calls ? s_lockUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxLockUs.exchange(0)),
+                  static_cast<unsigned long long>(
+                      calls ? s_activeWindowUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxActiveWindowUs.exchange(0)),
+                  static_cast<unsigned long long>(calls ? s_dialogsUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxDialogsUs.exchange(0)),
+                  static_cast<unsigned long long>(s_maxSingleDialogUs.exchange(0)),
+                  static_cast<unsigned long long>(s_maxSingleDialogId.exchange(0)),
+                  static_cast<unsigned long long>(calls ? s_depthUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxDepthUs.exchange(0)),
+                  static_cast<unsigned long long>(calls ? s_dirtyUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxDirtyUs.exchange(0)),
+                  static_cast<unsigned long long>(calls ? s_totalUsTotal.exchange(0) / calls : 0),
+                  static_cast<unsigned long long>(s_maxTotalUs.exchange(0)),
+                  static_cast<unsigned long long>(s_maxDialogCount.exchange(0)),
+                  static_cast<unsigned long long>(s_maxDirtyRegionCount.exchange(0)));
+    Post("GUIWindowManager.cpp:Process:tick", "gui process split tick", buf);
+  }
+#endif
 }
 
 void CGUIWindowManager::MarkDirty()

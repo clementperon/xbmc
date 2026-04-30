@@ -9,7 +9,6 @@
 #include "application/AppInboundProtocol.h"
 #include "guilib/GUIWindowManager.h"
 #include "input/keyboard/XBMC_keyboard.h"
-#include "utils/log.h"
 
 #include <algorithm>
 #include <climits>
@@ -337,14 +336,17 @@ void CWinEventsWasm::MessagePush(const XBMC_Event& newEvent)
   m_events.push_back(newEvent);
 }
 
-bool CWinEventsWasm::MessagePump()
+void CWinEventsWasm::ProcessProxyCallbacks()
 {
   // Modal dialogs spin a nested Kodi render loop on the worker thread.
   // Process proxied browser callbacks here so keyboard/mouse events can still
   // reach this thread while that nested loop is active.
   emscripten_current_thread_process_queued_calls();
+}
 
-  bool ret = false;
+bool CWinEventsWasm::DispatchQueuedEvents()
+{
+  bool handledEvent = false;
   for (;;)
   {
     XBMC_Event pumpEvent{};
@@ -357,7 +359,13 @@ bool CWinEventsWasm::MessagePump()
     }
     std::shared_ptr<CAppInboundProtocol> appPort = CServiceBroker::GetAppPort();
     if (appPort)
-      ret |= appPort->OnEvent(pumpEvent);
+      handledEvent |= appPort->OnEvent(pumpEvent);
   }
-  return ret;
+  return handledEvent;
+}
+
+bool CWinEventsWasm::MessagePump()
+{
+  ProcessProxyCallbacks();
+  return DispatchQueuedEvents();
 }
