@@ -263,7 +263,12 @@ AC_PATH_PROG([CXX_FOR_BUILD],[clang++ g++ llvm-g++], g++, $PATH_FOR_BUILD)
 platform_cc=gcc
 platform_cxx=g++
 
-case $host in
+host_case="$host"
+if test "x$host_case" = "x"; then
+  host_case="$use_host"
+fi
+
+case $host_case in
   *mingw*|*msys*|*cygwin*)
     use_toolchain="${use_toolchain:-/usr}"
     platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
@@ -293,7 +298,7 @@ case $host in
         platform_cflags="${platform_cflags} -march=armv8-a"
       ;;
       *)
-        AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($host))
+        AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($use_host))
       ;;
     esac
 
@@ -310,7 +315,7 @@ case $host in
 
     platform_tool_prefix=llvm-
 
-    case $host in
+    case $host_case in
       arm*-*linux-android*)
         platform_cc=armv7a-linux-androideabi$use_ndk_api-clang
         platform_cxx=armv7a-linux-androideabi$use_ndk_api-clang++
@@ -383,7 +388,7 @@ if test "x$LD" = "x"; then
   AC_MSG_ERROR(No linker found with name ${use_linker}. You may want to provide using --with-linker=<linker>)
 fi
 
-case $host in
+case $host_case in
   *darwin*)
     # MacOS 11 requires explicit isysroot for autoconf compiler tests
     # However we do not want to pollute CFLAGS/CXXFLAGS once compiler tests are complete
