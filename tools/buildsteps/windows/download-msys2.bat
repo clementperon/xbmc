@@ -32,7 +32,7 @@ set msysver=20231026
 set msys2=msys64
 set arch=x86_64
 set instdir=%WORKSPACE%\project\BuildDependencies
-set msyspackages=diffutils gcc m4 make nasm patch perl tar yasm
+set msyspackages=ccache diffutils gcc m4 make nasm patch perl tar yasm
 set msys_keyserver=hkps://keys.openpgp.org
 set msys_keyserver_timeout=15
 set gaspreprocurl=https://github.com/FFmpeg/gas-preprocessor/archive/master.tar.gz
@@ -194,6 +194,7 @@ if not "%usemirror%"=="yes" GOTO preparedirs
 :preparedirs
 if not exist %instdir%\build mkdir %instdir%\build
 if not exist %instdir%\downloads2 mkdir %instdir%\downloads2
+if not exist %instdir%\ccache mkdir %instdir%\ccache
 if not exist %instdir%\locals mkdir %instdir%\locals
 if not exist %instdir%\locals\win32 mkdir %instdir%\locals\win32
 if not exist %instdir%\locals\x64 mkdir %instdir%\locals\x64
@@ -307,6 +308,7 @@ if exist %instdir%\locals\win32\etc\profile.local GOTO writeProfile64
         echo.alias ls='ls --color=auto'
         echo.export CC=gcc
         echo.export python=/usr/bin/python
+        echo.export CCACHE_DIR=/xbmc/project/BuildDependencies/ccache
         echo.
         echo.MSYS2_PATH="/usr/local/bin:/usr/bin"
         echo.MANPATH="/usr/share/man:/mingw32/share/man:/local32/man:/local32/share/man"
@@ -353,6 +355,7 @@ if exist %instdir%\locals\x64\etc\profile.local GOTO writeProfilearm64
         echo.alias ls='ls --color=auto'
         echo.export CC=gcc
         echo.export python=/usr/bin/python
+        echo.export CCACHE_DIR=/xbmc/project/BuildDependencies/ccache
         echo.
         echo.MSYS2_PATH="/usr/local/bin:/usr/bin"
         echo.MANPATH="/usr/share/man:/mingw64/share/man:/local64/man:/local64/share/man"
@@ -399,6 +402,7 @@ if exist %instdir%\locals\arm64\etc\profile.local GOTO loadGasPreproc
         echo.alias ls='ls --color=auto'
         echo.export CC=gcc
         echo.export python=/usr/bin/python
+        echo.export CCACHE_DIR=/xbmc/project/BuildDependencies/ccache
 
         echo.MSYS2_PATH="/usr/local/bin:/usr/bin"
         echo.MANPATH="/usr/share/man:/clangarm64/share/man:/localarm64/man:/localarm64/share/man"
