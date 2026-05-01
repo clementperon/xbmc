@@ -33,10 +33,15 @@ set msys2=msys64
 set arch=x86_64
 set instdir=%WORKSPACE%\project\BuildDependencies
 set msyspackages=diffutils gcc m4 make nasm patch perl tar yasm
+set msys_keyserver=hkps://keys.openpgp.org
+set msys_keyserver_timeout=15
 set gaspreprocurl=https://github.com/FFmpeg/gas-preprocessor/archive/master.tar.gz
 set usemirror=yes
 set opt=mintty
 set hash_file=%instdir%\%msys2%\installed_hash.txt
+
+if not "%KODI_MSYS2_KEYSERVER%"=="" set msys_keyserver=%KODI_MSYS2_KEYSERVER%
+if not "%KODI_MSYS2_KEYSERVER_TIMEOUT%"=="" set msys_keyserver_timeout=%KODI_MSYS2_KEYSERVER_TIMEOUT%
 
 :: get current SHA256 hash of this script file (download-msys2.bat)
 for /f "delims=" %%a in ('PowerShell "Get-FileHash %~nx0 | Select-Object -ExpandProperty Hash"') do set hash=%%a
@@ -254,6 +259,16 @@ if exist %instdir%\%msys2%\usr\bin\make.exe GOTO rebase2
     if exist %instdir%\pacman.sh del %instdir%\pacman.sh
     (
     echo.echo -ne "\033]0;install base system\007"
+    echo.mkdir -p /etc/pacman.d/gnupg
+    echo.echo "keyserver %msys_keyserver%" ^> /etc/pacman.d/gnupg/dirmngr.conf
+    echo.echo "connect-timeout %msys_keyserver_timeout%" ^>^> /etc/pacman.d/gnupg/dirmngr.conf
+    echo.echo "disable-ipv6" ^>^> /etc/pacman.d/gnupg/dirmngr.conf
+    echo.echo "keyserver %msys_keyserver%" ^> /etc/pacman.d/gnupg/gpg.conf
+    echo.echo "keyserver-options timeout=%msys_keyserver_timeout%" ^>^> /etc/pacman.d/gnupg/gpg.conf
+    echo.echo "keyserver-options no-honor-keyserver-url" ^>^> /etc/pacman.d/gnupg/gpg.conf
+    echo.echo "keyserver-options no-try-dns-srv" ^>^> /etc/pacman.d/gnupg/gpg.conf
+    echo.echo "auto-key-locate keyserver" ^>^> /etc/pacman.d/gnupg/gpg.conf
+    echo.gpgconf --kill dirmngr ^|^| true
     echo.pacman --noconfirm -S $(cat /etc/pac-base-new.pk ^| sed -e 's#\\##'^)
     echo.sleep ^3
     echo.exit
