@@ -32,6 +32,18 @@ set(KODI_DEPENDS_NEED_LIBICONV "1" CACHE STRING
     "Set to 1 if target libiconv must be built")
 set(KODI_DEPENDS_EXTRA_CONFIGURE_ARGS "" CACHE STRING
     "Additional arguments forwarded to tools/depends configure")
+set(KODI_DEPENDS_SHELL "" CACHE FILEPATH
+    "Optional shell executable used to run tools/depends commands (required on Windows).")
+set(KODI_DEPENDS_SHELL_LOGIN_ARGS "-lc" CACHE STRING
+    "Arguments passed to KODI_DEPENDS_SHELL before command payload.")
+set(KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL ON CACHE BOOL
+    "Enable experimental Windows superbuild depends flow.")
+set(KODI_SUPERBUILD_WINDOWS_UWP OFF CACHE BOOL
+    "Use WindowsStore/UWP target platform for experimental Windows superbuild.")
+set(KODI_SUPERBUILD_WINDOWS_ARCH "x64" CACHE STRING
+    "Windows target arch for experimental Windows superbuild (win32, x64, arm64).")
+set(KODI_DEPENDS_WINDOWS_PROFILE "minimal" CACHE STRING
+    "Windows depends package profile for superbuild (minimal, expanded).")
 set(KODI_SUPERBUILD_ADDONS OFF CACHE BOOL
     "Enable binary add-ons build from the top-level superbuild")
 set(KODI_ADDONS_TO_BUILD "all" CACHE STRING
@@ -52,6 +64,17 @@ set(KODI_ADDONS_AUTOCONF_FILES "" CACHE STRING
     "Optional autoconf helper files forwarded to cmake/addons")
 set(KODI_ADDONS_EXTRA_CMAKE_ARGS "" CACHE STRING
     "Additional CMake arguments forwarded to cmake/addons")
+
+if(WIN32 AND KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL)
+  if(KODI_DEPENDS_PREFIX STREQUAL "${CMAKE_BINARY_DIR}/depends")
+    set(KODI_DEPENDS_PREFIX "${CMAKE_SOURCE_DIR}/project/BuildDependencies" CACHE PATH
+        "Depends install root passed to tools/depends --prefix" FORCE)
+  endif()
+  if(NOT KODI_DEPENDS_TARBALLS)
+    set(KODI_DEPENDS_TARBALLS "${CMAKE_SOURCE_DIR}/project/BuildDependencies/downloads" CACHE PATH
+        "Optional tarballs cache path passed to tools/depends --with-tarballs" FORCE)
+  endif()
+endif()
 
 function(kodi_depends_get_debug_switch out_var)
   if(KODI_DEPENDS_DEBUG)
@@ -121,6 +144,30 @@ function(kodi_depends_get_configure_args out_var)
   endif()
 
   set(${out_var} "${_args}" PARENT_SCOPE)
+endfunction()
+
+function(kodi_depends_get_shell_command out_var command_string)
+  if(WIN32)
+    if(NOT KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL)
+      message(FATAL_ERROR "Windows superbuild depends flow is disabled. Set KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL=ON.")
+    endif()
+    set(_shell "${KODI_DEPENDS_SHELL}")
+    if(NOT _shell)
+      set(_candidate_shell "${CMAKE_SOURCE_DIR}/project/BuildDependencies/msys64/usr/bin/bash.exe")
+      if(EXISTS "${_candidate_shell}")
+        set(_shell "${_candidate_shell}")
+      endif()
+    endif()
+    if(NOT _shell)
+      message(FATAL_ERROR
+              "KODI_DEPENDS_SHELL is required on Windows. Run tools/buildsteps/windows/*/download-msys2.bat "
+              "or pass -DKODI_DEPENDS_SHELL=<path-to-msys-bash.exe>.")
+    endif()
+    separate_arguments(_shell_args UNIX_COMMAND "${KODI_DEPENDS_SHELL_LOGIN_ARGS}")
+    set(${out_var} "${_shell};${_shell_args};${command_string}" PARENT_SCOPE)
+  else()
+    set(${out_var} "${command_string}" PARENT_SCOPE)
+  endif()
 endfunction()
 
 function(kodi_depends_read_makefile_include makefile_include_path)

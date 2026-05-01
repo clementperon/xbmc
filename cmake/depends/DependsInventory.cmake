@@ -115,6 +115,56 @@ set(KODI_DEPENDS_TARGET_WEBOS_ADD libdovi wayland waylandpp wayland-protocols we
 set(KODI_DEPENDS_TARGET_WEBOS_EXCLUDE dbus mtdev libevdev libinput linux-system-x11-libs pipewire mesa)
 set(KODI_DEPENDS_TARGET_GBM_ADD hwdata libdisplay-info)
 
+# Experimental Windows staged migration lists. These intentionally start with
+# a small proving set and then expand toward the formed package inventory.
+set(KODI_DEPENDS_NATIVE_WINDOWS_MINIMAL
+    autoconf
+    autoconf-archive
+    automake
+    cmake
+    gettext
+    libtool
+    m4
+    meson
+    nasm
+    ninja
+    openssl
+    pkg-config
+    python3
+    pythonmodule-setuptools
+    swig
+    zlib
+)
+
+set(KODI_DEPENDS_TARGET_WINDOWS_MINIMAL
+    openssl
+    sqlite3
+    zlib
+)
+
+set(KODI_DEPENDS_TARGET_WINDOWS_EXPANDED
+    expat
+    freetype2
+    fribidi
+    fstrcmp
+    gtest
+    harfbuzz
+    libaacs
+    libbdplus
+    libcdio
+    libiconv
+    libplist
+    libshairplay
+    libxml2
+    openssl
+    python3
+    pythonmodule-pil
+    pythonmodule-pycryptodome
+    sqlite3
+    tinyxml
+    zlib
+)
+
 # Dependency edges mirrored from native/target Makefiles.
 # Format: "<pkg>:<dep1>;<dep2>"
 set(KODI_DEPENDS_NATIVE_DEPENDENCY_PAIRS

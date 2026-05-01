@@ -2,6 +2,9 @@ AC_DEFUN([XBMC_SETUP_ARCH_DEFINES],[
 
 # build detection and setup - this is the native arch
 case $build in
+  *-*-mingw*|*-*-msys*|*-*-cygwin*)
+     AC_SUBST(NATIVE_ARCH_DEFINES, "-DTARGET_WINDOWS")
+     ;;
   i*86*-linux-gnu*|i*86*-*-linux-uclibc*)
      AC_SUBST(NATIVE_ARCH_DEFINES, "-DTARGET_POSIX -DTARGET_LINUX")
      ;;
@@ -36,6 +39,13 @@ esac
 
 # host detection and setup - this is the target arch
 case $host in
+  i*86-*-mingw*|i*86-*-msys*|i*86-*-cygwin*|x86_64-*-mingw*|x86_64-*-msys*|x86_64-*-cygwin*|aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*)
+     if test "$target_platform" = "windowsstore" ; then
+        AC_SUBST(ARCH_DEFINES, "-DTARGET_WINDOWS -DTARGET_WINDOWS_STORE")
+     else
+        AC_SUBST(ARCH_DEFINES, "-DTARGET_WINDOWS")
+     fi
+     ;;
   i*86*-linux-gnu*|i*86*-*-linux-uclibc*)
      AC_SUBST(ARCH_DEFINES, "-DTARGET_POSIX -DTARGET_LINUX")
      ;;

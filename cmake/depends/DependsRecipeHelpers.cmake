@@ -1,6 +1,8 @@
 include_guard(GLOBAL)
 
-find_program(KODI_DEPENDS_MAKE_EXECUTABLE NAMES gmake make REQUIRED)
+if(NOT WIN32)
+  find_program(KODI_DEPENDS_MAKE_EXECUTABLE NAMES gmake make REQUIRED)
+endif()
 
 function(kodi_depends_pair_dependencies pairs package_name out_var)
   set(_deps "")
@@ -37,8 +39,16 @@ function(kodi_depends_add_make_target)
   set(_package_rel_dir "${ARG_PACKAGE_TYPE}/${ARG_PACKAGE}")
   set(_package_abs_dir "${KODI_DEPENDS_SOURCE_DIR}/${_package_rel_dir}")
 
+  if(WIN32)
+    file(TO_CMAKE_PATH "${_package_abs_dir}" _package_abs_dir_msys)
+    kodi_depends_get_shell_command(_build_cmd "make -C \"${_package_abs_dir_msys}\"")
+    set(_target_command ${_build_cmd})
+  else()
+    set(_target_command ${KODI_DEPENDS_MAKE_EXECUTABLE} -C "${_package_abs_dir}")
+  endif()
+
   add_custom_target(${ARG_NAME}
-    COMMAND ${KODI_DEPENDS_MAKE_EXECUTABLE} -C "${_package_abs_dir}"
+    COMMAND ${_target_command}
     WORKING_DIRECTORY "${KODI_DEPENDS_SOURCE_DIR}"
     USES_TERMINAL
     COMMENT "Building depends package ${_package_rel_dir}")

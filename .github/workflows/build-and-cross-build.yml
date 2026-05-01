@@ -224,6 +224,285 @@ jobs:
             build-macos-superbuild-addons/addons-build/.failure
           if-no-files-found: ignore
 
+  windows-build:
+    name: Windows Build + Add-ons (x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Restore windows dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+          key: ${{ runner.os }}-windows-x64-build-deps-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-x64-build-deps-
+
+      - name: Download windows dependencies (x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64\download-dependencies.bat
+
+      - name: Prepare windows msys2 toolchain (x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64\download-msys2.bat sh
+
+      - name: Configure windows x64 build
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-x64 -G "Visual Studio 17 2022" -A x64 -T host=x64 -DENABLE_TESTING=OFF
+
+      - name: Build Kodi app (windows x64)
+        shell: cmd
+        run: |
+          cmake --build build-windows-x64 --config Release --parallel 2
+
+      - name: Build representative windows add-on
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64\make-addons.bat package pvr.iptvsimple
+
+      - name: Upload windows x64 build and add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-build-artifacts
+          path: |
+            build-windows-x64/Release
+            project/Win32BuildSetup/BUILD_WIN32/addons
+            cmake/addons/.success
+            cmake/addons/.failure
+            cmake/addons/make-addons.error
+          if-no-files-found: ignore
+
+  windows-uwp-build:
+    name: Windows UWP Build + Add-ons (x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Restore windows uwp dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+          key: ${{ runner.os }}-windows-uwp-x64-build-deps-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-uwp-x64-build-deps-
+
+      - name: Download windows dependencies (uwp x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64-uwp\download-dependencies.bat
+
+      - name: Prepare windows msys2 toolchain (uwp x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64-uwp\download-msys2.bat sh
+
+      - name: Configure windows uwp x64 build
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-uwp -G "Visual Studio 17 2022" -A x64 -T host=x64 -DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0 -DENABLE_TESTING=OFF
+
+      - name: Build Kodi app (windows uwp x64)
+        shell: cmd
+        run: |
+          cmake --build build-windows-uwp --config Release --parallel 2
+
+      - name: Build representative windows uwp add-on
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64-uwp\make-addons.bat package pvr.iptvsimple
+
+      - name: Upload windows uwp build and add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-uwp-x64-build-artifacts
+          path: |
+            build-windows-uwp/AppPackages
+            project/Win32BuildSetup/BUILD_WIN32/addons
+            cmake/addons/.success
+            cmake/addons/.failure
+            cmake/addons/make-addons.error
+          if-no-files-found: ignore
+
+  windows-superbuild-depends-x64:
+    name: Windows Superbuild Depends (x64, Experimental)
+    runs-on: windows-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore windows superbuild dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+            project/BuildDependencies/tools
+            project/BuildDependencies/x64
+          key: ${{ runner.os }}-windows-superbuild-x64-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-superbuild-x64-
+
+      - name: Prepare windows msys2 toolchain (x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64\download-msys2.bat sh
+
+      - name: Configure windows x64 superbuild depends
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-superbuild-x64 -G "Visual Studio 17 2022" -A x64 -T host=x64 -DENABLE_TESTING=OFF -DKODI_SUPERBUILD_DEPENDS=ON -DKODI_SUPERBUILD_WINDOWS_EXPERIMENTAL=ON -DKODI_SUPERBUILD_WINDOWS_ARCH=x64 -DKODI_DEPENDS_WINDOWS_PROFILE=minimal
+
+      - name: Build windows x64 depends graph from source
+        shell: cmd
+        run: |
+          cmake --build build-windows-superbuild-x64 --target kodi-depends-target --parallel 2
+
+      - name: Upload windows x64 superbuild diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-superbuild-x64-artifacts
+          path: |
+            build-windows-superbuild-x64/depends
+            project/BuildDependencies/x64
+            project/BuildDependencies/tools
+          if-no-files-found: ignore
+
+  windows-superbuild-depends-win32:
+    name: Windows Superbuild Depends (win32, Experimental)
+    runs-on: windows-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore windows superbuild win32 cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+            project/BuildDependencies/tools
+            project/BuildDependencies/win32
+          key: ${{ runner.os }}-windows-superbuild-win32-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-superbuild-win32-
+
+      - name: Prepare windows msys2 toolchain (win32)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\win32\download-msys2.bat sh
+
+      - name: Configure windows win32 superbuild depends
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-superbuild-win32 -G "Visual Studio 17 2022" -A Win32 -T host=x64 -DENABLE_TESTING=OFF -DKODI_SUPERBUILD_DEPENDS=ON -DKODI_SUPERBUILD_WINDOWS_EXPERIMENTAL=ON -DKODI_SUPERBUILD_WINDOWS_ARCH=win32 -DKODI_DEPENDS_WINDOWS_PROFILE=minimal
+
+      - name: Build windows win32 configure target
+        shell: cmd
+        run: |
+          cmake --build build-windows-superbuild-win32 --target kodi-depends-configure --parallel 2
+
+  windows-superbuild-depends-arm64:
+    name: Windows Superbuild Depends (arm64, Experimental)
+    runs-on: windows-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore windows superbuild arm64 cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+            project/BuildDependencies/tools
+            project/BuildDependencies/arm64
+          key: ${{ runner.os }}-windows-superbuild-arm64-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-superbuild-arm64-
+
+      - name: Prepare windows msys2 toolchain (arm64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\arm64\download-msys2.bat sh
+
+      - name: Configure windows arm64 superbuild depends
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-superbuild-arm64 -G "Visual Studio 17 2022" -A ARM64 -T host=x64 -DENABLE_TESTING=OFF -DKODI_SUPERBUILD_DEPENDS=ON -DKODI_SUPERBUILD_WINDOWS_EXPERIMENTAL=ON -DKODI_SUPERBUILD_WINDOWS_ARCH=arm64 -DKODI_DEPENDS_WINDOWS_PROFILE=minimal
+
+      - name: Build windows arm64 configure target
+        shell: cmd
+        run: |
+          cmake --build build-windows-superbuild-arm64 --target kodi-depends-configure --parallel 2
+
+  windows-superbuild-depends-uwp-x64:
+    name: Windows Superbuild Depends (UWP x64, Experimental)
+    runs-on: windows-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore windows superbuild uwp cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            project/BuildDependencies/downloads
+            project/BuildDependencies/downloads2
+            project/BuildDependencies/msys64
+            project/BuildDependencies/tools
+            project/BuildDependencies/win10-x64
+          key: ${{ runner.os }}-windows-superbuild-uwp-x64-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-windows-superbuild-uwp-x64-
+
+      - name: Prepare windows msys2 toolchain (uwp x64)
+        shell: cmd
+        run: |
+          tools\buildsteps\windows\x64-uwp\download-msys2.bat sh
+
+      - name: Configure windows uwp x64 superbuild depends
+        shell: cmd
+        run: |
+          cmake -S . -B build-windows-superbuild-uwp -G "Visual Studio 17 2022" -A x64 -T host=x64 -DENABLE_TESTING=OFF -DKODI_SUPERBUILD_DEPENDS=ON -DKODI_SUPERBUILD_WINDOWS_EXPERIMENTAL=ON -DKODI_SUPERBUILD_WINDOWS_ARCH=x64 -DKODI_SUPERBUILD_WINDOWS_UWP=ON -DKODI_DEPENDS_WINDOWS_PROFILE=minimal
+
+      - name: Build windows uwp configure target
+        shell: cmd
+        run: |
+          cmake --build build-windows-superbuild-uwp --target kodi-depends-configure --parallel 2
+
   macos-tvos-cross-build:
     name: macOS tvOS Cross-Build
     runs-on: macos-14

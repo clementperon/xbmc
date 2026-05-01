@@ -169,6 +169,12 @@ tool_dir=$build_cpu-$build_os-native
 cross_compiling="yes"
 
 case $build in
+  *-*-mingw*|*-*-msys*|*-*-cygwin*)
+    build_os="windows"
+    if test "x$prefix" = "xNONE"; then
+      prefix="/xbmc/project/BuildDependencies"
+    fi
+  ;;
   aarch64*-*-linux-gnu*|aarch64*-*-linux-uclibc*)
     build_os="linux"
   ;;
@@ -215,6 +221,10 @@ case $build in
     AC_MSG_ERROR(unsupported native build platform: $build)
 esac
 
+if test "x$build_os" = "xwindows"; then
+  tool_dir="tools"
+fi
+
 
 if test "x$build_os" = "xosx"; then
   AC_PATH_PROG(SHASUM,shasum,"no")
@@ -254,6 +264,57 @@ platform_cc=gcc
 platform_cxx=g++
 
 case $host in
+  i*86-*-mingw*|i*86-*-msys*|i*86-*-cygwin*)
+    if test "x$use_cpu" = "xauto"; then
+      use_cpu="x86"
+    fi
+    use_toolchain="${use_toolchain:-/usr}"
+    platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
+    platform_cxxflags="$platform_cflags"
+    optimize_flags="-O2"
+    platform_os="windows"
+    meson_system="windows"
+    target_platform="windows"
+    deps_dir="win32"
+    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
+      target_platform="windowsstore"
+      deps_dir="win10-win32"
+    fi
+  ;;
+  x86_64-*-mingw*|x86_64-*-msys*|x86_64-*-cygwin*)
+    if test "x$use_cpu" = "xauto"; then
+      use_cpu="x86_64"
+    fi
+    use_toolchain="${use_toolchain:-/usr}"
+    platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
+    platform_cxxflags="$platform_cflags"
+    optimize_flags="-O2"
+    platform_os="windows"
+    meson_system="windows"
+    target_platform="windows"
+    deps_dir="x64"
+    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
+      target_platform="windowsstore"
+      deps_dir="win10-x64"
+    fi
+  ;;
+  aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*)
+    if test "x$use_cpu" = "xauto"; then
+      use_cpu="arm64"
+    fi
+    use_toolchain="${use_toolchain:-/usr}"
+    platform_cflags="-mms-bitfields -mthreads -march=armv8-a -pipe -DWIN32 -D_WINDOWS"
+    platform_cxxflags="$platform_cflags"
+    optimize_flags="-O2"
+    platform_os="windows"
+    meson_system="windows"
+    target_platform="windows"
+    deps_dir="arm64"
+    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
+      target_platform="windowsstore"
+      deps_dir="win10-arm64"
+    fi
+  ;;
   *-*linux-android*)
     use_toolchain="${use_toolchain:-$use_ndk_path/toolchains/llvm/prebuilt/$android_toolchain_name}"
     platform_cc=$use_host$use_ndk_api-clang
@@ -566,6 +627,8 @@ case $host in
 esac
 
 case $use_platform in
+  windows|windowsstore|uwp)
+    ;;
   ios|tvos|macos)
     ;;
   webos)

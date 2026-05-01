@@ -3,6 +3,13 @@ include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/DependsInventory.cmake")
 
 function(kodi_depends_get_native_packages out_var)
+  if(KODI_DEPENDS_OS STREQUAL "windows")
+    set(_pkgs ${KODI_DEPENDS_NATIVE_WINDOWS_MINIMAL})
+    list(REMOVE_DUPLICATES _pkgs)
+    set(${out_var} "${_pkgs}" PARENT_SCOPE)
+    return()
+  endif()
+
   set(_pkgs ${KODI_DEPENDS_NATIVE_BASE})
 
   if(NOT KODI_DEPENDS_OS STREQUAL "osx")
@@ -32,6 +39,25 @@ function(kodi_depends_get_native_packages out_var)
 endfunction()
 
 function(kodi_depends_get_target_packages out_var)
+  if(KODI_DEPENDS_OS STREQUAL "windows")
+    if(KODI_DEPENDS_WINDOWS_PROFILE STREQUAL "expanded")
+      set(_pkgs ${KODI_DEPENDS_TARGET_WINDOWS_EXPANDED})
+    else()
+      set(_pkgs ${KODI_DEPENDS_TARGET_WINDOWS_MINIMAL})
+    endif()
+
+    if(KODI_DEPENDS_HAVE_ZLIB STREQUAL "0")
+      list(APPEND _pkgs ${KODI_DEPENDS_TARGET_ZLIB})
+    endif()
+    if(KODI_DEPENDS_NEED_LIBICONV STREQUAL "1")
+      list(APPEND _pkgs ${KODI_DEPENDS_TARGET_ICONV})
+    endif()
+
+    list(REMOVE_DUPLICATES _pkgs)
+    set(${out_var} "${_pkgs}" PARENT_SCOPE)
+    return()
+  endif()
+
   set(_pkgs ${KODI_DEPENDS_TARGET_BASE})
 
   if(KODI_DEPENDS_ENABLE_GPLV3)
