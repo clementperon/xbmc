@@ -169,7 +169,7 @@ set(_kodi_core_externalproject_args
   CMAKE_GENERATOR "${CMAKE_GENERATOR}"
   CMAKE_ARGS ${_kodi_cmake_args}
   BUILD_COMMAND ${CMAKE_COMMAND} --build .
-  INSTALL_COMMAND ""
+  INSTALL_COMMAND ${CMAKE_COMMAND} -E true
   DEPENDS kodi-depends
 )
 if(_kodi_generator_platform)

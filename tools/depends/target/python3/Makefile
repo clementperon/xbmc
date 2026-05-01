@@ -10,6 +10,16 @@ DEPS = ../../Makefile.include Makefile PYTHON3-VERSION ../../download-files.incl
                                  14-wasm-build-wasm-default.patch \
                                  15-wasm-static-hacl.patch
 
+# Python build helpers may access HTTPS resources at build time (notably in
+# cross/wasm flows). Ensure OpenSSL can find a CA bundle in CI environments.
+SSL_CERT_FILE?=/etc/ssl/certs/ca-certificates.crt
+ifeq ($(NATIVE_OS), osx)
+  SSL_CERT_FILE=/etc/ssl/cert.pem
+endif
+export SSL_CERT_FILE
+export REQUESTS_CA_BUNDLE=$(SSL_CERT_FILE)
+export CURL_CA_BUNDLE=$(SSL_CERT_FILE)
+
 ifeq ($(findstring apple-darwin, $(HOST)), apple-darwin)
   ifeq ($(OS), darwin_embedded)
     EXTRA_CONFIGURE=ac_cv_func_wait3=no ac_cv_func_wait4=no ac_cv_func_waitpid=no \
@@ -93,9 +103,9 @@ CONFIGURE=./configure --prefix=$(PREFIX) \
                       $(PY_MODULES) \
                       $(EXTRA_CONFIGURE)
 
-# Use LIBS as some platforms (webos) require iconv to be late on the linker line
-# appending to LDFLAGS puts the iconv link argument too early, causing link failures
-export LIBS=$(LINK_ICONV)
+# Use LIBS as some platforms require iconv/gettext to be late on the linker line.
+# Appending to LDFLAGS can put these link args too early, causing link failures.
+export LIBS=$(LINK_ICONV) -lintl
 
 LIBDYLIB=$(PLATFORM)/libpython$(PYTHON_VERSION).a
 

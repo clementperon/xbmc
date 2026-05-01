@@ -5,14 +5,14 @@ on:
   push:
 
 env:
-  CCACHE_DIR: ~/.cache/ccache
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   linux-build:
     name: Linux Build
     runs-on: ubuntu-latest
     env:
-      CCACHE_DIR: ~/.cache/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-linux-build-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-build-ccache-
@@ -46,6 +46,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure
@@ -64,7 +65,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   linux-full-build-no-system-deps:
@@ -78,7 +79,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-linux-full-build-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-full-build-ccache-
@@ -90,6 +91,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Restore linux superbuild cache
@@ -118,7 +120,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   linux-superbuild-with-addons:
@@ -133,7 +135,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-linux-superbuild-addons-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-superbuild-addons-ccache-
@@ -145,6 +147,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Restore linux addon superbuild cache
@@ -189,7 +192,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   macos-build:
@@ -203,7 +206,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-macos-build-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-macos-build-ccache-
@@ -224,6 +227,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for macOS
@@ -247,7 +251,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   macos-superbuild-with-addons:
@@ -262,7 +266,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-macos-superbuild-addons-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-macos-superbuild-addons-ccache-
@@ -285,6 +289,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for macOS with add-ons
@@ -322,7 +327,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   windows-build:
@@ -621,7 +626,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-tvos-superbuild-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tvos-superbuild-ccache-
@@ -642,6 +647,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for tvOS
@@ -666,7 +672,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   macos-tvos-superbuild-with-addons:
@@ -681,7 +687,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-tvos-superbuild-addons-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tvos-superbuild-addons-ccache-
@@ -704,6 +710,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for tvOS with add-ons
@@ -742,7 +749,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   wasm-cross-build:
@@ -756,7 +763,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-wasm-superbuild-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-wasm-superbuild-ccache-
@@ -783,6 +790,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for wasm
@@ -802,7 +810,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   wasm-superbuild-with-addons:
@@ -817,7 +825,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-wasm-superbuild-addons-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-wasm-superbuild-addons-ccache-
@@ -846,6 +854,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for wasm with add-ons
@@ -879,7 +888,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   android-cross-build:
@@ -893,7 +902,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-android-superbuild-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-android-superbuild-ccache-
@@ -922,6 +931,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for android arm64
@@ -944,7 +954,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   android-superbuild-with-addons:
@@ -959,7 +969,7 @@ jobs:
         id: ccache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-android-superbuild-addons-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-android-superbuild-addons-ccache-
@@ -990,6 +1000,7 @@ jobs:
 
       - name: Configure ccache
         run: |
+          mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
       - name: Configure top-level superbuild for android arm64 with add-ons
@@ -1025,5 +1036,5 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
