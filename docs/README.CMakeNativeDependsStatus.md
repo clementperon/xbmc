@@ -62,6 +62,7 @@ All options are passed to top-level CMake when `KODI_SUPERBUILD_DEPENDS=ON`:
     - Depends bootstrap + package graph + Kodi build target
   - Recent fix applied:
     - Depends package execution now forces `make/gmake` (not top-level Ninja) for `tools/depends/*` package directories.
+    - Native CMake bootstrap now uses CMake's bundled curl instead of requiring host libcurl development headers.
 
 - `linux-superbuild-with-addons`
   - Status: **new staged lane (non-blocking)**
@@ -80,14 +81,25 @@ All options are passed to top-level CMake when `KODI_SUPERBUILD_DEPENDS=ON`:
   - Notes:
     - Still CI-focused; no signing/notarization verification in this lane.
 
+- `macos-superbuild-with-addons`
+  - Status: **new staged lane (non-blocking)**
+  - What is validated:
+    - `kodi-e2e` path for macOS superbuild
+    - Initial add-on selection flow (`KODI_ADDONS_TO_BUILD=pvr.iptvsimple`)
+
 - `macos-tvos-cross-build`
-  - Status: **smoke-level cross lane**
+  - Status: **full end-to-end target configured (`kodi-core`)**
   - What is validated:
     - tvOS toolchain/dependency bootstrap config path
-    - `kodi-depends-configure` target
-  - Not yet validated:
     - Full `kodi-core` compile for tvOS
+  - Not yet validated:
     - Packaging/signing behavior.
+
+- `macos-tvos-superbuild-with-addons`
+  - Status: **new staged lane (non-blocking)**
+  - What is validated:
+    - `kodi-e2e` path for tvOS superbuild
+    - Initial add-on selection flow (`KODI_ADDONS_TO_BUILD=pvr.iptvsimple`)
 
 - `wasm-cross-build`
   - Status: **staged full core lane (`kodi-core`)**
@@ -133,8 +145,7 @@ For each platform, "full end-to-end" means:
 Remaining work:
 
 - Cross lanes (`android`, `wasm`, `tvos`)
-  - tvOS still needs promotion from `kodi-depends-configure` to `kodi-core`.
-  - Android/WASM now stage `kodi-core` and non-blocking `KODI_SUPERBUILD_ADDONS=ON` lanes.
+  - Android/WASM/tvOS now stage `kodi-core` and non-blocking `KODI_SUPERBUILD_ADDONS=ON` lanes.
   - Add resource/time controls (parallelism, cache sizing, selective artifact retention).
   - Add packaging step where supported:
     - Android: APK/AAB generation and artifact upload.
@@ -160,11 +171,11 @@ Remaining work:
 - Phase 1 (now):
   - Keep smoke checks on cross lanes for fast feedback.
   - Keep Linux/macOS full app superbuild lanes active.
-  - Run staged Linux add-on lane (`kodi-e2e`) as non-blocking.
+  - Run staged Linux/macOS/tvOS add-on lanes (`kodi-e2e`) as non-blocking.
 
 - Phase 2:
   - Expand Linux add-on lane from representative add-ons to `all`.
-  - Enable cross lanes to build `kodi-core` (Android and WASM staged, tvOS pending).
+  - Enable cross lanes to build `kodi-core` (Android, WASM and tvOS staged).
   - Mark new full cross lanes as non-blocking until stable.
 
 - Phase 3:

@@ -169,6 +169,61 @@ jobs:
         run: |
           cmake --build build-macos-superbuild --target kodi-core --parallel 2
 
+  macos-superbuild-with-addons:
+    name: macOS Superbuild + Add-ons (Staged)
+    runs-on: macos-14
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore macOS addon superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-macos-superbuild-addons/depends
+            build-macos-superbuild-addons/kodi
+            build-macos-superbuild-addons/addons-build
+            build-macos-superbuild-addons/addons-work
+          key: ${{ runner.os }}-macos-superbuild-addons-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-macos-superbuild-addons-
+
+      - name: Install depends bootstrap requirements
+        run: |
+          brew install autoconf automake libtool gettext pkg-config gnu-tar gnu-sed
+
+      - name: Configure top-level superbuild for macOS with add-ons
+        run: |
+          HOST_ARCH=$(uname -m)
+          if [ "$HOST_ARCH" = "arm64" ]; then
+            HOST_TRIPLET=aarch64-apple-darwin
+          else
+            HOST_TRIPLET=x86_64-apple-darwin
+          fi
+          cmake -S . -B build-macos-superbuild-addons -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_SUPERBUILD_ADDONS=ON \
+            -DKODI_DEPENDS_HOST="$HOST_TRIPLET" \
+            -DKODI_DEPENDS_TARGET_PLATFORM=macos \
+            -DKODI_ADDONS_TO_BUILD=pvr.iptvsimple \
+            -DKODI_ADDONS_BUILD_TARGET=all
+
+      - name: Build Kodi and staged add-ons via superbuild
+        run: |
+          cmake --build build-macos-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Upload staged macOS add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-superbuild-addons-artifacts
+          path: |
+            build-macos-superbuild-addons/addons
+            build-macos-superbuild-addons/addons-build/.success
+            build-macos-superbuild-addons/addons-build/.failure
+          if-no-files-found: ignore
+
   macos-tvos-cross-build:
     name: macOS tvOS Cross-Build
     runs-on: macos-14
@@ -204,9 +259,65 @@ jobs:
             -DKODI_DEPENDS_TARGET_PLATFORM=tvos \
             -DKODI_DEPENDS_SDK_VERSION=17.2
 
-      - name: Build depends configure target
+      - name: Build Kodi via superbuild
         run: |
-          cmake --build build-tvos-superbuild --target kodi-depends-configure --parallel 2
+          cmake --build build-tvos-superbuild --target kodi-core --parallel 2
+
+  macos-tvos-superbuild-with-addons:
+    name: macOS tvOS Superbuild + Add-ons (Staged)
+    runs-on: macos-14
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore tvOS addon superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-tvos-superbuild-addons/depends
+            build-tvos-superbuild-addons/kodi
+            build-tvos-superbuild-addons/addons-build
+            build-tvos-superbuild-addons/addons-work
+          key: ${{ runner.os }}-tvos-superbuild-addons-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-tvos-superbuild-addons-
+
+      - name: Install depends bootstrap requirements
+        run: |
+          brew install autoconf automake libtool gettext pkg-config gnu-tar gnu-sed
+
+      - name: Configure top-level superbuild for tvOS with add-ons
+        run: |
+          HOST_ARCH=$(uname -m)
+          if [ "$HOST_ARCH" = "arm64" ]; then
+            HOST_TRIPLET=aarch64-apple-darwin
+          else
+            HOST_TRIPLET=x86_64-apple-darwin
+          fi
+          cmake -S . -B build-tvos-superbuild-addons -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_SUPERBUILD_ADDONS=ON \
+            -DKODI_DEPENDS_HOST="$HOST_TRIPLET" \
+            -DKODI_DEPENDS_TARGET_PLATFORM=tvos \
+            -DKODI_DEPENDS_SDK_VERSION=17.2 \
+            -DKODI_ADDONS_TO_BUILD=pvr.iptvsimple \
+            -DKODI_ADDONS_BUILD_TARGET=all
+
+      - name: Build Kodi and staged add-ons via superbuild
+        run: |
+          cmake --build build-tvos-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Upload staged tvOS add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tvos-superbuild-addons-artifacts
+          path: |
+            build-tvos-superbuild-addons/addons
+            build-tvos-superbuild-addons/addons-build/.success
+            build-tvos-superbuild-addons/addons-build/.failure
+          if-no-files-found: ignore
 
   wasm-cross-build:
     name: WASM Cross-Build
