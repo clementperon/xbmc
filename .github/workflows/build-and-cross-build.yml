@@ -3,8 +3,6 @@ name: Build And Cross-Build
 on:
   pull_request:
   push:
-    branches:
-      - master
 
 jobs:
   linux-build:
@@ -33,6 +31,26 @@ jobs:
       - name: Build
         run: |
           cmake --build build --parallel 2
+
+  linux-full-build-no-system-deps:
+    name: Linux Full Build (No System Deps)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure top-level superbuild for linux
+        run: |
+          cmake -S . -B build-linux-superbuild -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_DEPENDS_HOST=x86_64-linux-gnu \
+            -DKODI_DEPENDS_TARGET_PLATFORM=x11 \
+            -DKODI_DEPENDS_TOOLCHAIN=/usr \
+            -DKODI_DEPENDS_RENDER_SYSTEM=gl
+
+      - name: Build Kodi via superbuild
+        run: |
+          cmake --build build-linux-superbuild --target kodi-core --parallel 2
 
   wasm-cross-build:
     name: WASM Cross-Build
