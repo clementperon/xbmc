@@ -8,9 +8,27 @@ jobs:
   linux-build:
     name: Linux Build
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ~/.cache/ccache
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-linux-build-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-linux-build-ccache-
+
+      - name: Restore build directory cache
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: ${{ runner.os }}-linux-build-dir-v1
+          restore-keys: |
+            ${{ runner.os }}-linux-build-dir-
 
       - name: Install dependencies
         # Keep aligned with docs/README.Ubuntu.md and sonarqube workflow.
@@ -20,12 +38,18 @@ jobs:
           sudo apt install -y libcec-dev liblirc-dev libflatbuffers-dev
           sudo apt install -y libglew-dev libwayland-dev libxkbcommon-dev waylandpp-dev wayland-protocols
           sudo apt install -y libgbm-dev libinput-dev libsndio-dev libdisplay-info-dev
+          sudo apt install -y ccache
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=2G
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DAPP_RENDER_SYSTEM=gl \
             -DENABLE_INTERNAL_FFMPEG=ON \
+            -DENABLE_CCACHE=ON \
             -DENABLE_TESTING=OFF
 
       - name: Build
@@ -39,12 +63,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore linux superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-linux-superbuild/depends
+            build-linux-superbuild/kodi
+          key: ${{ runner.os }}-linux-superbuild-v1
+          restore-keys: |
+            ${{ runner.os }}-linux-superbuild-
+
       - name: Configure top-level superbuild for linux
         run: |
           cmake -S . -B build-linux-superbuild -G Ninja \
             -DKODI_SUPERBUILD_DEPENDS=ON \
             -DKODI_DEPENDS_HOST=x86_64-linux-gnu \
-            -DKODI_DEPENDS_TARGET_PLATFORM=x11 \
             -DKODI_DEPENDS_TOOLCHAIN=/usr \
             -DKODI_DEPENDS_RENDER_SYSTEM=gl
 
@@ -52,12 +85,99 @@ jobs:
         run: |
           cmake --build build-linux-superbuild --target kodi-core --parallel 2
 
+  macos-build:
+    name: macOS Build
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore macOS superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-macos-superbuild/depends
+            build-macos-superbuild/kodi
+          key: ${{ runner.os }}-macos-superbuild-v1
+          restore-keys: |
+            ${{ runner.os }}-macos-superbuild-
+
+      - name: Install depends bootstrap requirements
+        run: |
+          brew install autoconf automake libtool gettext pkg-config gnu-tar gnu-sed
+
+      - name: Configure top-level superbuild for macOS
+        run: |
+          HOST_ARCH=$(uname -m)
+          if [ "$HOST_ARCH" = "arm64" ]; then
+            HOST_TRIPLET=aarch64-apple-darwin
+          else
+            HOST_TRIPLET=x86_64-apple-darwin
+          fi
+          cmake -S . -B build-macos-superbuild -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_DEPENDS_HOST="$HOST_TRIPLET" \
+            -DKODI_DEPENDS_TARGET_PLATFORM=macos
+
+      - name: Build Kodi via superbuild
+        run: |
+          cmake --build build-macos-superbuild --target kodi-core --parallel 2
+
+  macos-tvos-cross-build:
+    name: macOS tvOS Cross-Build
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore tvOS superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-tvos-superbuild/depends
+            build-tvos-superbuild/kodi
+          key: ${{ runner.os }}-tvos-superbuild-v1
+          restore-keys: |
+            ${{ runner.os }}-tvos-superbuild-
+
+      - name: Install depends bootstrap requirements
+        run: |
+          brew install autoconf automake libtool gettext pkg-config gnu-tar gnu-sed
+
+      - name: Configure top-level superbuild for tvOS
+        run: |
+          HOST_ARCH=$(uname -m)
+          if [ "$HOST_ARCH" = "arm64" ]; then
+            HOST_TRIPLET=aarch64-apple-darwin
+          else
+            HOST_TRIPLET=x86_64-apple-darwin
+          fi
+          cmake -S . -B build-tvos-superbuild -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_DEPENDS_HOST="$HOST_TRIPLET" \
+            -DKODI_DEPENDS_TARGET_PLATFORM=tvos \
+            -DKODI_DEPENDS_SDK_VERSION=17.2
+
+      - name: Build depends configure target
+        run: |
+          cmake --build build-tvos-superbuild --target kodi-depends-configure --parallel 2
+
   wasm-cross-build:
     name: WASM Cross-Build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore wasm superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-wasm/depends
+            build-wasm/kodi
+          key: ${{ runner.os }}-wasm-superbuild-v1
+          restore-keys: |
+            ${{ runner.os }}-wasm-superbuild-
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -71,7 +191,7 @@ jobs:
 
       - name: Configure top-level superbuild for wasm
         run: |
-          TOOLCHAIN_PATH=$(dirname "$(dirname "$(command -v emcc)")")
+          TOOLCHAIN_PATH=$(dirname "$(dirname "$(dirname "$(command -v emcc)")")")
           cmake -S . -B build-wasm -G Ninja \
             -DKODI_SUPERBUILD_DEPENDS=ON \
             -DKODI_DEPENDS_HOST=wasm32-unknown-emscripten \
@@ -88,6 +208,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore android superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-android/depends
+            build-android/kodi
+          key: ${{ runner.os }}-android-superbuild-v1
+          restore-keys: |
+            ${{ runner.os }}-android-superbuild-
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -109,7 +239,6 @@ jobs:
           cmake -S . -B build-android -G Ninja \
             -DKODI_SUPERBUILD_DEPENDS=ON \
             -DKODI_DEPENDS_HOST=aarch64-linux-android \
-            -DKODI_DEPENDS_TARGET_PLATFORM=android \
             -DKODI_DEPENDS_SDK_PATH="$ANDROID_HOME" \
             -DKODI_DEPENDS_NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" \
             -DKODI_DEPENDS_NDK_API="$ANDROID_NDK_API"
