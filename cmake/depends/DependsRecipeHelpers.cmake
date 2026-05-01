@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+find_program(KODI_DEPENDS_MAKE_EXECUTABLE NAMES gmake make REQUIRED)
+
 function(kodi_depends_pair_dependencies pairs package_name out_var)
   set(_deps "")
   foreach(_pair IN LISTS pairs)
@@ -36,7 +38,7 @@ function(kodi_depends_add_make_target)
   set(_package_abs_dir "${KODI_DEPENDS_SOURCE_DIR}/${_package_rel_dir}")
 
   add_custom_target(${ARG_NAME}
-    COMMAND ${CMAKE_MAKE_PROGRAM} -C "${_package_abs_dir}"
+    COMMAND ${KODI_DEPENDS_MAKE_EXECUTABLE} -C "${_package_abs_dir}"
     WORKING_DIRECTORY "${KODI_DEPENDS_SOURCE_DIR}"
     USES_TERMINAL
     COMMENT "Building depends package ${_package_rel_dir}")

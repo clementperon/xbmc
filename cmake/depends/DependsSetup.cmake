@@ -32,12 +32,50 @@ set(KODI_DEPENDS_NEED_LIBICONV "1" CACHE STRING
     "Set to 1 if target libiconv must be built")
 set(KODI_DEPENDS_EXTRA_CONFIGURE_ARGS "" CACHE STRING
     "Additional arguments forwarded to tools/depends configure")
+set(KODI_SUPERBUILD_ADDONS OFF CACHE BOOL
+    "Enable binary add-ons build from the top-level superbuild")
+set(KODI_ADDONS_TO_BUILD "all" CACHE STRING
+    "Add-on selector forwarded to cmake/addons (ADDONS_TO_BUILD)")
+set(KODI_ADDONS_PACKAGE_ZIP "AUTO" CACHE STRING
+    "Package add-ons as zip archives (ON/OFF/AUTO)")
+set(KODI_ADDONS_DEFINITION_DIR "" CACHE PATH
+    "Optional add-on definition directory override")
+set(KODI_ADDONS_SOURCE_PREFIX "" CACHE PATH
+    "Optional local source prefix for add-on checkouts")
+set(KODI_ADDONS_BUILD_TARGET "all" CACHE STRING
+    "Build target for cmake/addons project")
+set(KODI_ADDONS_PACKAGE_TARGET "package-addons" CACHE STRING
+    "Packaging target for cmake/addons project")
+set(KODI_ADDONS_INSTALL_PREFIX "" CACHE PATH
+    "Optional install prefix for built add-ons")
+set(KODI_ADDONS_AUTOCONF_FILES "" CACHE STRING
+    "Optional autoconf helper files forwarded to cmake/addons")
+set(KODI_ADDONS_EXTRA_CMAKE_ARGS "" CACHE STRING
+    "Additional CMake arguments forwarded to cmake/addons")
 
 function(kodi_depends_get_debug_switch out_var)
   if(KODI_DEPENDS_DEBUG)
     set(${out_var} "" PARENT_SCOPE)
   else()
     set(${out_var} "--disable-debug" PARENT_SCOPE)
+  endif()
+endfunction()
+
+function(kodi_depends_get_addons_package_zip out_var)
+  if(KODI_ADDONS_PACKAGE_ZIP STREQUAL "AUTO")
+    if(KODI_DEPENDS_OS STREQUAL "android")
+      set(${out_var} OFF PARENT_SCOPE)
+    else()
+      set(${out_var} ON PARENT_SCOPE)
+    endif()
+  elseif(KODI_ADDONS_PACKAGE_ZIP)
+    if(KODI_ADDONS_PACKAGE_ZIP STREQUAL "ON")
+      set(${out_var} ON PARENT_SCOPE)
+    else()
+      set(${out_var} OFF PARENT_SCOPE)
+    endif()
+  else()
+    set(${out_var} OFF PARENT_SCOPE)
   endif()
 endfunction()
 

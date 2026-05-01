@@ -114,3 +114,98 @@ ExternalProject_Add(kodi-core
   INSTALL_COMMAND ""
   DEPENDS kodi-depends
 )
+
+add_custom_target(kodi-e2e)
+add_dependencies(kodi-e2e kodi-core)
+
+if(KODI_SUPERBUILD_ADDONS)
+  kodi_depends_get_addons_package_zip(_kodi_addons_package_zip)
+
+  if(KODI_ADDONS_INSTALL_PREFIX)
+    set(_kodi_addons_install_prefix "${KODI_ADDONS_INSTALL_PREFIX}")
+  elseif(KODI_DEPENDS_OS STREQUAL "android")
+    set(_kodi_addons_install_prefix "${CMAKE_BINARY_DIR}/kodi")
+  else()
+    set(_kodi_addons_install_prefix "${CMAKE_BINARY_DIR}/addons")
+  endif()
+
+  set(_kodi_addons_build_dir "${CMAKE_BINARY_DIR}/addons-work")
+  set(_kodi_addons_binary_dir "${CMAKE_BINARY_DIR}/addons-build")
+  set(_kodi_addons_depends_target kodi-core)
+  set(_kodi_addons_autoconf_files "${KODI_ADDONS_AUTOCONF_FILES}")
+  if(NOT _kodi_addons_autoconf_files
+     AND EXISTS "${KODI_DEPENDS_SOURCE_DIR}/target/config.sub"
+     AND EXISTS "${KODI_DEPENDS_SOURCE_DIR}/target/config.guess"
+     AND (NOT KODI_DEPENDS_OS STREQUAL "linux" OR KODI_DEPENDS_TARGET_PLATFORM))
+    set(_kodi_addons_autoconf_files
+        "${KODI_DEPENDS_SOURCE_DIR}/target/config.sub ${KODI_DEPENDS_SOURCE_DIR}/target/config.guess")
+  endif()
+
+  if(KODI_DEPENDS_OS STREQUAL "linux")
+    add_custom_target(kodi-addons-linux-system-libs
+      COMMAND ${CMAKE_COMMAND}
+              -DKODI_DEPENDS_PREFIX_RESOLVED=${KODI_DEPENDS_PREFIX_RESOLVED}
+              -DKODI_DEPENDS_HOST=${KODI_DEPENDS_HOST}
+              -DKODI_DEPENDS_RENDER_SYSTEM=${KODI_DEPENDS_RENDER_SYSTEM}
+              -P "${CMAKE_SOURCE_DIR}/cmake/depends/EnsureLinuxAddonSystemLibs.cmake"
+      COMMENT "Preparing Linux system library links for add-on build")
+    add_dependencies(kodi-addons-linux-system-libs kodi-depends)
+    set(_kodi_addons_depends_target kodi-addons-linux-system-libs)
+  endif()
+
+  set(_kodi_addons_cmake_args
+    -DCORE_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -DBUILD_DIR=${_kodi_addons_build_dir}
+    -DADDON_DEPENDS_PATH=${KODI_DEPENDS_PREFIX_RESOLVED}
+    -DCMAKE_TOOLCHAIN_FILE=${_depends_toolchain}
+    -DCMAKE_INSTALL_PREFIX=${_kodi_addons_install_prefix}
+    -DADDONS_TO_BUILD=${KODI_ADDONS_TO_BUILD}
+    -DPACKAGE_ZIP=${_kodi_addons_package_zip}
+  )
+  if(CMAKE_BUILD_TYPE)
+    list(APPEND _kodi_addons_cmake_args "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+  endif()
+  if(_kodi_addons_autoconf_files)
+    list(APPEND _kodi_addons_cmake_args "-DAUTOCONF_FILES=${_kodi_addons_autoconf_files}")
+  endif()
+  if(KODI_ADDONS_DEFINITION_DIR)
+    list(APPEND _kodi_addons_cmake_args "-DADDONS_DEFINITION_DIR=${KODI_ADDONS_DEFINITION_DIR}")
+  endif()
+  if(KODI_ADDONS_SOURCE_PREFIX)
+    list(APPEND _kodi_addons_cmake_args "-DADDON_SRC_PREFIX=${KODI_ADDONS_SOURCE_PREFIX}")
+  endif()
+  if(KODI_ADDONS_EXTRA_CMAKE_ARGS)
+    separate_arguments(_kodi_addons_extra_args UNIX_COMMAND "${KODI_ADDONS_EXTRA_CMAKE_ARGS}")
+    list(APPEND _kodi_addons_cmake_args ${_kodi_addons_extra_args})
+  endif()
+
+  ExternalProject_Add(kodi-addons
+    SOURCE_DIR "${CMAKE_SOURCE_DIR}/cmake/addons"
+    BINARY_DIR "${_kodi_addons_binary_dir}"
+    CMAKE_GENERATOR "${CMAKE_GENERATOR}"
+    CMAKE_ARGS ${_kodi_addons_cmake_args}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build . --target ${KODI_ADDONS_BUILD_TARGET}
+    INSTALL_COMMAND ""
+    DEPENDS ${_kodi_addons_depends_target}
+  )
+
+  add_custom_target(kodi-addons-package
+    COMMAND ${CMAKE_COMMAND}
+            -DKODI_ADDONS_BINARY_DIR=${_kodi_addons_binary_dir}
+            -DKODI_ADDONS_PACKAGE_TARGET=${KODI_ADDONS_PACKAGE_TARGET}
+            -DKODI_ADDONS_TO_BUILD=${KODI_ADDONS_TO_BUILD}
+            -DKODI_ADDONS_PACKAGE_ZIP=${_kodi_addons_package_zip}
+            -DKODI_ADDONS_RESULTS_DIR=${_kodi_addons_binary_dir}
+            -P "${CMAKE_SOURCE_DIR}/cmake/depends/BuildAddons.cmake"
+    DEPENDS kodi-addons
+    COMMENT "Packaging selected binary add-ons")
+
+  add_dependencies(kodi-e2e kodi-addons kodi-addons-package)
+else()
+  add_custom_target(kodi-addons
+    COMMAND ${CMAKE_COMMAND} -E echo "kodi-addons is disabled. Reconfigure with -DKODI_SUPERBUILD_ADDONS=ON."
+    COMMENT "Add-on superbuild target is disabled")
+  add_custom_target(kodi-addons-package
+    COMMAND ${CMAKE_COMMAND} -E echo "kodi-addons-package is disabled. Reconfigure with -DKODI_SUPERBUILD_ADDONS=ON."
+    COMMENT "Add-on package target is disabled")
+endif()

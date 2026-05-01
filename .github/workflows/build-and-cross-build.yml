@@ -85,6 +85,52 @@ jobs:
         run: |
           cmake --build build-linux-superbuild --target kodi-core --parallel 2
 
+  linux-superbuild-with-addons:
+    name: Linux Superbuild + Add-ons (Staged)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore linux addon superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-linux-superbuild-addons/depends
+            build-linux-superbuild-addons/kodi
+            build-linux-superbuild-addons/addons-build
+            build-linux-superbuild-addons/addons-work
+          key: ${{ runner.os }}-linux-superbuild-addons-v1
+          restore-keys: |
+            ${{ runner.os }}-linux-superbuild-addons-
+
+      - name: Configure top-level superbuild for linux with add-ons
+        run: |
+          cmake -S . -B build-linux-superbuild-addons -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_SUPERBUILD_ADDONS=ON \
+            -DKODI_DEPENDS_HOST=x86_64-linux-gnu \
+            -DKODI_DEPENDS_TOOLCHAIN=/usr \
+            -DKODI_DEPENDS_RENDER_SYSTEM=gl \
+            -DKODI_ADDONS_TO_BUILD=pvr.iptvsimple \
+            -DKODI_ADDONS_BUILD_TARGET=all
+
+      - name: Build Kodi and staged add-ons via superbuild
+        run: |
+          cmake --build build-linux-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Upload staged add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-superbuild-addons-artifacts
+          path: |
+            build-linux-superbuild-addons/addons
+            build-linux-superbuild-addons/addons-build/.success
+            build-linux-superbuild-addons/addons-build/.failure
+          if-no-files-found: ignore
+
   macos-build:
     name: macOS Build
     runs-on: macos-14
