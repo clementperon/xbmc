@@ -229,19 +229,26 @@ you wish to build during the Xcode project generation step
 
 Generate Xcode project to build specific add-ons:
 ```sh
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='audioencoder.flac pvr.vdr.vnsi audiodecoder.snesapu'"
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='audioencoder.flac pvr.vdr.vnsi audiodecoder.snesapu'
 ```
 
 Generate Xcode project to build a specific group of add-ons:
 ```sh
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='pvr.*'"
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='pvr.*'
 ```
 
 For additional information on regular expression usage for ADDONS_TO_BUILD, view ADDONS_TO_BUILD section located at [Kodi add-ons CMake based buildsystem](../cmake/addons/README.md)
 
 Generate Xcode project to build all add-ons automatically:
 ```sh
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON"
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON
 ```
 
 > [!TIP]
@@ -273,7 +280,8 @@ mkdir $HOME/kodi-build
 ```
 Generate Xcode project as per configure command in **[Configure and build tools and dependencies](#4-configure-and-build-tools-and-dependencies)**:
 ```
-make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi-build
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake
 ```
 
 > [!TIP]

@@ -218,7 +218,8 @@ Before you can build Kodi, the project has to be generated with CMake. CMake is 
 
 Generate project for webOS:
 ```
-make -C tools/depends/target/cmakebuildsys
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake
 ```
 
 > [!TIP]
@@ -229,8 +230,10 @@ Additional cmake arguments can be supplied via the CMAKE_EXTRA_ARGUMENTS command
 
 An example of extra arguments to remove dependencies dbus, CEC and pipewire from the build:
 ````
-make -C tools/depends/target/cmakebuildsys BUILD_DIR=/media/developer/apps/usr/palm/applications/org.xbmc.kodi \
-	CMAKE_EXTRA_ARGUMENTS="-DCORE_PLATFORM_NAME=webos -DENABLE_DBUS=OFF -DENABLE_CEC=OFF -DENABLE_PIPEWIRE=OFF -DHAVE_LINUX_UDMABUF=OFF"
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S . -B /media/developer/apps/usr/palm/applications/org.xbmc.kodi \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DCORE_PLATFORM_NAME=webos -DENABLE_DBUS=OFF -DENABLE_CEC=OFF -DENABLE_PIPEWIRE=OFF -DHAVE_LINUX_UDMABUF=OFF
 ````
 
 ## 7.2. Add Binary Addons to Project

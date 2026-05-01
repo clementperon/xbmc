@@ -3,6 +3,12 @@ if(WIN32)
   cmake_minimum_required(VERSION 3.30.6)
 endif()
 
+option(KODI_SUPERBUILD_DEPENDS "Use top-level CMake superbuild to configure/build tools/depends before Kodi" OFF)
+if(KODI_SUPERBUILD_DEPENDS)
+  include("${CMAKE_SOURCE_DIR}/cmake/depends/Superbuild.cmake")
+  return()
+endif()
+
 project(kodi LANGUAGES CXX C ASM)
 
 if(POLICY CMP0069)

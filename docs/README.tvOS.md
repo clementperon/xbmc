@@ -210,7 +210,8 @@ mkdir $HOME/kodi-build
 
 Generate Xcode project for TVOS:
 ```
-make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi-build
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake
 ```
 
 > [!TIP]
@@ -221,7 +222,11 @@ Additional cmake arguments can be supplied via the CMAKE_EXTRA_ARGUMENTS command
 
 An example to set signing settings in xcode project:
 ````
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DPLATFORM_BUNDLE_IDENTIFIER='tv.kodi.kodi' -DCODE_SIGN_IDENTITY='iPhone Developer: *** (**********)' -DPROVISIONING_PROFILE_APP='tv.kodi.kodi' -DPROVISIONING_PROFILE_TOPSHELF='tv.kodi.kodi.Topshelf'"
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DPLATFORM_BUNDLE_IDENTIFIER='tv.kodi.kodi' -DCODE_SIGN_IDENTITY='iPhone Developer: *** (**********)' \
+  -DPROVISIONING_PROFILE_APP='tv.kodi.kodi' -DPROVISIONING_PROFILE_TOPSHELF='tv.kodi.kodi.Topshelf'
 ````
 Available Signing arguments
 
@@ -241,18 +246,24 @@ Binary addons will be built as a dependency in the Xcode project. You can choose
 
 Generate Xcode project to build specific add-ons:
 ```
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='audioencoder.flac pvr.vdr.vnsi audiodecoder.snesapu'"
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='audioencoder.flac pvr.vdr.vnsi audiodecoder.snesapu'
 ```
 
 Generate Xcode project to build a specific group of add-ons:
 ```
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='pvr.*'"
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON -DADDONS_TO_BUILD='pvr.*'
 ```
 For additional information on regular expression usage for ADDONS_TO_BUILD, view ADDONS_TO_BUILD section located at [Kodi add-ons CMake based buildsystem](../cmake/addons/README.md)
 
 Generate Xcode project to build all add-ons automatically:
 ```
-make -C tools/depends/target/cmakebuildsys CMAKE_EXTRA_ARGUMENTS="-DENABLE_XCODE_ADDONBUILD=ON"
+cmake -S $HOME/kodi -B $HOME/kodi-build -G Xcode \
+  -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake \
+  -DENABLE_XCODE_ADDONBUILD=ON
 ```
 
 > [!TIP]

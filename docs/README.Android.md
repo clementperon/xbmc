@@ -289,15 +289,17 @@ For additional information on regular expression usage for ADDONS_TO_BUILD, view
 Configure CMake build:
 ```
 cd $HOME/kodi
-make -C tools/depends/target/cmakebuildsys
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake
 ```
 
 > [!TIP]
-> BUILD_DIR can be provided as an argument to cmakebuildsys. This allows you to provide an alternate build location. Change all paths onwards as required if BUILD_DIR option used.
+> Use `-B <build-dir>` to choose a different build directory.
 
 ```
 mkdir $HOME/kodi-build
-make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi-build
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' tools/depends/Makefile.include)
+cmake -S . -B $HOME/kodi-build -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_PREFIX/share/Toolchain.cmake
 ```
 
 Build Kodi:

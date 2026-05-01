@@ -33,6 +33,7 @@ ifeq ($(BUILD_DIR),)
 endif
 
 all:
+	@echo "cmakebuildsys compatibility wrapper: prefer 'cmake -S <src> -B <build>' directly."
 	mkdir -p $(BUILD_DIR)
 	cd $(BUILD_DIR); $(CMAKE) $(CMAKE_BUILD_ARGUMENTS) -DENABLE_INTERNAL_CROSSGUID=ON $(CMAKE_EXTRA_ARGUMENTS) $(CMAKE_SOURCE_DIR)
 

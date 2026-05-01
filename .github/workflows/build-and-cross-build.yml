@@ -1,0 +1,101 @@
+name: Build And Cross-Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  linux-build:
+    name: Linux Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        # Keep aligned with docs/README.Ubuntu.md and sonarqube workflow.
+        run: |
+          sudo apt update
+          sudo apt install -y debhelper autoconf automake autopoint gettext autotools-dev cmake curl gawk gcc gdc gperf libasound2-dev libass-dev libavahi-client-dev libavahi-common-dev libbluetooth-dev libbluray-dev libbz2-dev libcdio-dev libp8-platform-dev libcrossguid-dev libcurl4-openssl-dev libcwiid-dev libdbus-1-dev libdrm-dev libegl1-mesa-dev libenca-dev libexiv2-dev libflac-dev libfmt-dev libfontconfig-dev libfreetype6-dev libfribidi-dev libfstrcmp-dev libgcrypt-dev libgif-dev libgles2-mesa-dev libgl1-mesa-dev libglu1-mesa-dev libgnutls28-dev libgpg-error-dev libiso9660-dev libjpeg-dev liblcms2-dev libltdl-dev liblzo2-dev libmicrohttpd-dev libmariadb-dev libnfs-dev libogg-dev libpcre2-dev libplist-dev libpng-dev libpulse-dev libshairplay-dev libsmbclient-dev libspdlog-dev libsqlite3-dev libssl-dev libtag1-dev libtiff5-dev libtinyxml-dev libtinyxml2-dev libtool libudev-dev libunistring-dev libva-dev libvdpau-dev libvorbis-dev libxmu-dev libxrandr-dev libxslt1-dev libxt-dev lsb-release meson nasm ninja-build nlohmann-json3-dev python3-dev python3-pil python3-pip swig unzip uuid-dev zip zlib1g-dev
+          sudo apt install -y libcec-dev liblirc-dev libflatbuffers-dev
+          sudo apt install -y libglew-dev libwayland-dev libxkbcommon-dev waylandpp-dev wayland-protocols
+          sudo apt install -y libgbm-dev libinput-dev libsndio-dev libdisplay-info-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DAPP_RENDER_SYSTEM=gl \
+            -DENABLE_INTERNAL_FFMPEG=ON \
+            -DENABLE_TESTING=OFF
+
+      - name: Build
+        run: |
+          cmake --build build --parallel 2
+
+  wasm-cross-build:
+    name: WASM Cross-Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 5.0.6
+
+      - name: Install depends bootstrap requirements
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+
+      - name: Configure top-level superbuild for wasm
+        run: |
+          TOOLCHAIN_PATH=$(dirname "$(dirname "$(command -v emcc)")")
+          cmake -S . -B build-wasm -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_DEPENDS_HOST=wasm32-unknown-emscripten \
+            -DKODI_DEPENDS_TARGET_PLATFORM=wasm \
+            -DKODI_DEPENDS_TOOLCHAIN="$TOOLCHAIN_PATH"
+
+      - name: Build depends configure target
+        run: |
+          cmake --build build-wasm --target kodi-depends-configure --parallel 2
+
+  android-cross-build:
+    name: Android Cross-Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;28.2.13676358"
+
+      - name: Install depends bootstrap requirements
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+
+      - name: Configure top-level superbuild for android arm64
+        env:
+          ANDROID_NDK_VERSION: 28.2.13676358
+          ANDROID_NDK_API: "24"
+        run: |
+          cmake -S . -B build-android -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_DEPENDS_HOST=aarch64-linux-android \
+            -DKODI_DEPENDS_TARGET_PLATFORM=android \
+            -DKODI_DEPENDS_SDK_PATH="$ANDROID_HOME" \
+            -DKODI_DEPENDS_NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" \
+            -DKODI_DEPENDS_NDK_API="$ANDROID_NDK_API"
+
+      - name: Build depends configure target
+        run: |
+          cmake --build build-android --target kodi-depends-configure --parallel 2

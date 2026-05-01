@@ -2,4 +2,9 @@ WORKSPACE=${WORKSPACE:-$( cd $(dirname $0)/../../.. ; pwd -P )}
 XBMC_PLATFORM_DIR=android
 . $WORKSPACE/tools/buildsteps/defaultenv
 
-make -C $WORKSPACE/tools/depends/target/cmakebuildsys
+DEPENDS_PREFIX=$(awk -F= '/^PREFIX=/{print $2}' "$WORKSPACE/tools/depends/Makefile.include")
+mkdir -p "$WORKSPACE/build"
+cmake -S "$WORKSPACE" -B "$WORKSPACE/build" \
+  -DCMAKE_BUILD_TYPE="$Configuration" \
+  -DCMAKE_TOOLCHAIN_FILE="$DEPENDS_PREFIX/share/Toolchain.cmake" \
+  -DENABLE_INTERNAL_CROSSGUID=ON

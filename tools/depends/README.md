@@ -17,6 +17,19 @@ Some authors do silly things and only a `config.site` can correct the errors. Wa
 
 ## Usage Examples
 Paths below are examples. If you want to build Kodi, follow our **[build guides](../../docs/README.md)**.
+
+## Top-level CMake entrypoint (experimental)
+You can bootstrap `tools/depends` through top-level CMake using the superbuild mode:
+
+`cmake -S <kodi-source> -B <build-dir> -DKODI_SUPERBUILD_DEPENDS=ON -DKODI_DEPENDS_HOST=<host-triplet> [KODI_DEPENDS_* options]`
+
+Then build Kodi through the superbuild target:
+
+`cmake --build <build-dir> --target kodi-core`
+
+The legacy `tools/depends` configure/make flow remains supported and is still the
+canonical fallback while package recipes are migrated.
+
 ### All platforms
 `./bootstrap`
 ### Darwin
