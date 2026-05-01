@@ -264,56 +264,44 @@ platform_cc=gcc
 platform_cxx=g++
 
 case $host in
-  i*86-*-mingw*|i*86-*-msys*|i*86-*-cygwin*)
-    if test "x$use_cpu" = "xauto"; then
-      use_cpu="x86"
-    fi
+  *-*-mingw*|*-*-msys*|*-*-cygwin*)
     use_toolchain="${use_toolchain:-/usr}"
     platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
-    platform_cxxflags="$platform_cflags"
-    optimize_flags="-O2"
     platform_os="windows"
     meson_system="windows"
     target_platform="windows"
-    deps_dir="win32"
-    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
-      target_platform="windowsstore"
-      deps_dir="win10-win32"
-    fi
-  ;;
-  x86_64-*-mingw*|x86_64-*-msys*|x86_64-*-cygwin*)
-    if test "x$use_cpu" = "xauto"; then
-      use_cpu="x86_64"
-    fi
-    use_toolchain="${use_toolchain:-/usr}"
-    platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
-    platform_cxxflags="$platform_cflags"
     optimize_flags="-O2"
-    platform_os="windows"
-    meson_system="windows"
-    target_platform="windows"
-    deps_dir="x64"
+
+    case $host_cpu in
+      i*86)
+        if test "x$use_cpu" = "xauto"; then
+          use_cpu="x86"
+        fi
+        deps_dir="win32"
+      ;;
+      x86_64)
+        if test "x$use_cpu" = "xauto"; then
+          use_cpu="x86_64"
+        fi
+        deps_dir="x64"
+      ;;
+      aarch64|arm64)
+        if test "x$use_cpu" = "xauto"; then
+          use_cpu="arm64"
+        fi
+        deps_dir="arm64"
+        platform_cflags="${platform_cflags} -march=armv8-a"
+      ;;
+      *)
+        AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($host))
+      ;;
+    esac
+
     if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
       target_platform="windowsstore"
-      deps_dir="win10-x64"
+      deps_dir="win10-${deps_dir}"
     fi
-  ;;
-  aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*|arm64-*-mingw*|arm64-*-msys*|arm64-*-cygwin*)
-    if test "x$use_cpu" = "xauto"; then
-      use_cpu="arm64"
-    fi
-    use_toolchain="${use_toolchain:-/usr}"
-    platform_cflags="-mms-bitfields -mthreads -march=armv8-a -pipe -DWIN32 -D_WINDOWS"
     platform_cxxflags="$platform_cflags"
-    optimize_flags="-O2"
-    platform_os="windows"
-    meson_system="windows"
-    target_platform="windows"
-    deps_dir="arm64"
-    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
-      target_platform="windowsstore"
-      deps_dir="win10-arm64"
-    fi
   ;;
   *-*linux-android*)
     use_toolchain="${use_toolchain:-$use_ndk_path/toolchains/llvm/prebuilt/$android_toolchain_name}"
