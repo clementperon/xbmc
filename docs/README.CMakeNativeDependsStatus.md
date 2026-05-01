@@ -87,6 +87,26 @@ All options are passed to top-level CMake when `KODI_SUPERBUILD_DEPENDS=ON`:
     - `kodi-e2e` path for macOS superbuild
     - Initial add-on selection flow (`KODI_ADDONS_TO_BUILD=pvr.iptvsimple`)
 
+- `windows-build`
+  - Status: **required end-to-end lane exists (native Windows buildsteps)**
+  - What is validated:
+    - Desktop Windows x64 configure + build via Visual Studio generator
+    - BuildDependencies bootstrap through `tools/buildsteps/windows`
+    - Required representative add-on build (`pvr.iptvsimple`)
+    - Add-on build diagnostics publication (`.success`, `.failure`, `make-addons.error`)
+  - Notes:
+    - This lane currently follows the established native Windows script path, not `KODI_SUPERBUILD_DEPENDS`.
+
+- `windows-uwp-build`
+  - Status: **required end-to-end lane exists (native WindowsStore buildsteps)**
+  - What is validated:
+    - WindowsStore (UWP) x64 configure + build path
+    - UWP dependency bootstrap through `tools/buildsteps/windows/x64-uwp`
+    - Required representative UWP add-on build (`pvr.iptvsimple`)
+    - UWP/add-on artifact publication for CI diagnostics
+  - Notes:
+    - Uses the `x64-uwp` wrappers that call `vswhere.bat ... store` to initialize the UWP toolchain environment.
+
 - `macos-tvos-cross-build`
   - Status: **full end-to-end target configured (`kodi-core`)**
   - What is validated:
@@ -160,6 +180,11 @@ Remaining work:
   - Keep hardening cache reuse and failure diagnostics.
   - Expand add-on lane from representative add-ons to `KODI_ADDONS_TO_BUILD=all`.
   - Promote add-on lane from non-blocking to required once stable.
+
+- Windows lanes
+  - Decide whether to keep CI on native Windows buildstep scripts or add parity with top-level superbuild orchestration.
+  - Expand add-on coverage from representative builds (`pvr.iptvsimple`) to broader supported sets after runtime/perf validation.
+  - Evaluate whether desktop/UWP package artifact checks should become strict release gates or remain diagnostic CI outputs.
 
 - General
   - Add per-lane timeout/retry strategy to reduce flaky failures.
