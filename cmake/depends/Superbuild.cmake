@@ -115,6 +115,7 @@ foreach(_pkg IN LISTS _target_packages)
     NAME "kodi-depends-target-${_pkg}"
     PACKAGE "${_pkg}"
     PACKAGE_TYPE "target"
+    DEPENDS_TARGET "kodi-depends-native"
     EXTRA_DEPENDS "${_dep_targets}")
 endforeach()
 
