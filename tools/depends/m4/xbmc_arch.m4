@@ -39,7 +39,7 @@ esac
 
 # host detection and setup - this is the target arch
 case $host in
-  i*86-*-mingw*|i*86-*-msys*|i*86-*-cygwin*|x86_64-*-mingw*|x86_64-*-msys*|x86_64-*-cygwin*|aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*)
+  i*86-*-mingw*|i*86-*-msys*|i*86-*-cygwin*|x86_64-*-mingw*|x86_64-*-msys*|x86_64-*-cygwin*|aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*|arm64-*-mingw*|arm64-*-msys*|arm64-*-cygwin*)
      if test "$target_platform" = "windowsstore" ; then
         AC_SUBST(ARCH_DEFINES, "-DTARGET_WINDOWS -DTARGET_WINDOWS_STORE")
      else

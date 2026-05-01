@@ -298,7 +298,7 @@ case $host in
       deps_dir="win10-x64"
     fi
   ;;
-  aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*)
+  aarch64-*-mingw*|aarch64-*-msys*|aarch64-*-cygwin*|arm64-*-mingw*|arm64-*-msys*|arm64-*-cygwin*)
     if test "x$use_cpu" = "xauto"; then
       use_cpu="arm64"
     fi
