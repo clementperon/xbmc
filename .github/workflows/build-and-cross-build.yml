@@ -233,7 +233,7 @@ jobs:
       - name: Install depends bootstrap requirements
         run: |
           sudo apt update
-          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3 libcurl4-openssl-dev zlib1g-dev
 
       - name: Configure top-level superbuild for wasm
         run: |
@@ -276,7 +276,7 @@ jobs:
       - name: Install depends bootstrap requirements
         run: |
           sudo apt update
-          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3 libcurl4-openssl-dev zlib1g-dev
 
       - name: Configure top-level superbuild for wasm with add-ons
         run: |
@@ -332,7 +332,7 @@ jobs:
       - name: Install depends bootstrap requirements
         run: |
           sudo apt update
-          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3 libcurl4-openssl-dev zlib1g-dev
 
       - name: Configure top-level superbuild for android arm64
         env:
@@ -380,7 +380,7 @@ jobs:
       - name: Install depends bootstrap requirements
         run: |
           sudo apt update
-          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3 libcurl4-openssl-dev zlib1g-dev
 
       - name: Configure top-level superbuild for android arm64 with add-ons
         env:
