@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ${{ runner.os }}-linux-build-ccache-v1
+          key: ${{ runner.os }}-linux-build-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-build-ccache-
 
@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: ${{ runner.os }}-linux-build-dir-v1
+          key: ${{ runner.os }}-linux-build-dir-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-build-dir-
 
@@ -69,7 +69,7 @@ jobs:
           path: |
             build-linux-superbuild/depends
             build-linux-superbuild/kodi
-          key: ${{ runner.os }}-linux-superbuild-v1
+          key: ${{ runner.os }}-linux-superbuild-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-superbuild-
 
@@ -101,7 +101,7 @@ jobs:
             build-linux-superbuild-addons/kodi
             build-linux-superbuild-addons/addons-build
             build-linux-superbuild-addons/addons-work
-          key: ${{ runner.os }}-linux-superbuild-addons-v1
+          key: ${{ runner.os }}-linux-superbuild-addons-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-linux-superbuild-addons-
 
@@ -144,7 +144,7 @@ jobs:
           path: |
             build-macos-superbuild/depends
             build-macos-superbuild/kodi
-          key: ${{ runner.os }}-macos-superbuild-v1
+          key: ${{ runner.os }}-macos-superbuild-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-macos-superbuild-
 
@@ -182,7 +182,7 @@ jobs:
           path: |
             build-tvos-superbuild/depends
             build-tvos-superbuild/kodi
-          key: ${{ runner.os }}-tvos-superbuild-v1
+          key: ${{ runner.os }}-tvos-superbuild-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tvos-superbuild-
 
@@ -221,7 +221,7 @@ jobs:
           path: |
             build-wasm/depends
             build-wasm/kodi
-          key: ${{ runner.os }}-wasm-superbuild-v1
+          key: ${{ runner.os }}-wasm-superbuild-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-wasm-superbuild-
 
@@ -244,9 +244,66 @@ jobs:
             -DKODI_DEPENDS_TARGET_PLATFORM=wasm \
             -DKODI_DEPENDS_TOOLCHAIN="$TOOLCHAIN_PATH"
 
-      - name: Build depends configure target
+      - name: Build Kodi via superbuild
         run: |
-          cmake --build build-wasm --target kodi-depends-configure --parallel 2
+          cmake --build build-wasm --target kodi-core --parallel 2
+
+  wasm-superbuild-with-addons:
+    name: WASM Superbuild + Add-ons (Staged)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore wasm addon superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-wasm-addons/depends
+            build-wasm-addons/kodi
+            build-wasm-addons/addons-build
+            build-wasm-addons/addons-work
+          key: ${{ runner.os }}-wasm-superbuild-addons-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-superbuild-addons-
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 5.0.6
+
+      - name: Install depends bootstrap requirements
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+
+      - name: Configure top-level superbuild for wasm with add-ons
+        run: |
+          TOOLCHAIN_PATH=$(dirname "$(dirname "$(dirname "$(command -v emcc)")")")
+          cmake -S . -B build-wasm-addons -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_SUPERBUILD_ADDONS=ON \
+            -DKODI_DEPENDS_HOST=wasm32-unknown-emscripten \
+            -DKODI_DEPENDS_TARGET_PLATFORM=wasm \
+            -DKODI_DEPENDS_TOOLCHAIN="$TOOLCHAIN_PATH" \
+            -DKODI_ADDONS_TO_BUILD=pvr.iptvsimple \
+            -DKODI_ADDONS_PACKAGE_ZIP=OFF
+
+      - name: Build Kodi and staged add-ons via superbuild
+        run: |
+          cmake --build build-wasm-addons --target kodi-e2e --parallel 2
+
+      - name: Upload staged wasm add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-superbuild-addons-artifacts
+          path: |
+            build-wasm-addons/addons
+            build-wasm-addons/addons-build/.success
+            build-wasm-addons/addons-build/.failure
+          if-no-files-found: ignore
 
   android-cross-build:
     name: Android Cross-Build
@@ -261,7 +318,7 @@ jobs:
           path: |
             build-android/depends
             build-android/kodi
-          key: ${{ runner.os }}-android-superbuild-v1
+          key: ${{ runner.os }}-android-superbuild-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-android-superbuild-
 
@@ -289,6 +346,67 @@ jobs:
             -DKODI_DEPENDS_NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" \
             -DKODI_DEPENDS_NDK_API="$ANDROID_NDK_API"
 
-      - name: Build depends configure target
+      - name: Build Kodi via superbuild
         run: |
-          cmake --build build-android --target kodi-depends-configure --parallel 2
+          cmake --build build-android --target kodi-core --parallel 2
+
+  android-superbuild-with-addons:
+    name: Android Superbuild + Add-ons (Staged)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore android addon superbuild cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-android-addons/depends
+            build-android-addons/kodi
+            build-android-addons/addons-build
+            build-android-addons/addons-work
+          key: ${{ runner.os }}-android-superbuild-addons-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-android-superbuild-addons-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;28.2.13676358"
+
+      - name: Install depends bootstrap requirements
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf automake autopoint gettext autotools-dev cmake curl gawk libtool make ninja-build pkg-config python3
+
+      - name: Configure top-level superbuild for android arm64 with add-ons
+        env:
+          ANDROID_NDK_VERSION: 28.2.13676358
+          ANDROID_NDK_API: "24"
+        run: |
+          cmake -S . -B build-android-addons -G Ninja \
+            -DKODI_SUPERBUILD_DEPENDS=ON \
+            -DKODI_SUPERBUILD_ADDONS=ON \
+            -DKODI_DEPENDS_HOST=aarch64-linux-android \
+            -DKODI_DEPENDS_SDK_PATH="$ANDROID_HOME" \
+            -DKODI_DEPENDS_NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" \
+            -DKODI_DEPENDS_NDK_API="$ANDROID_NDK_API" \
+            -DKODI_ADDONS_TO_BUILD=pvr.iptvsimple
+
+      - name: Build Kodi and staged add-ons via superbuild
+        run: |
+          cmake --build build-android-addons --target kodi-e2e --parallel 2
+
+      - name: Upload staged android add-on artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-superbuild-addons-artifacts
+          path: |
+            build-android-addons/addons
+            build-android-addons/addons-build/.success
+            build-android-addons/addons-build/.failure
+          if-no-files-found: ignore

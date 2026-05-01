@@ -90,24 +90,36 @@ All options are passed to top-level CMake when `KODI_SUPERBUILD_DEPENDS=ON`:
     - Packaging/signing behavior.
 
 - `wasm-cross-build`
-  - Status: **smoke-level cross lane**
+  - Status: **staged full core lane (`kodi-core`)**
   - What is validated:
     - Emscripten setup
-    - Depends configure path (`kodi-depends-configure`)
-  - Recent fix applied:
-    - Emscripten toolchain path derivation adjusted to emsdk root expected by depends configure.
+    - Depends bootstrap + Kodi app target (`kodi-core`)
   - Not yet validated:
-    - Full `kodi-core` compile with wasm toolchain in CI.
+    - WASM-specific packaging artifact expectations.
+
+- `wasm-superbuild-with-addons`
+  - Status: **new staged lane (non-blocking)**
+  - What is validated:
+    - `kodi-e2e` path for wasm superbuild
+    - Initial add-on selection flow (`KODI_ADDONS_TO_BUILD=pvr.iptvsimple`)
+  - Notes:
+    - Binary add-ons are still disabled at startup in WASM runtime (`ADDONS_CONFIGURE_AT_STARTUP=OFF`), so this lane focuses on build-path validation.
 
 - `android-cross-build`
-  - Status: **smoke-level cross lane**
+  - Status: **staged full core lane (`kodi-core`)**
   - What is validated:
     - Android SDK/NDK setup
-    - Depends configure path (`kodi-depends-configure`)
-  - Recent fix applied:
-    - Removed unsupported platform override from superbuild configure arguments.
+    - Depends bootstrap + Kodi app target (`kodi-core`)
   - Not yet validated:
-    - Full `kodi-core` compile/package in CI.
+    - Packaging artifact publication policy for app outputs.
+
+- `android-superbuild-with-addons`
+  - Status: **new staged lane (non-blocking)**
+  - What is validated:
+    - `kodi-e2e` path for Android superbuild
+    - Initial add-on selection flow (`KODI_ADDONS_TO_BUILD=pvr.iptvsimple`)
+  - Notes:
+    - Lane is intentionally non-blocking while runtime/package integration stabilizes.
 
 ## What Is Still Needed For Full End-to-End
 
@@ -121,8 +133,8 @@ For each platform, "full end-to-end" means:
 Remaining work:
 
 - Cross lanes (`android`, `wasm`, `tvos`)
-  - Promote from `kodi-depends-configure` to `kodi-core` (possibly staged with non-blocking jobs first).
-  - After `kodi-core` is stable, stage `KODI_SUPERBUILD_ADDONS=ON` lane per platform.
+  - tvOS still needs promotion from `kodi-depends-configure` to `kodi-core`.
+  - Android/WASM now stage `kodi-core` and non-blocking `KODI_SUPERBUILD_ADDONS=ON` lanes.
   - Add resource/time controls (parallelism, cache sizing, selective artifact retention).
   - Add packaging step where supported:
     - Android: APK/AAB generation and artifact upload.
@@ -152,7 +164,7 @@ Remaining work:
 
 - Phase 2:
   - Expand Linux add-on lane from representative add-ons to `all`.
-  - Enable one cross lane at a time to build `kodi-core` (start with Android).
+  - Enable cross lanes to build `kodi-core` (Android and WASM staged, tvOS pending).
   - Mark new full cross lanes as non-blocking until stable.
 
 - Phase 3:
