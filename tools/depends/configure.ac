@@ -169,7 +169,7 @@ tool_dir=$build_cpu-$build_os-native
 cross_compiling="yes"
 
 case $build in
-  *-*-mingw*|*-*-msys*|*-*-cygwin*)
+  *mingw*|*msys*|*cygwin*)
     build_os="windows"
     if test "x$prefix" = "xNONE"; then
       prefix="/xbmc/project/BuildDependencies"
@@ -264,7 +264,7 @@ platform_cc=gcc
 platform_cxx=g++
 
 case $host in
-  *-*-mingw*|*-*-msys*|*-*-cygwin*)
+  *mingw*|*msys*|*cygwin*)
     use_toolchain="${use_toolchain:-/usr}"
     platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
     platform_os="windows"

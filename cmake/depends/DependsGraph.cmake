@@ -12,7 +12,7 @@ function(kodi_depends_get_native_packages out_var)
 
   set(_pkgs ${KODI_DEPENDS_NATIVE_BASE})
 
-  if(NOT KODI_DEPENDS_OS STREQUAL "osx")
+  if(NOT KODI_DEPENDS_OS STREQUAL "osx" AND NOT KODI_DEPENDS_OS STREQUAL "darwin_embedded")
     list(APPEND _pkgs ${KODI_DEPENDS_NATIVE_NOT_OSX})
   endif()
 
