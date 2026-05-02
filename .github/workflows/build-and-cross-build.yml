@@ -5,14 +5,14 @@ on:
   push:
 
 env:
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_DIR: .ccache
 
 jobs:
   linux-build:
     name: Linux Build
     runs-on: ubuntu-latest
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_DIR: .ccache
 
     steps:
       - uses: actions/checkout@v4

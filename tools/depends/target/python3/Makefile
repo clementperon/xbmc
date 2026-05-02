@@ -105,7 +105,13 @@ CONFIGURE=./configure --prefix=$(PREFIX) \
 
 # Use LIBS as some platforms require iconv/gettext to be late on the linker line.
 # Appending to LDFLAGS can put these link args too early, causing link failures.
-export LIBS=$(LINK_ICONV) -lintl
+# Keep -lintl before iconv for static linkers, and force -liconv when we build
+# libiconv in depends.
+PYTHON_ICONV_LIBS=$(LINK_ICONV)
+ifeq ($(NEED_LIBICONV),1)
+  PYTHON_ICONV_LIBS+= -liconv
+endif
+export LIBS=-lintl $(PYTHON_ICONV_LIBS)
 
 LIBDYLIB=$(PLATFORM)/libpython$(PYTHON_VERSION).a
 

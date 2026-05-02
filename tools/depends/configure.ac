@@ -271,42 +271,27 @@ fi
 case $host_case in
   *mingw*|*msys*|*cygwin*)
     use_toolchain="${use_toolchain:-/usr}"
-    platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
-    platform_os="windows"
-    meson_system="windows"
-    target_platform="windows"
-    optimize_flags="-O2"
 
     case $host_cpu in
       i*86)
         if test "x$use_cpu" = "xauto"; then
           use_cpu="x86"
         fi
-        deps_dir="win32"
       ;;
       x86_64)
         if test "x$use_cpu" = "xauto"; then
           use_cpu="x86_64"
         fi
-        deps_dir="x64"
       ;;
       aarch64|arm64)
         if test "x$use_cpu" = "xauto"; then
           use_cpu="arm64"
         fi
-        deps_dir="arm64"
-        platform_cflags="${platform_cflags} -march=armv8-a"
       ;;
       *)
         AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($use_host))
       ;;
     esac
-
-    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
-      target_platform="windowsstore"
-      deps_dir="win10-${deps_dir}"
-    fi
-    platform_cxxflags="$platform_cflags"
   ;;
   *-*linux-android*)
     use_toolchain="${use_toolchain:-$use_ndk_path/toolchains/llvm/prebuilt/$android_toolchain_name}"
@@ -404,7 +389,38 @@ case $host in
     CXXFLAGS=$(echo "$CXXFLAGS" | sed "s|$host_includes||")
 esac
 
-case $host in
+case $host_case in
+  *mingw*|*msys*|*cygwin*)
+    platform_cflags="-mms-bitfields -mthreads -pipe -DWIN32 -D_WINDOWS"
+    platform_ldflags=""
+    optimize_flags="-O2"
+    platform_os="windows"
+    meson_system="windows"
+    target_platform="windows"
+
+    case $host_cpu in
+      i*86)
+        deps_dir="win32"
+      ;;
+      x86_64)
+        deps_dir="x64"
+      ;;
+      aarch64|arm64)
+        deps_dir="arm64"
+        platform_cflags="${platform_cflags} -march=armv8-a"
+      ;;
+      *)
+        AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($use_host))
+      ;;
+    esac
+
+    if test "x$use_platform" = "xwindowsstore" || test "x$use_platform" = "xuwp"; then
+      target_platform="windowsstore"
+      deps_dir="win10-${deps_dir}"
+    fi
+
+    platform_cxxflags="$platform_cflags"
+  ;;
   *-*linux-android*)
     deps_dir="$use_host-$use_ndk_api-$build_type"
     platform_cflags="-DANDROID -fexceptions -funwind-tables -fstack-protector-strong -no-canonical-prefixes -fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64"
