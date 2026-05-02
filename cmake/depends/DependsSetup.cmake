@@ -66,6 +66,10 @@ set(KODI_ADDONS_EXTRA_CMAKE_ARGS "" CACHE STRING
     "Additional CMake arguments forwarded to cmake/addons")
 
 if(WIN32 AND KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL)
+  if(KODI_DEPENDS_SHELL_LOGIN_ARGS STREQUAL "-lc")
+    set(KODI_DEPENDS_SHELL_LOGIN_ARGS "--login -lc" CACHE STRING
+        "Arguments passed to KODI_DEPENDS_SHELL before command payload." FORCE)
+  endif()
   if(KODI_DEPENDS_PREFIX STREQUAL "${CMAKE_BINARY_DIR}/depends")
     set(KODI_DEPENDS_PREFIX "${CMAKE_SOURCE_DIR}/project/BuildDependencies" CACHE PATH
         "Depends install root passed to tools/depends --prefix" FORCE)

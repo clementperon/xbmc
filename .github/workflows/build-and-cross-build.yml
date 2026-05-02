@@ -126,6 +126,7 @@ jobs:
   linux-superbuild-with-addons:
     name: Linux Superbuild + Add-ons (Staged)
     runs-on: ubuntu-latest
+    if: false # temporarily disable add-ons build lanes
     continue-on-error: true
 
     steps:
@@ -257,6 +258,7 @@ jobs:
   macos-superbuild-with-addons:
     name: macOS Superbuild + Add-ons (Staged)
     runs-on: macos-14
+    if: false # temporarily disable add-ons build lanes
     continue-on-error: true
 
     steps:
@@ -376,6 +378,7 @@ jobs:
           cmake --build build-windows-x64 --config Release --parallel 2
 
       - name: Build representative windows add-on
+        if: false # temporarily disable add-ons build
         shell: cmd
         run: |
           tools\buildsteps\windows\x64\make-addons.bat package pvr.iptvsimple
@@ -439,6 +442,7 @@ jobs:
           cmake --build build-windows-uwp --config Release --parallel 2
 
       - name: Build representative windows uwp add-on
+        if: false # temporarily disable add-ons build
         shell: cmd
         run: |
           tools\buildsteps\windows\x64-uwp\make-addons.bat package pvr.iptvsimple
@@ -678,6 +682,7 @@ jobs:
   macos-tvos-superbuild-with-addons:
     name: macOS tvOS Superbuild + Add-ons (Staged)
     runs-on: macos-14
+    if: false # temporarily disable add-ons build lanes
     continue-on-error: true
 
     steps:
@@ -816,6 +821,7 @@ jobs:
   wasm-superbuild-with-addons:
     name: WASM Superbuild + Add-ons (Staged)
     runs-on: ubuntu-latest
+    if: false # temporarily disable add-ons build lanes
     continue-on-error: true
 
     steps:
@@ -960,6 +966,7 @@ jobs:
   android-superbuild-with-addons:
     name: Android Superbuild + Add-ons (Staged)
     runs-on: ubuntu-latest
+    if: false # temporarily disable add-ons build lanes
     continue-on-error: true
 
     steps:

@@ -287,6 +287,8 @@ case $host_case in
         if test "x$use_cpu" = "xauto"; then
           use_cpu="arm64"
         fi
+        platform_cc=clang
+        platform_cxx=clang++
       ;;
       *)
         AC_MSG_ERROR(unsupported windows host cpu ($host_cpu) for host ($use_host))

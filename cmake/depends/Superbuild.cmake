@@ -38,10 +38,9 @@ set(_depends_configure_stamp "${CMAKE_BINARY_DIR}/depends/.kodi_depends_configur
 string(REPLACE ";" " " _depends_configure_args_string "${KODI_DEPENDS_CONFIGURE_ARGS}")
 
 if(WIN32)
-  file(TO_CMAKE_PATH "${KODI_DEPENDS_SOURCE_DIR}" _depends_source_dir_msys)
-  kodi_depends_get_shell_command(_depends_bootstrap_cmd "cd \"${_depends_source_dir_msys}\" && ./bootstrap")
+  kodi_depends_get_shell_command(_depends_bootstrap_cmd "./bootstrap")
   kodi_depends_get_shell_command(_depends_configure_cmd
-                                 "cd \"${_depends_source_dir_msys}\" && ./configure ${_depends_configure_args_string}")
+                                 "./configure ${_depends_configure_args_string}")
 else()
   set(_depends_bootstrap_cmd ${CMAKE_COMMAND} -E chdir "${KODI_DEPENDS_SOURCE_DIR}" ./bootstrap)
   set(_depends_configure_cmd ${CMAKE_COMMAND} -E chdir "${KODI_DEPENDS_SOURCE_DIR}" ./configure ${KODI_DEPENDS_CONFIGURE_ARGS})
