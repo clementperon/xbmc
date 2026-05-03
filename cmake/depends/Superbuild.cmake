@@ -5,6 +5,7 @@ include(ExternalProject)
 include("${CMAKE_SOURCE_DIR}/cmake/depends/DependsSetup.cmake")
 include("${CMAKE_SOURCE_DIR}/cmake/depends/DependsGraph.cmake")
 include("${CMAKE_SOURCE_DIR}/cmake/depends/DependsRecipeHelpers.cmake")
+include("${CMAKE_SOURCE_DIR}/cmake/depends/DependsParity.cmake")
 
 if(WIN32 AND KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL)
   if(NOT KODI_DEPENDS_HOST)
@@ -85,6 +86,10 @@ kodi_depends_read_makefile_include("${_depends_makefile_include}")
 kodi_depends_get_native_packages(_native_packages)
 kodi_depends_get_target_packages(_target_packages)
 
+if(KODI_DEPENDS_VERIFY_LEGACY_GRAPH)
+  kodi_depends_verify_legacy_graph("${_native_packages}" "${_target_packages}")
+endif()
+
 foreach(_pkg IN LISTS _native_packages)
   kodi_depends_pair_dependencies("${KODI_DEPENDS_NATIVE_DEPENDENCY_PAIRS}" "${_pkg}" _pkg_deps)
   set(_dep_targets "")
@@ -132,7 +137,20 @@ endforeach()
 add_custom_target(kodi-depends)
 add_dependencies(kodi-depends kodi-depends-target)
 
-set(_depends_toolchain "${KODI_DEPENDS_PREFIX_RESOLVED}/share/Toolchain.cmake")
+if(KODI_DEPENDS_USE_GENERIC_TOOLCHAIN)
+  set(_depends_toolchain "${CMAKE_SOURCE_DIR}/cmake/toolchains/depends/KodiDependsToolchain.cmake")
+  set(_depends_toolchain_args
+    "-DDEPENDS_PATH=${KODI_DEPENDS_PREFIX_RESOLVED}"
+    "-DNATIVEPREFIX=${KODI_DEPENDS_NATIVEPREFIX_RESOLVED}"
+    "-DKODI_DEPENDS_OS=${KODI_DEPENDS_OS}"
+    "-DKODI_DEPENDS_CPU=${KODI_DEPENDS_CPU}"
+    "-DKODI_DEPENDS_TARGET_PLATFORM=${KODI_DEPENDS_TARGET_PLATFORM}"
+    "-DKODI_DEPENDS_RENDER_SYSTEM=${KODI_DEPENDS_RENDER_SYSTEM}"
+  )
+else()
+  set(_depends_toolchain "${KODI_DEPENDS_PREFIX_RESOLVED}/share/Toolchain.cmake")
+  set(_depends_toolchain_args "")
+endif()
 
 set(_kodi_cmake_args
   -DKODI_SUPERBUILD_DEPENDS=OFF
@@ -157,7 +175,9 @@ if(WIN32 AND KODI_SUPERBUILD_WINDOWS_EXPERIMENTAL)
     set(_kodi_generator_toolset "${CMAKE_GENERATOR_TOOLSET}")
   endif()
 else()
-  list(APPEND _kodi_cmake_args "-DCMAKE_TOOLCHAIN_FILE=${_depends_toolchain}")
+  list(APPEND _kodi_cmake_args
+       "-DCMAKE_TOOLCHAIN_FILE=${_depends_toolchain}"
+       ${_depends_toolchain_args})
 endif()
 if(CMAKE_BUILD_TYPE)
   list(APPEND _kodi_cmake_args "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
@@ -212,6 +232,7 @@ if(KODI_SUPERBUILD_ADDONS)
               -DKODI_DEPENDS_HOST=${KODI_DEPENDS_HOST}
               -DKODI_DEPENDS_RENDER_SYSTEM=${KODI_DEPENDS_RENDER_SYSTEM}
               -P "${CMAKE_SOURCE_DIR}/cmake/depends/EnsureLinuxAddonSystemLibs.cmake"
+      VERBATIM
       COMMENT "Preparing Linux system library links for add-on build")
     add_dependencies(kodi-addons-linux-system-libs kodi-depends)
     set(_kodi_addons_depends_target kodi-addons-linux-system-libs)
@@ -222,6 +243,7 @@ if(KODI_SUPERBUILD_ADDONS)
     -DBUILD_DIR=${_kodi_addons_build_dir}
     -DADDON_DEPENDS_PATH=${KODI_DEPENDS_PREFIX_RESOLVED}
     -DCMAKE_TOOLCHAIN_FILE=${_depends_toolchain}
+    ${_depends_toolchain_args}
     -DCMAKE_INSTALL_PREFIX=${_kodi_addons_install_prefix}
     -DADDONS_TO_BUILD=${KODI_ADDONS_TO_BUILD}
     -DPACKAGE_ZIP=${_kodi_addons_package_zip}
@@ -262,6 +284,7 @@ if(KODI_SUPERBUILD_ADDONS)
             -DKODI_ADDONS_RESULTS_DIR=${_kodi_addons_binary_dir}
             -P "${CMAKE_SOURCE_DIR}/cmake/depends/BuildAddons.cmake"
     DEPENDS kodi-addons
+    VERBATIM
     COMMENT "Packaging selected binary add-ons")
 
   add_dependencies(kodi-e2e kodi-addons kodi-addons-package)

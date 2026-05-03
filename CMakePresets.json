@@ -1,0 +1,103 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "superbuild-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "KODI_SUPERBUILD_DEPENDS": "ON"
+      }
+    },
+    {
+      "name": "macos-arm64-superbuild",
+      "inherits": "superbuild-base",
+      "displayName": "macOS arm64 Depends Superbuild",
+      "description": "Configure the top-level depends superbuild for native Apple Silicon macOS builds.",
+      "binaryDir": "${sourceDir}/build-macos-arm64-superbuild",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "KODI_DEPENDS_HOST": "aarch64-apple-darwin",
+        "KODI_DEPENDS_TARGET_PLATFORM": "macos"
+      }
+    },
+    {
+      "name": "macos-x86_64-superbuild",
+      "inherits": "superbuild-base",
+      "displayName": "macOS x86_64 Depends Superbuild",
+      "description": "Configure the top-level depends superbuild for native Intel macOS builds.",
+      "binaryDir": "${sourceDir}/build-macos-x86_64-superbuild",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "KODI_DEPENDS_HOST": "x86_64-apple-darwin",
+        "KODI_DEPENDS_TARGET_PLATFORM": "macos"
+      }
+    },
+    {
+      "name": "linux-x86_64-superbuild",
+      "inherits": "superbuild-base",
+      "displayName": "Linux x86_64 Depends Superbuild",
+      "description": "Configure the top-level depends superbuild for native Linux x86_64 builds.",
+      "binaryDir": "${sourceDir}/build-linux-x86_64-superbuild",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "KODI_DEPENDS_HOST": "x86_64-linux-gnu",
+        "KODI_DEPENDS_TOOLCHAIN": "/usr",
+        "KODI_DEPENDS_RENDER_SYSTEM": "gl"
+      }
+    },
+    {
+      "name": "linux-x86_64-superbuild-addons",
+      "inherits": "linux-x86_64-superbuild",
+      "displayName": "Linux x86_64 Depends Superbuild + Add-ons",
+      "binaryDir": "${sourceDir}/build-linux-x86_64-superbuild-addons",
+      "cacheVariables": {
+        "KODI_SUPERBUILD_ADDONS": "ON",
+        "KODI_ADDONS_TO_BUILD": "pvr.iptvsimple"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos-arm64-kodi-core",
+      "configurePreset": "macos-arm64-superbuild",
+      "targets": ["kodi-core"],
+      "jobs": 2
+    },
+    {
+      "name": "macos-x86_64-kodi-core",
+      "configurePreset": "macos-x86_64-superbuild",
+      "targets": ["kodi-core"],
+      "jobs": 2
+    },
+    {
+      "name": "linux-x86_64-kodi-core",
+      "configurePreset": "linux-x86_64-superbuild",
+      "targets": ["kodi-core"],
+      "jobs": 2
+    },
+    {
+      "name": "linux-x86_64-kodi-e2e",
+      "configurePreset": "linux-x86_64-superbuild-addons",
+      "targets": ["kodi-e2e"],
+      "jobs": 2
+    }
+  ]
+}

@@ -27,6 +27,12 @@ Then build Kodi through the superbuild target:
 
 `cmake --build <build-dir> --target kodi-core`
 
+For supported native hosts, the same flow can be started with CMake presets:
+
+`cmake --preset macos-arm64-superbuild`
+
+`cmake --build --preset macos-arm64-kodi-core`
+
 The legacy `tools/depends` configure/make flow remains supported and is still the
 canonical fallback while package recipes are migrated.
 

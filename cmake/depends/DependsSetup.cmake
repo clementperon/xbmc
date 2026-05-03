@@ -32,6 +32,10 @@ set(KODI_DEPENDS_NEED_LIBICONV "1" CACHE STRING
     "Set to 1 if target libiconv must be built")
 set(KODI_DEPENDS_EXTRA_CONFIGURE_ARGS "" CACHE STRING
     "Additional arguments forwarded to tools/depends configure")
+set(KODI_DEPENDS_VERIFY_LEGACY_GRAPH ON CACHE BOOL
+    "Verify CMake depends package inventory against the expanded tools/depends Makefiles")
+set(KODI_DEPENDS_USE_GENERIC_TOOLCHAIN OFF CACHE BOOL
+    "Use cmake/toolchains/depends/KodiDependsToolchain.cmake instead of the generated tools/depends toolchain")
 set(KODI_DEPENDS_SHELL "" CACHE FILEPATH
     "Optional shell executable used to run tools/depends commands (required on Windows).")
 set(KODI_DEPENDS_SHELL_LOGIN_ARGS "-lc" CACHE STRING
@@ -185,6 +189,9 @@ function(kodi_depends_read_makefile_include makefile_include_path)
   file(STRINGS "${makefile_include_path}" _os_line REGEX "^OS=" LIMIT_COUNT 1)
   file(STRINGS "${makefile_include_path}" _target_platform_line REGEX "^TARGET_PLATFORM=" LIMIT_COUNT 1)
   file(STRINGS "${makefile_include_path}" _cpu_line REGEX "^CPU=" LIMIT_COUNT 1)
+  file(STRINGS "${makefile_include_path}" _has_zlib_line REGEX "^HAS_ZLIB=" LIMIT_COUNT 1)
+  file(STRINGS "${makefile_include_path}" _need_libiconv_line REGEX "^NEED_LIBICONV=" LIMIT_COUNT 1)
+  file(STRINGS "${makefile_include_path}" _enable_gplv3_line REGEX "^ENABLE_GPLV3=" LIMIT_COUNT 1)
 
   string(REGEX REPLACE "^PREFIX=(.*)$" "\\1" KODI_DEPENDS_PREFIX_RESOLVED "${_prefix_line}")
   string(REGEX REPLACE "^NATIVEPREFIX=(.*)$" "\\1" KODI_DEPENDS_NATIVEPREFIX_RESOLVED "${_nativeprefix_line}")
@@ -192,6 +199,14 @@ function(kodi_depends_read_makefile_include makefile_include_path)
   string(REGEX REPLACE "^OS=(.*)$" "\\1" KODI_DEPENDS_OS "${_os_line}")
   string(REGEX REPLACE "^TARGET_PLATFORM=(.*)$" "\\1" KODI_DEPENDS_TARGET_PLATFORM "${_target_platform_line}")
   string(REGEX REPLACE "^CPU=(.*)$" "\\1" KODI_DEPENDS_CPU "${_cpu_line}")
+  string(REGEX REPLACE "^HAS_ZLIB=(.*)$" "\\1" KODI_DEPENDS_HAVE_ZLIB "${_has_zlib_line}")
+  string(REGEX REPLACE "^NEED_LIBICONV=(.*)$" "\\1" KODI_DEPENDS_NEED_LIBICONV "${_need_libiconv_line}")
+  string(REGEX REPLACE "^ENABLE_GPLV3=(.*)$" "\\1" _enable_gplv3 "${_enable_gplv3_line}")
+  if(_enable_gplv3 STREQUAL "yes")
+    set(KODI_DEPENDS_ENABLE_GPLV3 ON)
+  else()
+    set(KODI_DEPENDS_ENABLE_GPLV3 OFF)
+  endif()
 
   set(KODI_DEPENDS_PREFIX_RESOLVED "${KODI_DEPENDS_PREFIX_RESOLVED}" PARENT_SCOPE)
   set(KODI_DEPENDS_NATIVEPREFIX_RESOLVED "${KODI_DEPENDS_NATIVEPREFIX_RESOLVED}" PARENT_SCOPE)
@@ -199,4 +214,7 @@ function(kodi_depends_read_makefile_include makefile_include_path)
   set(KODI_DEPENDS_OS "${KODI_DEPENDS_OS}" PARENT_SCOPE)
   set(KODI_DEPENDS_TARGET_PLATFORM "${KODI_DEPENDS_TARGET_PLATFORM}" PARENT_SCOPE)
   set(KODI_DEPENDS_CPU "${KODI_DEPENDS_CPU}" PARENT_SCOPE)
+  set(KODI_DEPENDS_HAVE_ZLIB "${KODI_DEPENDS_HAVE_ZLIB}" PARENT_SCOPE)
+  set(KODI_DEPENDS_NEED_LIBICONV "${KODI_DEPENDS_NEED_LIBICONV}" PARENT_SCOPE)
+  set(KODI_DEPENDS_ENABLE_GPLV3 "${KODI_DEPENDS_ENABLE_GPLV3}" PARENT_SCOPE)
 endfunction()

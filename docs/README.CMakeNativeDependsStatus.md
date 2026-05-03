@@ -20,6 +20,29 @@ Scope:
 - `kodi-e2e`
   - New aggregate target: `kodi-core` + `kodi-addons` + `kodi-addons-package`.
 
+## New Presets
+
+The branch now includes `CMakePresets.json` entries for common native
+superbuild flows:
+
+- `macos-arm64-superbuild` / `macos-arm64-kodi-core`
+- `macos-x86_64-superbuild` / `macos-x86_64-kodi-core`
+- `linux-x86_64-superbuild` / `linux-x86_64-kodi-core`
+- `linux-x86_64-superbuild-addons` / `linux-x86_64-kodi-e2e`
+
+These presets are intended to become the stable developer entry point while CI
+continues to carry explicit commands for platform-specific bootstrap details.
+
+## New Graph/Toolchain Controls
+
+- `KODI_DEPENDS_VERIFY_LEGACY_GRAPH` (default: `ON`)
+  - Verifies the CMake package inventory against the expanded legacy
+    `tools/depends` Makefiles after configure metadata has been generated.
+- `KODI_DEPENDS_USE_GENERIC_TOOLCHAIN` (default: `OFF`)
+  - Lets the superbuild use `cmake/toolchains/depends/KodiDependsToolchain.cmake`
+    instead of the generated `tools/depends` toolchain. This is still an
+    opt-in migration path until platform parity is proven.
+
 ## New Superbuild Add-On Options
 
 All options are passed to top-level CMake when `KODI_SUPERBUILD_DEPENDS=ON`:
