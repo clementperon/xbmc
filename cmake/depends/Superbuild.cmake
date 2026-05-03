@@ -85,6 +85,7 @@ kodi_depends_read_makefile_include("${_depends_makefile_include}")
 
 kodi_depends_get_native_packages(_native_packages)
 kodi_depends_get_target_packages(_target_packages)
+set(_virtual_target_packages linux-system-gl-libs linux-system-x11-libs)
 
 if(KODI_DEPENDS_VERIFY_LEGACY_GRAPH)
   kodi_depends_verify_legacy_graph("${_native_packages}" "${_target_packages}")
@@ -115,12 +116,22 @@ foreach(_pkg IN LISTS _target_packages)
       list(APPEND _dep_targets "kodi-depends-native-${_dep}")
     endif()
   endforeach()
-  kodi_depends_add_make_target(
-    NAME "kodi-depends-target-${_pkg}"
-    PACKAGE "${_pkg}"
-    PACKAGE_TYPE "target"
-    DEPENDS_TARGET "kodi-depends-native"
-    EXTRA_DEPENDS "${_dep_targets}")
+  if(_pkg IN_LIST _virtual_target_packages)
+    add_custom_target("kodi-depends-target-${_pkg}"
+      COMMAND ${CMAKE_COMMAND} -E true
+      COMMENT "Skipping virtual depends package ${_pkg} (provided by host system)")
+    add_dependencies("kodi-depends-target-${_pkg}" kodi-depends-native)
+    if(_dep_targets)
+      add_dependencies("kodi-depends-target-${_pkg}" ${_dep_targets})
+    endif()
+  else()
+    kodi_depends_add_make_target(
+      NAME "kodi-depends-target-${_pkg}"
+      PACKAGE "${_pkg}"
+      PACKAGE_TYPE "target"
+      DEPENDS_TARGET "kodi-depends-native"
+      EXTRA_DEPENDS "${_dep_targets}")
+  endif()
 endforeach()
 
 add_custom_target(kodi-depends-native)
