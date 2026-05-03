@@ -101,6 +101,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Restore linux superbuild cache
         uses: actions/cache@v4
         with:
@@ -122,6 +125,10 @@ jobs:
       - name: Build Kodi via superbuild
         run: |
           cmake --build build-linux-superbuild --target kodi-core --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
@@ -158,6 +165,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Restore linux addon superbuild cache
         uses: actions/cache@v4
         with:
@@ -184,6 +194,10 @@ jobs:
       - name: Build Kodi and staged add-ons via superbuild
         run: |
           cmake --build build-linux-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Upload staged add-on artifacts
         if: always()
@@ -238,6 +252,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for macOS
         run: |
           HOST_ARCH=$(uname -m)
@@ -254,6 +271,10 @@ jobs:
       - name: Build Kodi via superbuild
         run: |
           cmake --build build-macos-superbuild --target kodi-core --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
@@ -301,6 +322,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for macOS with add-ons
         run: |
           HOST_ARCH=$(uname -m)
@@ -320,6 +344,10 @@ jobs:
       - name: Build Kodi and staged add-ons via superbuild
         run: |
           cmake --build build-macos-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Upload staged macOS add-on artifacts
         if: always()
@@ -661,6 +689,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for tvOS
         run: |
           HOST_ARCH=$(uname -m)
@@ -678,6 +709,10 @@ jobs:
       - name: Build Kodi via superbuild
         run: |
           cmake --build build-tvos-superbuild --target kodi-core --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
@@ -725,6 +760,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for tvOS with add-ons
         run: |
           HOST_ARCH=$(uname -m)
@@ -745,6 +783,10 @@ jobs:
       - name: Build Kodi and staged add-ons via superbuild
         run: |
           cmake --build build-tvos-superbuild-addons --target kodi-e2e --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Upload staged tvOS add-on artifacts
         if: always()
@@ -805,6 +847,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for wasm
         run: |
           TOOLCHAIN_PATH=$(dirname "$(dirname "$(dirname "$(command -v emcc)")")")
@@ -817,6 +862,10 @@ jobs:
       - name: Build Kodi via superbuild
         run: |
           cmake --build build-wasm --target kodi-core --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
@@ -870,6 +919,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for wasm with add-ons
         run: |
           TOOLCHAIN_PATH=$(dirname "$(dirname "$(dirname "$(command -v emcc)")")")
@@ -885,6 +937,10 @@ jobs:
       - name: Build Kodi and staged add-ons via superbuild
         run: |
           cmake --build build-wasm-addons --target kodi-e2e --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Upload staged wasm add-on artifacts
         if: always()
@@ -947,6 +1003,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for android arm64
         env:
           ANDROID_NDK_VERSION: 28.2.13676358
@@ -962,6 +1021,10 @@ jobs:
       - name: Build Kodi via superbuild
         run: |
           cmake --build build-android --target kodi-core --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
@@ -1017,6 +1080,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure top-level superbuild for android arm64 with add-ons
         env:
           ANDROID_NDK_VERSION: 28.2.13676358
@@ -1034,6 +1100,10 @@ jobs:
       - name: Build Kodi and staged add-ons via superbuild
         run: |
           cmake --build build-android-addons --target kodi-e2e --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Upload staged android add-on artifacts
         if: always()
