@@ -49,6 +49,9 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=2G
 
+      - name: Ccache stats (before build)
+        run: ccache --show-stats
+
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
@@ -60,6 +63,10 @@ jobs:
       - name: Build
         run: |
           cmake --build build --parallel 2
+
+      - name: Ccache stats (after build)
+        if: ${{ always() }}
+        run: ccache --show-stats
 
       - name: Save ccache
         if: ${{ always() && !cancelled() }}
