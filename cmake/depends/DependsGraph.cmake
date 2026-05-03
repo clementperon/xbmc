@@ -46,7 +46,7 @@ function(kodi_depends_get_target_packages out_var)
       set(_pkgs ${KODI_DEPENDS_TARGET_WINDOWS_MINIMAL})
     endif()
 
-    if(KODI_DEPENDS_HAVE_ZLIB STREQUAL "0")
+    if(NOT KODI_DEPENDS_HAVE_ZLIB STREQUAL "1")
       list(APPEND _pkgs ${KODI_DEPENDS_TARGET_ZLIB})
     endif()
     if(KODI_DEPENDS_NEED_LIBICONV STREQUAL "1")
@@ -89,7 +89,7 @@ function(kodi_depends_get_target_packages out_var)
     list(REMOVE_ITEM _pkgs ${KODI_DEPENDS_TARGET_WASM_EXCLUDE})
   endif()
 
-  if(KODI_DEPENDS_HAVE_ZLIB STREQUAL "0")
+  if(NOT KODI_DEPENDS_HAVE_ZLIB STREQUAL "1")
     list(APPEND _pkgs ${KODI_DEPENDS_TARGET_ZLIB})
   endif()
 
