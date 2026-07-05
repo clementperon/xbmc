@@ -1,7 +1,7 @@
 ![Kodi Logo](resources/banner_slim.png)
 
 # WebAssembly (WASM) build guide
-**This guide is a work in progress.** It currently documents only how to build Kodi's **tools and dependencies** for the `wasm32-unknown-emscripten` target. Building the Kodi application itself and binary add-ons for WASM is not yet supported and will be documented once the respective bring-up work lands.
+**This guide is a work in progress.** It documents how to build Kodi's **tools and dependencies**, how to configure and build the **Kodi application** itself with CMake, and how to run the resulting build in a browser, all for the `wasm32-unknown-emscripten` target. Binary add-ons for WASM are not yet supported and will be documented once the respective bring-up work lands.
 
 The guide is meant to cross-compile Kodi's dependencies for WebAssembly using **[Kodi's unified depends build system](../tools/depends/README.md)**. Please read it in full before you proceed to familiarize yourself with the build procedure.
 
@@ -15,9 +15,13 @@ This guide has been tested only on **macOS** with **Emscripten SDK 5.0.6**. Othe
 3. **[Get the source code](#3-get-the-source-code)**
 4. **[Build tools and dependencies](#4-build-tools-and-dependencies)**
   4.1. **[Advanced Configure Options](#41-advanced-configure-options)**
-5. **[Running Kodi in the browser](#5-running-kodi-in-the-browser)**
-  5.1. **[Browser HTML shell (`kodi.html`)](#51-browser-html-shell-kodihtml)**
-  5.2. **[Dev server (`serve.py`)](#52-dev-server-servepy)**
+5. **[Configure and build Kodi with CMake](#5-configure-and-build-kodi-with-cmake)**
+  5.1. **[Generate the CMake project](#51-generate-the-cmake-project)**
+  5.2. **[Build Kodi](#52-build-kodi)**
+  5.3. **[Advanced CMake options](#53-advanced-cmake-options)**
+6. **[Running Kodi in the browser](#6-running-kodi-in-the-browser)**
+  6.1. **[Browser HTML shell (`kodi.html`)](#61-browser-html-shell-kodihtml)**
+  6.2. **[Dev server (`serve.py`)](#62-dev-server-servepy)**
 
 ## 1. Document conventions
 This guide assumes you are using `terminal`, also known as `console`, `command-line` or simply `cli`. Commands need to be run at the terminal, one at a time and in the provided order.
@@ -227,14 +231,85 @@ For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten 
 
 **[back to top](#table-of-contents)** | **[back to section top](#4-build-tools-and-dependencies)**
 
-## 5. Running Kodi in the browser
+## 5. Configure and build Kodi with CMake
+Once the depends prefix has been built (see **[4. Build tools and dependencies](#4-build-tools-and-dependencies)**), Kodi itself is configured and built like any other unified-depends target: CMake is invoked with the `Toolchain.cmake` generated into the depends prefix, which points CMake at the Emscripten compilers, sysroot, and installed dependencies.
+
+> [!NOTE]
+> The Emscripten environment must still be active in the shell you use to generate and build the project (see **[2.2. Activate the Emscripten environment](#22-activate-the-emscripten-environment)**), matching the emcc/em++ used when the depends prefix was configured in step 4.
+
+### 5.1. Generate the CMake project
+Change to the root of your Kodi checkout:
+```
+cd $HOME/kodi
+```
+
+Generate the project with the `cmakebuildsys` helper target. This calls the CMake that was built as part of the dependencies, passing it the generated `Toolchain.cmake`:
+```
+make -C tools/depends/target/cmakebuildsys
+```
+
+> [!TIP]
+> `BUILD_DIR` can be omitted, in which case the project is generated in `$HOME/kodi/build`. Change all relevant paths in the rest of this guide if you omit it.
+
+Additional CMake arguments can be supplied via the `CMAKE_EXTRA_ARGUMENTS` command line variable. For example, to generate a Debug build in a custom directory:
+```
+make -C tools/depends/target/cmakebuildsys \
+  BUILD_DIR=$HOME/kodi-wasm-build \
+  CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Debug"
+```
+
+> [!NOTE]
+> `CMAKE_BUILD_TYPE` defaults to `Release` (or `Debug` if the depends prefix was configured with `--enable-debug=yes`). See `cmake/scripts/wasm/ArchSetup.cmake` for how `Debug` changes the Emscripten link flags (source maps, `SAFE_HEAP`, extra assertions, …).
+
+### 5.2. Build Kodi
+Build from the generated project directory (`$HOME/kodi/build` unless you set `BUILD_DIR` above):
+```
+cd $HOME/kodi/build
+make -j$(getconf _NPROCESSORS_ONLN)
+```
+
+A successful build produces `kodi.js`, `kodi.wasm`, and `kodi.data` (plus `libkodi.a`) in the build directory. These are the artifacts used in **[6. Running Kodi in the browser](#6-running-kodi-in-the-browser)**.
+
+> [!WARNING]
+> The WASM port is still under active bring-up (see **[Known Incomplete Areas](#known-incomplete-areas)**). If the build fails, make sure the depends build in step 4 completed successfully and that the Emscripten SDK version matches the one used to configure the depends prefix.
+
+### 5.3. Advanced CMake options
+
+Besides the standard Kodi CMake options (see the main **[CMake build system README](../cmake/README.md)**), the following are specific to, or notable for, the WASM platform:
+
+```
+-DCMAKE_BUILD_TYPE=<Release|Debug>
+```
+  `Debug` enables DWARF symbols, source maps, `SAFE_HEAP`, and extra Emscripten runtime assertions; `Release` leaves optimization to Emscripten/CMake defaults.
+
+```
+-DENABLE_WASM_PROFILING=<ON|OFF>
+```
+  enable Emscripten's `--profiling` flag for readable function names in the browser's CPU profiler (default `OFF`).
+
+```
+-DWITH_ARCH=<arch>
+```
+  override the target arch triple (default `wasm32-unknown-emscripten`).
+
+```
+-DWITH_CPU=<cpu>
+```
+  override the target CPU (default `wasm32`).
+
+> [!NOTE]
+> A number of options are forced off for WASM regardless of what you pass on the command line, since they don't apply to a browser target: `ENABLE_UPNP`, `ENABLE_PYTHON`, `ENABLE_TESTING`, `ADDONS_CONFIGURE_AT_STARTUP`, `ENABLE_OPTICAL`, `ENABLE_DVDCSS`, `ENABLE_AIRTUNES`, and `ENABLE_EVENTCLIENTS`. See `cmake/scripts/wasm/ArchSetup.cmake` for the full list.
+
+**[back to top](#table-of-contents)** | **[back to section top](#5-configure-and-build-kodi-with-cmake)**
+
+## 6. Running Kodi in the browser
 
 Once a WASM CMake build has produced `kodi.js`, `kodi.wasm`, and `kodi.data`, you can load Kodi in a desktop browser with the HTML shell and the small Python dev server in `tools/wasm/`.
 
 > [!NOTE]
-> Do not open the HTML file directly (`file://…`). Browsers require a real HTTP origin with specific response headers for pthreads, `SharedArrayBuffer`, and the Audio Worklet path (see **[5.2. Dev server](#52-dev-server-servepy)**).
+> Do not open the HTML file directly (`file://…`). Browsers require a real HTTP origin with specific response headers for pthreads, `SharedArrayBuffer`, and the Audio Worklet path (see **[6.2. Dev server](#62-dev-server-servepy)**).
 
-### 5.1. Browser HTML shell (`kodi.html`)
+### 6.1. Browser HTML shell (`kodi.html`)
 
 The browser launcher lives at `tools/wasm/kodi.html`. It is **not** the same file as `tools/wasm/tizen/index.html` — that minimal page is copied into the Tizen package by the `package_tizen` CMake target (see **[Tizen Packaging Staging](#tizen-packaging-staging)**).
 
@@ -254,7 +329,7 @@ cp $HOME/kodi/tools/wasm/kodi.html .
 
 `<build-dir>` is whatever CMake build directory you use (for example `build-wasm`). All of `kodi.html`, `kodi.js`, `kodi.wasm`, and `kodi.data` must be served from the same directory.
 
-### 5.2. Dev server (`serve.py`)
+### 6.2. Dev server (`serve.py`)
 
 `tools/wasm/serve.py` is a minimal static file server tuned for local WASM development. Run it **from the directory that contains the build artifacts and `kodi.html`**:
 
@@ -283,7 +358,7 @@ The server does two things a plain `python3 -m http.server` does not:
 > [!WARNING]
 > The proxy is intended for local development only. Do not expose `serve.py` on an untrusted network without understanding that any client can ask it to fetch arbitrary URLs.
 
-**[back to top](#table-of-contents)** | **[back to section top](#5-running-kodi-in-the-browser)**
+**[back to top](#table-of-contents)** | **[back to section top](#6-running-kodi-in-the-browser)**
 
 ## Audio Worklet Notes
 
