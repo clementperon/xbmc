@@ -106,6 +106,7 @@ foreach(_dir addons media system userdata)
 endforeach()
 
 set(ENABLE_UPNP OFF CACHE BOOL "UPnP not available in browser" FORCE)
+set(ENABLE_PYTHON OFF CACHE BOOL "Python scripting not needed for WASM browser build" FORCE)
 set(ENABLE_TESTING OFF CACHE BOOL "Tests do not run in browser" FORCE)
 set(ADDONS_CONFIGURE_AT_STARTUP OFF CACHE BOOL "Binary addons not dynamically loaded in WASM" FORCE)
 set(ENABLE_OPTICAL OFF CACHE BOOL "No optical drives in browser" FORCE)

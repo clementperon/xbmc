@@ -15,6 +15,9 @@ This guide has been tested only on **macOS** with **Emscripten SDK 5.0.6**. Othe
 3. **[Get the source code](#3-get-the-source-code)**
 4. **[Build tools and dependencies](#4-build-tools-and-dependencies)**
   4.1. **[Advanced Configure Options](#41-advanced-configure-options)**
+5. **[Running Kodi in the browser](#5-running-kodi-in-the-browser)**
+  5.1. **[Browser HTML shell (`kodi.html`)](#51-browser-html-shell-kodihtml)**
+  5.2. **[Dev server (`serve.py`)](#52-dev-server-servepy)**
 
 ## 1. Document conventions
 This guide assumes you are using `terminal`, also known as `console`, `command-line` or simply `cli`. Commands need to be run at the terminal, one at a time and in the provided order.
@@ -223,6 +226,64 @@ $HOME/kodi-wasm-depends/wasm32-unknown-emscripten-release/
 For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten SDK environment. No WASM-only configure switches are required beyond `--host=wasm32-unknown-emscripten` and `--with-platform=wasm`.
 
 **[back to top](#table-of-contents)** | **[back to section top](#4-build-tools-and-dependencies)**
+
+## 5. Running Kodi in the browser
+
+Once a WASM CMake build has produced `kodi.js`, `kodi.wasm`, and `kodi.data`, you can load Kodi in a desktop browser with the HTML shell and the small Python dev server in `tools/wasm/`.
+
+> [!NOTE]
+> Do not open the HTML file directly (`file://…`). Browsers require a real HTTP origin with specific response headers for pthreads, `SharedArrayBuffer`, and the Audio Worklet path (see **[5.2. Dev server](#52-dev-server-servepy)**).
+
+### 5.1. Browser HTML shell (`kodi.html`)
+
+The browser launcher lives at `tools/wasm/kodi.html`. It is **not** the same file as `tools/wasm/tizen/index.html` — that minimal page is copied into the Tizen package by the `package_tizen` CMake target (see **[Tizen Packaging Staging](#tizen-packaging-staging)**).
+
+`kodi.html` provides:
+
+- A full-screen `<canvas id="canvas">` for Kodi's WebGL output.
+- A loading splash with download / startup progress parsed from Emscripten's `Module.setStatus`.
+- The Emscripten `Module` object (`canvas`, `setStatus`, `onRuntimeInitialized`, …) that boots `kodi.js`.
+- Tizen-style Back-key handling (harmless on desktop; needed on Samsung TVs).
+
+Copy it next to the build artifacts (same directory as `kodi.js`):
+
+```
+cd <build-dir>
+cp $HOME/kodi/tools/wasm/kodi.html .
+```
+
+`<build-dir>` is whatever CMake build directory you use (for example `build-wasm`). All of `kodi.html`, `kodi.js`, `kodi.wasm`, and `kodi.data` must be served from the same directory.
+
+### 5.2. Dev server (`serve.py`)
+
+`tools/wasm/serve.py` is a minimal static file server tuned for local WASM development. Run it **from the directory that contains the build artifacts and `kodi.html`**:
+
+```
+cd <build-dir>
+python3 $HOME/kodi/tools/wasm/serve.py
+```
+
+Then open **http://127.0.0.1:8080/kodi.html** in a Chromium-based browser (Chrome, Edge, …).
+
+Optional arguments:
+
+```
+python3 $HOME/kodi/tools/wasm/serve.py 9000              # listen on port 9000
+python3 $HOME/kodi/tools/wasm/serve.py 0.0.0.0:8080      # reachable on the LAN
+```
+
+The server does two things a plain `python3 -m http.server` does not:
+
+1. **COOP / COEP headers** — every response includes `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (plus `Cross-Origin-Resource-Policy: same-origin`). These are required for Emscripten pthreads and `SharedArrayBuffer`.
+2. **Same-origin HTTP proxy** — `GET /proxy?u=<url-encoded>` forwards http(s) requests server-side so Kodi can reach remote media URLs that do not send CORS headers. The wasm preload script (`xbmc/platform/wasm/kodi_pre.js`) rewrites cross-origin XHR/fetch to this endpoint by default (`Module.kodiHttpProxy = '/proxy'`).
+
+> [!TIP]
+> Click or press a key on the page before expecting audio — browsers require a user gesture to resume the Web Audio context (see **[Audio Worklet Notes](#audio-worklet-notes)** below).
+
+> [!WARNING]
+> The proxy is intended for local development only. Do not expose `serve.py` on an untrusted network without understanding that any client can ask it to fetch arbitrary URLs.
+
+**[back to top](#table-of-contents)** | **[back to section top](#5-running-kodi-in-the-browser)**
 
 ## Audio Worklet Notes
 
