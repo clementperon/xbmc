@@ -112,7 +112,7 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │   PresentRenderImpl(rendered):                                   │
 │     1. glFlush()                                                 │
 │     2. const bm = offCanvas.transferToImageBitmap()              │
-│     3. postMessage({cmd:'callHandler',                           │
+│     3. postMessage({cmd:CMD_CALL_HANDLER,                        │
 │                     handler:'onKodiFrame',                       │
 │                     args:[bm]}, [bm])                            │
 │     4. emscripten_futex_wait(&vsyncCounter, last, 100ms)         │
@@ -157,13 +157,19 @@ cycle, `PresentRenderImpl` does four things:
    OffscreenCanvas's drawing buffer is reset to transparent black by
    this call (standard WebGL "`preserveDrawingBuffer: false`" rules);
    that's fine because Kodi redraws every pass.
-3. **`postMessage({cmd: 'callHandler', handler: 'onKodiFrame',
+3. **`postMessage({cmd: CMD_CALL_HANDLER, handler: 'onKodiFrame',
    args: [bitmap]}, [bitmap])`.** Transfers the bitmap to the main
    thread. Emscripten's libpthread main-thread `onmessage` handler
-   recognises `cmd === 'callHandler'` as a documented dispatch point
-   and invokes `Module['onKodiFrame'](bitmap)`. The bitmap is a
-   transferable object, so ownership moves from the worker to the
-   main thread with no copy.
+   dispatches this to `Module['onKodiFrame'](bitmap)` when it sees its
+   internal `CMD_CALL_HANDLER` command id. This is **not** a public
+   API: `CMD_CALL_HANDLER` used to be the string `'callHandler'` and
+   is now a numeric constant (`9` as of the Emscripten version this
+   tree currently builds against — see `src/lib/libpthread.js`). It
+   must be re-verified against the installed toolchain on every
+   Emscripten upgrade; a mismatch fails silently ("worker sent an
+   unknown command N" in the console, canvas never updates) rather
+   than with a build error. The bitmap is a transferable object, so
+   ownership moves from the worker to the main thread with no copy.
 4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, 100 ms)`.** If
    the vsync counter hasn't advanced since the previous frame, the
    render thread blocks until the next `requestAnimationFrame` fires.
@@ -361,6 +367,7 @@ These flags are required for the design described above and are set in
 | `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.4). |
 | `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2`, `-sFULL_ES3=1` | Kodi's GLES renderer targets GLES 3 on other platforms. |
 | `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread setup of `ImageBitmapRenderingContext` and `Module.onKodiFrame` before the Emscripten runtime boots. |
+| `-sGROWABLE_ARRAYBUFFERS=0` | Emscripten ≥ auto-detects a browser-native growable/resizable `ArrayBuffer` for the Wasm heap when `ALLOW_MEMORY_GROWTH` is set (`GROWABLE_ARRAYBUFFERS` defaults to `1`, "auto"). WebGL2 rejects `bufferSubData`/`bufferData`/`texImage2D` calls backed by a resizable `ArrayBuffer` (`TypeError: The provided ArrayBuffer value must not be resizable`), which throws inside the render pthread's GL calls, kills that thread, and every subsequent DOM event (key/mouse/resize) that tries to proxy to it then aborts with `Assertion failed: false && "emscripten_proxy_async failed"` since its mailbox is closed. Forcing `0` keeps the old copy-on-grow plain-`ArrayBuffer` behavior. |
 
 These flags are deliberately **not** set:
 
@@ -388,7 +395,7 @@ Relevant Emscripten source, for reference:
 
 | Concern | File |
 |---|---|
-| pthread main-thread `onmessage` (handles `callHandler`) | `src/lib/libpthread.js` |
+| pthread main-thread `onmessage` (handles `CMD_CALL_HANDLER`) | `src/lib/libpthread.js` |
 | `crt1_proxy_main` — spawns the pthread that runs `main()` | `system/lib/libc/crt1_proxy_main.c` |
 | `emscripten_webgl_commit_frame` — no-op on modern browsers | `src/lib/libhtml5_webgl.js` |
 

@@ -4,7 +4,9 @@
 // Main-thread half of Kodi's WASM rendering pipeline: attaches an
 // ImageBitmapRenderingContext to <canvas id="canvas"> and installs
 // Module.onKodiFrame so the render pthread can deliver frames via
-// postMessage({cmd:'callHandler', ...}).  See docs/wasm/RENDERING.md.
+// postMessage({cmd:CMD_CALL_HANDLER, ...}) (see
+// WinSystemWasmGLESContext.cpp::PostFrameBitmap for why that's a numeric
+// id, not the string it used to be).  See docs/wasm/RENDERING.md.
 //
 // Also installs a same-origin HTTP proxy shim (see tools/wasm/serve.py).
 // Any cross-origin http(s) XHR/fetch issued from the wasm module is

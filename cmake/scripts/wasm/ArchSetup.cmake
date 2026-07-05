@@ -47,6 +47,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sINITIAL_MEMORY=512MB"
     "SHELL:-sMAXIMUM_MEMORY=4GB"
     "SHELL:-sALLOW_MEMORY_GROWTH=1"
+    # Force the classic "reallocate a plain ArrayBuffer on grow" path instead
+    # of a browser-native growable/resizable one (see docs/wasm/RENDERING.md §5).
+    "SHELL:-sGROWABLE_ARRAYBUFFERS=0"
     "SHELL:-sSTACK_SIZE=5MB"
     "SHELL:-sPROXY_TO_PTHREAD"
     "SHELL:-sMIN_WEBGL_VERSION=2"

@@ -150,7 +150,15 @@ void ResizeWorkerGLContext(int width, int height)
 }
 
 // Zero-copy frame handoff to the main thread.  Emscripten's main-thread
-// onmessage handler dispatches cmd:'callHandler' to Module[handler](...args).
+// onmessage handler (src/lib/libpthread.js) dispatches this to
+// Module[handler](...args) when it sees its internal CMD_CALL_HANDLER
+// command id. That id used to be the string 'callHandler'; as of the
+// Emscripten version this tree builds against it is the numeric constant
+// defined by `const CMD_CALL_HANDLER = 9;` in libpthread.js. There is no
+// public API for this — re-check that constant against the installed
+// emscripten's src/lib/libpthread.js after every toolchain upgrade (a
+// mismatch fails silently with "worker sent an unknown command N" in the
+// console and frames never reach onKodiFrame).
 void PostFrameBitmap()
 {
   EM_ASM({
@@ -161,7 +169,7 @@ void PostFrameBitmap()
         return;
       const bm = off.transferToImageBitmap();
       const msg = {};
-      msg.cmd = 'callHandler';
+      msg.cmd = 9; // CMD_CALL_HANDLER, see comment above.
       msg.handler = 'onKodiFrame';
       msg.args = [ bm ];
       postMessage(msg, [ bm ]);
