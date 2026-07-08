@@ -102,7 +102,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: kodi-macos-log
-          path: build/portable_data/temp/kodi.log
+          # process-output.log (driver-captured stdout/stderr) covers crashes early
+          # enough that Kodi's own kodi.log never got created.
+          path: |
+            build/portable_data/temp/kodi.log
+            build/portable_data/temp/process-output.log
           if-no-files-found: warn
 
       - name: Upload test results

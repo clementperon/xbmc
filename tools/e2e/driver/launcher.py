@@ -69,6 +69,7 @@ class KodiProcess:
         self.startup_timeout = startup_timeout
         self.process: subprocess.Popen | None = None
         self._app_root = _resolve_app_root(self.binary_path)
+        self._output_file = None
 
     @property
     def portable_data_dir(self) -> Path:
@@ -77,6 +78,16 @@ class KodiProcess:
     @property
     def log_path(self) -> Path:
         return self.portable_data_dir / "temp" / "kodi.log"
+
+    @property
+    def process_output_path(self) -> Path:
+        """Captured stdout/stderr of the Kodi process itself.
+
+        Kept separate from log_path: if Kodi crashes before its own file logger is up
+        (e.g. a dyld/library-load failure or an early abort()), kodi.log never gets
+        created at all, and this is the only place the failure reason is visible.
+        """
+        return self.portable_data_dir / "temp" / "process-output.log"
 
     def _seed_settings(self) -> None:
         userdata_dir = self.portable_data_dir / "userdata"
@@ -94,21 +105,31 @@ class KodiProcess:
         if extra_args:
             args.extend(extra_args)
 
+        # Redirect straight to a file rather than subprocess.PIPE: nothing drains a
+        # PIPE while we're polling for the port below, and a chatty process (--debug
+        # logging included) can fill that pipe's OS buffer and deadlock.
+        self.process_output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._output_file = self.process_output_path.open("w")
         self.process = subprocess.Popen(
             args,
-            stdout=subprocess.PIPE,
+            stdout=self._output_file,
             stderr=subprocess.STDOUT,
-            text=True,
         )
         self._wait_for_port()
+
+    def _read_process_output_tail(self, lines: int = 40) -> str:
+        if not self.process_output_path.exists():
+            return "(no process output captured)"
+        return "\n".join(self.process_output_path.read_text(errors="replace").splitlines()[-lines:])
 
     def _wait_for_port(self) -> None:
         deadline = time.monotonic() + self.startup_timeout
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(
-                    f"Kodi exited early (code {self.process.returncode}) while "
-                    "waiting for the webserver to start. Check the captured log."
+                    f"Kodi exited early (code {self.process.returncode}) while waiting "
+                    f"for the webserver to start. Captured output tail:\n"
+                    f"{self._read_process_output_tail()}"
                 )
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(1.0)
@@ -128,16 +149,17 @@ class KodiProcess:
         """
         assert self.process is not None, "start() was not called"
         try:
-            return self.process.wait(timeout=timeout)
+            returncode = self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            pass
+            self.process.send_signal(signal.SIGTERM)
+            try:
+                returncode = self.process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                returncode = self.process.wait(timeout=15)
 
-        self.process.send_signal(signal.SIGTERM)
-        try:
-            return self.process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            return self.process.wait(timeout=15)
+        self._close_output_file()
+        return returncode
 
     def read_log(self) -> str:
         if not self.log_path.exists():
@@ -148,3 +170,9 @@ class KodiProcess:
         if self.process is not None and self.process.poll() is None:
             self.process.kill()
             self.process.wait(timeout=15)
+        self._close_output_file()
+
+    def _close_output_file(self) -> None:
+        if self._output_file is not None:
+            self._output_file.close()
+            self._output_file = None
