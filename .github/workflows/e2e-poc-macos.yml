@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install ccache
         run: brew install ccache
@@ -43,16 +43,22 @@ jobs:
       # tools/depends output is the single biggest time cost in this workflow
       # (building ffmpeg and friends from scratch can take well over an hour).
       # It only needs to be rebuilt when the depends build system itself changes.
-      - name: Cache Kodi dependencies (tools/depends)
-        uses: actions/cache@v4
+      #
+      # Restore/save are split (rather than the combined actions/cache action) because
+      # its save step defaults to post-if: success() - a later step failing (e.g. Build
+      # Kodi) would silently skip saving, discarding a fully-built depends tree. Saving
+      # explicitly with if: always() keeps it even when a later step fails.
+      - name: Restore Kodi dependencies cache (tools/depends)
+        id: depends-cache
+        uses: actions/cache/restore@v6
         with:
           path: /Users/Shared/xbmc-depends
           key: macos-${{ runner.arch }}-depends-${{ hashFiles('tools/depends/**') }}
 
       # Secondary cache: speeds up rebuilding xbmc/ core sources across commits even
       # when tools/depends itself didn't change.
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: macos-${{ runner.arch }}-ccache-${{ github.sha }}
@@ -77,7 +83,7 @@ jobs:
         run: ccache -s || true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: "tools/e2e/uv.lock"
@@ -85,12 +91,15 @@ jobs:
       - name: Run E2E smoke test
         working-directory: tools/e2e
         env:
-          KODI_BINARY: ${{ github.workspace }}/build/kodi.bin
+          # macOS builds Kodi as a Kodi.app bundle (CMakeLists.txt MACOSX_BUNDLE), not a
+          # bare kodi.bin like Linux - see driver/launcher.py's _resolve_app_root for how
+          # the test driver locates portable_data relative to this.
+          KODI_BINARY: ${{ github.workspace }}/build/Kodi.app/Contents/MacOS/Kodi
         run: uv run pytest scenarios -v --junitxml=../../e2e-results.xml
 
       - name: Upload Kodi log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kodi-macos-log
           path: build/portable_data/temp/kodi.log
@@ -98,8 +107,24 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-results
           path: e2e-results.xml
           if-no-files-found: warn
+
+      # Skipped on an exact key hit: nothing changed, so re-uploading would just waste
+      # time. On a miss (including a partial/failed build), save whatever got built.
+      - name: Save Kodi dependencies cache (tools/depends)
+        if: always() && steps.depends-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /Users/Shared/xbmc-depends
+          key: macos-${{ runner.arch }}-depends-${{ hashFiles('tools/depends/**') }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: macos-${{ runner.arch }}-ccache-${{ github.sha }}

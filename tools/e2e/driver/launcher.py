@@ -1,11 +1,20 @@
 """Launches a Kodi binary with a disposable, pre-configured portable profile.
 
 Kodi's "-p"/"--portable" flag makes it read/write its configuration from a
-"portable_data" folder next to the executable instead of the platform's normal user
-config location (see xbmc/application/AppParams.h UserDirectoriesLocation::PORTABLE
+"portable_data" folder next to its resolved app root instead of the platform's normal
+user config location (see xbmc/application/AppParams.h UserDirectoriesLocation::PORTABLE
 and xbmc/settings/SettingsComponent.cpp). We use that to give each test run a fresh,
 disposable profile without touching any real Kodi installation, and pre-seed
 guisettings.xml so the JSON-RPC webserver is already enabled on first launch.
+
+"App root" is not always just the binary's parent directory: on macOS Kodi builds as
+a `Kodi.app` bundle (xbmc/Util.cpp's Darwin GetHomePath() resolves the executable at
+`Kodi.app/Contents/MacOS/Kodi` back up to the directory containing `Kodi.app`, since
+that's where an unpackaged from-source build tree keeps `system/`, `userdata/`, etc.
+- see CMakeLists.txt's MACOSX_BUNDLE handling and cmake/scripts/common/Macros.cmake's
+copy_file_to_buildtree, which both target CMAKE_BINARY_DIR directly). On Linux the
+binary already sits directly in that directory, so the two cases collapse to the same
+lookup.
 
 Only exercised on macOS/Linux (POSIX) so far; Windows would need a different
 termination fallback (no SIGTERM) if/when this is extended per docs/E2E-TESTING.md.
@@ -20,6 +29,19 @@ import time
 from pathlib import Path
 
 DEFAULT_WEBSERVER_PORT = 18080  # Non-default port so this never collides with a real Kodi instance.
+
+
+def _resolve_app_root(binary_path: Path) -> Path:
+    """Finds the directory holding Kodi's system/userdata/portable_data tree.
+
+    Usually the binary's own directory, except inside a macOS .app bundle
+    (.../Kodi.app/Contents/MacOS/Kodi), where it's the directory containing the bundle.
+    """
+    for parent in binary_path.parents:
+        if parent.suffix == ".app":
+            return parent.parent
+    return binary_path.parent
+
 
 _GUISETTINGS_TEMPLATE = """<settings>
   <setting id="services.webserver">true</setting>
@@ -46,10 +68,11 @@ class KodiProcess:
         self.port = port
         self.startup_timeout = startup_timeout
         self.process: subprocess.Popen | None = None
+        self._app_root = _resolve_app_root(self.binary_path)
 
     @property
     def portable_data_dir(self) -> Path:
-        return self.binary_path.parent / "portable_data"
+        return self._app_root / "portable_data"
 
     @property
     def log_path(self) -> Path:
