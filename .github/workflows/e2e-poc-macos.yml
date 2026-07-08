@@ -1,0 +1,106 @@
+name: E2E POC (macOS)
+
+# Proof-of-concept end-to-end smoke test for docs/E2E-TESTING.md.
+#
+# Builds Kodi from source on a GitHub-hosted macOS runner, launches it with a
+# disposable portable profile, confirms the JSON-RPC webserver responds to a ping,
+# asks it to quit cleanly, and checks the log for fatal errors. See
+# tools/e2e/README.md for what this does and does not cover.
+#
+# Intentionally manual-trigger-only for now: build time and reliability of building
+# Kodi from source on a hosted macOS runner haven't been proven out yet, so this isn't
+# wired into the required PR checks.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "tools/e2e/**"
+      - ".github/workflows/e2e-poc-macos.yml"
+
+concurrency:
+  group: e2e-poc-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-smoke:
+    # macos-14 is Apple Silicon (arm64). Bump deliberately, don't float on
+    # macos-latest, so cache keys and toolchain behavior stay predictable.
+    runs-on: macos-14
+    timeout-minutes: 180
+    env:
+      HOST_TRIPLET: aarch64-apple-darwin
+      CCACHE_DIR: /Users/runner/.cache/kodi-e2e-ccache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ccache
+        run: brew install ccache
+
+      # tools/depends output is the single biggest time cost in this workflow
+      # (building ffmpeg and friends from scratch can take well over an hour).
+      # It only needs to be rebuilt when the depends build system itself changes.
+      - name: Cache Kodi dependencies (tools/depends)
+        uses: actions/cache@v4
+        with:
+          path: /Users/Shared/xbmc-depends
+          key: macos-${{ runner.arch }}-depends-${{ hashFiles('tools/depends/**') }}
+
+      # Secondary cache: speeds up rebuilding xbmc/ core sources across commits even
+      # when tools/depends itself didn't change.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: macos-${{ runner.arch }}-ccache-${{ github.sha }}
+          restore-keys: |
+            macos-${{ runner.arch }}-ccache-
+
+      - name: Configure and build dependencies
+        working-directory: tools/depends
+        run: |
+          ./bootstrap
+          ./configure --host="${HOST_TRIPLET}" --with-platform=macos
+          make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Generate Kodi build system
+        run: make -C tools/depends/target/cmakebuildsys
+
+      - name: Build Kodi
+        run: make -j"$(sysctl -n hw.ncpu)" -C build
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s || true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "tools/e2e/uv.lock"
+
+      - name: Run E2E smoke test
+        working-directory: tools/e2e
+        env:
+          KODI_BINARY: ${{ github.workspace }}/build/kodi.bin
+        run: uv run pytest scenarios -v --junitxml=../../e2e-results.xml
+
+      - name: Upload Kodi log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-macos-log
+          path: build/portable_data/temp/kodi.log
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: e2e-results.xml
+          if-no-files-found: warn
