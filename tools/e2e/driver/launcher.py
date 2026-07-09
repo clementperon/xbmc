@@ -8,13 +8,11 @@ disposable profile without touching any real Kodi installation, and pre-seed
 guisettings.xml so the JSON-RPC webserver is already enabled on first launch.
 
 "App root" is not always just the binary's parent directory: on macOS Kodi builds as
-a `Kodi.app` bundle (xbmc/Util.cpp's Darwin GetHomePath() resolves the executable at
-`Kodi.app/Contents/MacOS/Kodi` back up to the directory containing `Kodi.app`, since
-that's where an unpackaged from-source build tree keeps `system/`, `userdata/`, etc.
-- see CMakeLists.txt's MACOSX_BUNDLE handling and cmake/scripts/common/Macros.cmake's
-copy_file_to_buildtree, which both target CMAKE_BINARY_DIR directly). On Linux the
-binary already sits directly in that directory, so the two cases collapse to the same
-lookup.
+a `Kodi.app` bundle, and its Darwin GetHomePath() (xbmc/Util.cpp) resolves the
+executable at `Kodi.app/Contents/MacOS/Kodi` to `Kodi.app/Contents/Resources/Kodi/`
+(confirmed empirically - addon paths in a real run's captured output land there, e.g.
+`Kodi.app/Contents/Resources/Kodi/portable_data/addons/...`), not the build tree root.
+On Linux the binary already sits directly next to system/userdata/etc.
 
 Only exercised on macOS/Linux (POSIX) so far; Windows would need a different
 termination fallback (no SIGTERM) if/when this is extended per docs/E2E-TESTING.md.
@@ -35,11 +33,13 @@ def _resolve_app_root(binary_path: Path) -> Path:
     """Finds the directory holding Kodi's system/userdata/portable_data tree.
 
     Usually the binary's own directory, except inside a macOS .app bundle
-    (.../Kodi.app/Contents/MacOS/Kodi), where it's the directory containing the bundle.
+    (.../Kodi.app/Contents/MacOS/Kodi), where it's Contents/Resources/<AppName>/
+    - binary_path.name is that AppName, since the bundle's executable is built with
+    OUTPUT_NAME set to it (CMakeLists.txt).
     """
     for parent in binary_path.parents:
         if parent.suffix == ".app":
-            return parent.parent
+            return parent / "Contents" / "Resources" / binary_path.name
     return binary_path.parent
 
 

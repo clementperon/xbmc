@@ -113,11 +113,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: kodi-macos-log
-          # process-output.log (driver-captured stdout/stderr) covers crashes early
-          # enough that Kodi's own kodi.log never got created.
+          # portable_data lives under the .app bundle's Resources/<AppName>, not next
+          # to the binary in Contents/MacOS - see driver/launcher.py's
+          # _resolve_app_root. process-output.log (driver-captured stdout/stderr)
+          # covers crashes early enough that Kodi's own kodi.log never got created.
           path: |
-            build/portable_data/temp/kodi.log
-            build/portable_data/temp/process-output.log
+            build/Kodi.app/Contents/Resources/Kodi/portable_data/temp/kodi.log
+            build/Kodi.app/Contents/Resources/Kodi/portable_data/temp/process-output.log
           if-no-files-found: warn
 
       - name: Upload test results
