@@ -5,33 +5,14 @@ navigation, or any GUI interaction, only confirms the built binary starts up, th
 JSON-RPC webserver responds, and it shuts down cleanly without fatal errors.
 """
 
-import os
 import re
-from pathlib import Path
 
-import pytest
 import requests
 
 from driver.kodi_client import KodiJsonRpcClient
 from driver.launcher import KodiProcess
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_KODI_BINARY = REPO_ROOT / "build" / "kodi.bin"
 FATAL_LOG_LINE = re.compile(r"\bFATAL\b")
-
-
-def _kodi_binary_path() -> Path:
-    return Path(os.environ.get("KODI_BINARY", DEFAULT_KODI_BINARY))
-
-
-@pytest.fixture
-def kodi():
-    proc = KodiProcess(_kodi_binary_path())
-    proc.start()
-    try:
-        yield proc
-    finally:
-        proc.kill_if_running()
 
 
 def test_startup_ping_and_quit(kodi: KodiProcess):

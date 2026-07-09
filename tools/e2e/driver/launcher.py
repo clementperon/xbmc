@@ -47,6 +47,7 @@ _GUISETTINGS_TEMPLATE = """<settings>
   <setting id="services.webserver">true</setting>
   <setting id="services.webserverport">{port}</setting>
   <setting id="services.webserverauthentication">false</setting>
+  <setting id="debug.screenshotpath">{screenshot_dir}</setting>
 </settings>
 """
 
@@ -89,14 +90,25 @@ class KodiProcess:
         """
         return self.portable_data_dir / "temp" / "process-output.log"
 
+    @property
+    def screenshot_dir(self) -> Path:
+        return self.portable_data_dir / "screenshots"
+
     def _seed_settings(self) -> None:
         userdata_dir = self.portable_data_dir / "userdata"
         userdata_dir.mkdir(parents=True, exist_ok=True)
+        # debug.screenshotpath must be pre-set: if empty, CScreenShot::TakeScreenshot()
+        # (xbmc/utils/Screenshot.cpp) opens an interactive folder-picker dialog instead
+        # of writing the file, which would hang forever with no one there to click it.
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+
         settings_file = userdata_dir / "guisettings.xml"
         # Don't overwrite settings from a previous run in the same portable_data dir;
         # each test run should use a fresh directory anyway, but this keeps re-runs safe.
         if not settings_file.exists():
-            settings_file.write_text(_GUISETTINGS_TEMPLATE.format(port=self.port))
+            settings_file.write_text(
+                _GUISETTINGS_TEMPLATE.format(port=self.port, screenshot_dir=self.screenshot_dir)
+            )
 
     def start(self, extra_args: list[str] | None = None) -> None:
         self._seed_settings()

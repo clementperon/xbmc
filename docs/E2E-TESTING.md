@@ -6,7 +6,8 @@
 > describes a plan for adding end-to-end (E2E) test coverage to Kodi.
 >
 > A minimal POC covering macOS (build from source on GitHub Actions, launch, JSON-RPC
-> ping, clean quit) now exists at [tools/e2e](../tools/e2e) /
+> ping, a basic screenshot sanity check, clean quit) now exists at
+> [tools/e2e](../tools/e2e) /
 > [.github/workflows/e2e-poc-macos.yml](../.github/workflows/e2e-poc-macos.yml). It is
 > intentionally narrow in scope (see [tools/e2e/README.md](../tools/e2e/README.md) for
 > exactly what it does and doesn't cover) and is not yet wired into required PR checks.

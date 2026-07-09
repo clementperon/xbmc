@@ -4,8 +4,8 @@ name: E2E POC (macOS)
 #
 # Builds Kodi from source on a GitHub-hosted macOS runner, launches it with a
 # disposable portable profile, confirms the JSON-RPC webserver responds to a ping,
-# asks it to quit cleanly, and checks the log for fatal errors. See
-# tools/e2e/README.md for what this does and does not cover.
+# takes and sanity-checks a screenshot, asks it to quit cleanly, and checks the log
+# for fatal errors. See tools/e2e/README.md for what this does and does not cover.
 #
 # Intentionally not wired into required PR checks: build time and reliability of
 # building Kodi from source on a hosted macOS runner haven't been proven out yet.
@@ -120,6 +120,14 @@ jobs:
           path: |
             build/Kodi.app/Contents/Resources/Kodi/portable_data/temp/kodi.log
             build/Kodi.app/Contents/Resources/Kodi/portable_data/temp/process-output.log
+          if-no-files-found: warn
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kodi-macos-screenshot
+          path: build/Kodi.app/Contents/Resources/Kodi/portable_data/screenshots/*.png
           if-no-files-found: warn
 
       - name: Upload test results

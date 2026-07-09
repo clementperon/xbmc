@@ -50,3 +50,12 @@ class KodiJsonRpcClient:
     def quit(self) -> Any:
         """Asks Kodi to shut down cleanly via Application.Quit."""
         return self.call("Application.Quit")
+
+    def execute_action(self, action: str) -> Any:
+        """Calls Input.ExecuteAction, e.g. execute_action("screenshot").
+
+        Dispatched asynchronously as a GUI action message (same path as a keypress),
+        so this returns before the action has necessarily finished - e.g. a screenshot
+        is written by a background job, not synchronously by this call.
+        """
+        return self.call("Input.ExecuteAction", {"action": action})
