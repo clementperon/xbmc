@@ -316,6 +316,33 @@ void CGLTexture::SetSwizzle()
 #endif
 }
 
+bool CGLTexture::IsSwizzleSupported() const
+{
+#if defined(GL_VERSION_3_3) || (GL_ARB_texture_swizzle)
+  if (m_isOglVersion33orNewer ||
+      CGLExtensions::IsExtensionSupported(CGLExtensions::ARB_texture_swizzle))
+    return true;
+#endif
+#if defined(GL_EXT_texture_swizzle)
+  if (CGLExtensions::IsExtensionSupported(CGLExtensions::EXT_texture_swizzle))
+    return true;
+#endif
+  return false;
+}
+
+bool CGLTexture::SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureSwizzle)
+{
+  // Identity swizzle never needs GL_TEXTURE_SWIZZLE_RGBA[_EXT] support. Anything else
+  // needs it to actually be applied by SetSwizzle() - without it, a texture whose
+  // native format is e.g. single-channel (a font glyph or gradient alpha mask) gets
+  // sampled with the wrong channel mapping instead of being rejected here and routed
+  // through CTexture::ConvertToLegacy()'s CPU-side conversion. This previously always
+  // returned true regardless of actual swizzle support, which is correct on any GL
+  // implementation with ARB/EXT_texture_swizzle (effectively all real GPU drivers) but
+  // silently produced wrong colors on ones without it, e.g. Apple's software renderer.
+  return textureSwizzle == KD_TEX_SWIZ_RGBA || IsSwizzleSupported();
+}
+
 TextureFormat CGLTexture::GetFormatGL(KD_TEX_FMT textureFormat)
 {
   TextureFormat glFormat;

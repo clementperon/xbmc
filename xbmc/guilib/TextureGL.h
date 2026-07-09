@@ -44,16 +44,14 @@ public:
   void SyncGPU() override;
   void BindToUnit(unsigned int unit) override;
 
-  bool SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureSwizzle) override
-  {
-    return true;
-  }
+  bool SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureSwizzle) override;
 
   // GL interface
   GLuint GetTextureID() const;
 
 protected:
   void SetSwizzle();
+  bool IsSwizzleSupported() const;
   TextureFormat GetFormatGL(KD_TEX_FMT textureFormat);
 
   GLuint m_texture{0};
