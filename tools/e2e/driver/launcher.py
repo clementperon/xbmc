@@ -138,7 +138,8 @@ class KodiProcess:
             time.sleep(1.0)
         raise TimeoutError(
             f"Kodi webserver did not open port {self.port} within "
-            f"{self.startup_timeout}s"
+            f"{self.startup_timeout}s. Captured output tail:\n"
+            f"{self._read_process_output_tail()}"
         )
 
     def wait_for_exit(self, timeout: float = 30.0) -> int:

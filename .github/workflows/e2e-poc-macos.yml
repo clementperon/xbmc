@@ -40,6 +40,17 @@ jobs:
       - name: Install ccache
         run: brew install ccache
 
+      # hashFiles('tools/depends/**') looks like the obvious cache-key input, but that
+      # glob also matches the (huge, untracked) extracted/built dependency trees that
+      # end up inside tools/depends after a build, not just its checked-in recipe
+      # files - hashing all of that blows past GitHub's hard 120s hashFiles timeout.
+      # Use the git tree hash of tools/depends instead: it only reflects committed
+      # files, changes exactly when the depends recipes change, and is effectively
+      # instant regardless of how much build output has accumulated alongside it.
+      - name: Compute tools/depends cache key
+        id: depends-key
+        run: echo "hash=$(git rev-parse HEAD:tools/depends)" >> "$GITHUB_OUTPUT"
+
       # tools/depends output is the single biggest time cost in this workflow
       # (building ffmpeg and friends from scratch can take well over an hour).
       # It only needs to be rebuilt when the depends build system itself changes.
@@ -53,7 +64,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: /Users/Shared/xbmc-depends
-          key: macos-${{ runner.arch }}-depends-${{ hashFiles('tools/depends/**') }}
+          key: macos-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
 
       # Secondary cache: speeds up rebuilding xbmc/ core sources across commits even
       # when tools/depends itself didn't change.
@@ -124,7 +135,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: /Users/Shared/xbmc-depends
-          key: macos-${{ runner.arch }}-depends-${{ hashFiles('tools/depends/**') }}
+          key: macos-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
 
       - name: Save ccache
         if: always()
