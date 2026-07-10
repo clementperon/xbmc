@@ -12,8 +12,15 @@ AC_CONFIG_FILES([native/config.site.native
                  native/Toolchain-Native.cmake])
 AC_CONFIG_COMMANDS([Makefile.include],
   [if test -f Makefile.include && cmp -s Makefile.include.tmp Makefile.include; then
+     echo "Makefile.include: unchanged, preserving mtime"
      rm -f Makefile.include.tmp
    else
+     if test -f Makefile.include; then
+       echo "Makefile.include: content changed, diff:"
+       diff -u Makefile.include Makefile.include.tmp || true
+     else
+       echo "Makefile.include: did not exist yet, creating"
+     fi
      mv -f Makefile.include.tmp Makefile.include
    fi])
 AC_CANONICAL_HOST
