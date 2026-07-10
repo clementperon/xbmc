@@ -59,3 +59,15 @@ class KodiJsonRpcClient:
         is written by a background job, not synchronously by this call.
         """
         return self.call("Input.ExecuteAction", {"action": action})
+
+    def current_window_id(self) -> int:
+        """Returns the numeric id of the currently active GUI window.
+
+        The webserver responding (JSONRPC.Ping) only means the JSON-RPC service
+        thread is up, not that the skin has finished loading and drawn anything - the
+        GUI initializes on a separate thread. Compare against a known window id (e.g.
+        WINDOW_HOME = 10000, xbmc/guilib/WindowIDs.h) to detect actual GUI readiness
+        before relying on rendered output such as a screenshot.
+        """
+        result = self.call("GUI.GetProperties", {"properties": ["currentwindow"]})
+        return result["currentwindow"]["id"]
