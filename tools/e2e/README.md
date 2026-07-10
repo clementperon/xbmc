@@ -26,12 +26,19 @@ output directory configured.
 
 `scenarios/test_screenshot.py`:
 
-1. Pings, then triggers a screenshot via `Input.ExecuteAction` (`{"action":
-   "screenshot"}`), the same action a "screenshot" keybinding would send.
-2. Waits for the resulting PNG to appear and finish being written.
-3. Asserts it's a valid, plausibly-sized image that isn't a single solid color -
-   catching e.g. a GL context that creates successfully but renders nothing. This is a
-   basic sanity check, not pixel/visual regression testing (Phase 2 in
+1. Pings, then waits for `GUI.GetProperties(currentwindow)` to report the Home window -
+   a coarse fast-fail gate, not a "finished rendering" signal (Kodi flips
+   `currentwindow` the instant window activation *starts*, before that window's XML
+   layout/controls/textures actually load - see the module docstring).
+2. Triggers a screenshot via `Input.ExecuteAction` (`{"action": "screenshot"}`, the
+   same action a "screenshot" keybinding would send), waits for the resulting PNG to
+   appear and finish being written, and checks it isn't a single solid color. Since
+   there's no reliable "done rendering" signal to wait for, this retries on a generous
+   budget rather than asserting on the first attempt - the software-rendering
+   fallback's first paint can be slow.
+3. Asserts the final screenshot is a valid, plausibly-sized image that isn't a single
+   solid color - catching e.g. a GL context that creates successfully but renders
+   nothing. This is a basic sanity check, not pixel/visual regression testing (Phase 2 in
    `docs/E2E-TESTING.md`).
 
 ## Layout

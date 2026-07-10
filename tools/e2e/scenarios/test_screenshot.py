@@ -15,18 +15,24 @@ from driver.launcher import KodiProcess
 
 WINDOW_HOME = 10000  # xbmc/guilib/WindowIDs.h
 HOME_WINDOW_TIMEOUT = 60.0
-SCREENSHOT_TIMEOUT = 15.0
+# Generous: currentwindow flips to WINDOW_HOME the instant activation *starts*
+# (GUIWindowManager.cpp adds it to the window history before sending the WINDOW_INIT
+# message that actually parses Home.xml and loads its controls/textures), not once
+# it's actually finished loading and drawn - so there's no reliable "done rendering"
+# signal to poll for. Retry the screenshot itself instead, on a generous budget to
+# absorb how slow the software-rendering fallback's first paint can be.
+RENDER_TIMEOUT = 90.0
+SCREENSHOT_TIMEOUT = 15.0  # per-attempt budget for one screenshot file to appear/settle
+RETRY_INTERVAL = 2.0
 MIN_EXPECTED_DIMENSION = 100  # sanity floor, well below any real Kodi window size
 
 
 def _wait_for_home_window(client: KodiJsonRpcClient, timeout: float) -> None:
-    """Waits for the GUI to actually reach the Home window before relying on rendered
-    output.
+    """Waits for the GUI subsystem to at least reach the Home window.
 
-    The webserver responding (JSONRPC.Ping) only means the JSON-RPC service thread is
-    up; the GUI initializes separately and can still be mid skin-load - a screenshot
-    taken before it's done just captures whatever's currently in the framebuffer (e.g.
-    a black cleared frame), which looks identical to a real rendering failure.
+    Not sufficient on its own as a "safe to screenshot now" signal (see module
+    docstring above), but still a useful fast-fail gate: catches a GUI that never
+    gets going at all, distinctly from one that's just slow to paint.
     """
     deadline = time.monotonic() + timeout
     last_window_id = None
@@ -68,33 +74,48 @@ def _wait_for_new_screenshot(kodi: KodiProcess, existing: set, timeout: float):
     raise TimeoutError(f"No new screenshot appeared in {kodi.screenshot_dir} within {timeout}s")
 
 
+def _capture_non_blank_screenshot(kodi: KodiProcess, client: KodiJsonRpcClient, timeout: float):
+    deadline = time.monotonic() + timeout
+    last_value = None
+    while True:
+        existing_screenshots = set(kodi.screenshot_dir.glob("*.png"))
+        client.execute_action("screenshot")
+
+        remaining = max(deadline - time.monotonic(), 1.0)
+        screenshot_path = _wait_for_new_screenshot(
+            kodi, existing_screenshots, min(SCREENSHOT_TIMEOUT, remaining)
+        )
+
+        with Image.open(screenshot_path) as image:
+            image.verify()  # raises if the PNG is truncated/corrupt
+
+        with Image.open(screenshot_path) as image:
+            width, height = image.size
+            assert width >= MIN_EXPECTED_DIMENSION and height >= MIN_EXPECTED_DIMENSION, (
+                f"Screenshot {screenshot_path} is implausibly small ({width}x{height})"
+            )
+
+            # A single solid color (all-black being the classic symptom) means
+            # something rendered a context but never actually drew the GUI into it.
+            last_value = image.convert("L").getextrema()
+
+        if last_value[0] != last_value[1]:
+            return screenshot_path
+
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"No non-blank screenshot within {timeout}s - still a single solid "
+                f"color (value {last_value[0]}) on the last attempt ({screenshot_path})"
+            )
+        time.sleep(RETRY_INTERVAL)
+
+
 def test_screenshot_renders_non_blank_frame(kodi: KodiProcess):
     client = KodiJsonRpcClient(port=kodi.port)
     assert client.ping() == "pong", "JSONRPC.Ping did not return the expected 'pong'"
 
     _wait_for_home_window(client, HOME_WINDOW_TIMEOUT)
-
-    existing_screenshots = set(kodi.screenshot_dir.glob("*.png"))
-    client.execute_action("screenshot")
-
-    screenshot_path = _wait_for_new_screenshot(kodi, existing_screenshots, SCREENSHOT_TIMEOUT)
-
-    with Image.open(screenshot_path) as image:
-        image.verify()  # raises if the PNG is truncated/corrupt
-
-    with Image.open(screenshot_path) as image:
-        width, height = image.size
-        assert width >= MIN_EXPECTED_DIMENSION and height >= MIN_EXPECTED_DIMENSION, (
-            f"Screenshot {screenshot_path} is implausibly small ({width}x{height})"
-        )
-
-        # A single solid color (all-black being the classic symptom) means something
-        # rendered a context but never actually drew the GUI into it.
-        extrema = image.convert("L").getextrema()
-        assert extrema[0] != extrema[1], (
-            f"Screenshot {screenshot_path} is a single solid color (value {extrema[0]}) - "
-            "nothing appears to have been rendered"
-        )
+    _capture_non_blank_screenshot(kodi, client, RENDER_TIMEOUT)
 
     # Best-effort clean shutdown so Kodi's own log gets flushed to disk for CI
     # artifacts; the kodi fixture's SIGKILL fallback still applies if this doesn't
