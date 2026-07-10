@@ -44,10 +44,7 @@ public:
   void SyncGPU() override;
   void BindToUnit(unsigned int unit) override;
 
-  bool SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureSwizzle) override
-  {
-    return true;
-  }
+  bool SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureSwizzle) override;
 
   // GL interface
   GLuint GetTextureID() const;
@@ -59,5 +56,9 @@ protected:
   GLuint m_texture{0};
   bool m_isOglVersion3orNewer{false};
   bool m_isOglVersion33orNewer{false};
+
+  // GL_TEXTURE_SWIZZLE_RGBA or GL_TEXTURE_SWIZZLE_RGBA_EXT, whichever the GL
+  // implementation actually supports, or GL_FALSE if neither is available.
+  GLenum m_swizzleTarget{GL_FALSE};
 };
 
