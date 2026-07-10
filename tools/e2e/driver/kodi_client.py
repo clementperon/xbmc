@@ -11,9 +11,14 @@ docs/E2E-TESTING.md for the rationale.
 from __future__ import annotations
 
 import itertools
+import time
 from typing import Any
 
 import requests
+
+# xbmc/guilib/WindowIDs.h / xbmc/input/WindowTranslator.cpp name->id table.
+WINDOW_HOME = 10000
+WINDOW_SETTINGS_MENU = 10004
 
 
 class KodiJsonRpcError(RuntimeError):
@@ -71,3 +76,46 @@ class KodiJsonRpcClient:
         """
         result = self.call("GUI.GetProperties", {"properties": ["currentwindow"]})
         return result["currentwindow"]["id"]
+
+    def wait_for_window(self, window_id: int, timeout: float) -> None:
+        """Polls current_window_id() until it equals window_id, e.g. after activate_window().
+
+        Not a "finished rendering" signal - currentwindow flips the instant window
+        activation *starts* (see current_window_id()'s docstring), not once that
+        window has actually finished loading. Useful as a "did navigation actually
+        happen" gate, not a "safe to screenshot now" one.
+        """
+        deadline = time.monotonic() + timeout
+        last_window_id = None
+        while time.monotonic() < deadline:
+            try:
+                last_window_id = self.current_window_id()
+                if last_window_id == window_id:
+                    return
+            except (KodiJsonRpcError, requests.exceptions.RequestException):
+                pass
+            time.sleep(0.5)
+        raise TimeoutError(
+            f"Window {window_id} not reached within {timeout}s "
+            f"(last seen window id: {last_window_id})"
+        )
+
+    def activate_window(self, window: str, parameters: list[str] | None = None) -> Any:
+        """Calls GUI.ActivateWindow to switch to the given window (e.g. "settings", "home").
+
+        Dispatched asynchronously (like execute_action), so this returns before the
+        window has necessarily finished activating - follow up with wait_for_window().
+        """
+        params: dict[str, Any] = {"window": window}
+        if parameters:
+            params["parameters"] = parameters
+        return self.call("GUI.ActivateWindow", params)
+
+    def get_setting(self, setting: str) -> Any:
+        """Calls Settings.GetSettingValue and returns the setting's current value."""
+        result = self.call("Settings.GetSettingValue", {"setting": setting})
+        return result["value"]
+
+    def set_setting(self, setting: str, value: Any) -> bool:
+        """Calls Settings.SetSettingValue, returning whether the change was accepted."""
+        return self.call("Settings.SetSettingValue", {"setting": setting, "value": value})

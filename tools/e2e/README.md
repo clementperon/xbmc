@@ -11,18 +11,18 @@ Proof-of-concept end-to-end (E2E) test harness for Kodi, described in
 
 ## What this does
 
-Both scenarios launch a built `kodi.bin`/`kodi` binary (via the shared `kodi` fixture
-in `conftest.py`) with a throwaway `portable_data` profile (`-p`), pre-seeded with the
-webserver enabled on a non-default port, authentication disabled, and a screenshot
-output directory configured.
+Every scenario launches a built `kodi.bin`/`kodi` binary (via the shared `kodi`
+fixture in `conftest.py`) with a throwaway `portable_data` profile (`-p`), pre-seeded
+with the webserver enabled on a non-default port, authentication disabled, and a
+screenshot output directory configured. Every scenario ends by asking Kodi to quit
+via `driver/assertions.py`'s `assert_clean_shutdown`, which asserts a clean (`0`)
+exit code and scans the log for `FATAL` lines - so a crash or hang fails loudly
+regardless of which scenario was running.
 
 `scenarios/test_startup.py`:
 
 1. Waits for the webserver port to open.
 2. Calls `JSONRPC.Ping` over HTTP JSON-RPC and asserts the `"pong"` response.
-3. Calls `Application.Quit` and waits for the process to exit.
-4. Asserts a clean (`0`) exit code.
-5. Scans the Kodi log for `FATAL` lines and fails the test if any are found.
 
 `scenarios/test_screenshot.py`:
 
@@ -41,6 +41,25 @@ output directory configured.
    nothing. This is a basic sanity check, not pixel/visual regression testing (Phase 2 in
    `docs/E2E-TESTING.md`).
 
+`scenarios/test_navigation.py`:
+
+1. Pings, waits for the Home window, then calls `GUI.ActivateWindow(window="settings")`
+   and waits for `currentwindow` to report the settings menu.
+2. Calls `Input.Back` and waits for `currentwindow` to report Home again.
+
+Deliberately uses `GUI.ActivateWindow`/`Input.Back` rather than scripted
+`Input.Down`/`Input.Select` keypresses: which skin element is focused first is
+skin/version-specific, so blindly navigating by direction would make the test fragile
+in a way unrelated to what it's meant to catch. See the module docstring for the
+reasoning.
+
+`scenarios/test_settings.py`:
+
+1. Pings, reads `lookandfeel.enablerssfeeds` via `Settings.GetSettingValue` and asserts
+   it's the documented default (`false`).
+2. Sets it to `true` via `Settings.SetSettingValue`, reads it back, and asserts the
+   change persisted.
+
 ## Layout
 
 - `conftest.py` — the shared `kodi` fixture (launches/tears down a `KodiProcess` per
@@ -52,6 +71,8 @@ output directory configured.
   dependency). As the suite grows past simple request/response calls (e.g. waiting on
   `Player.OnPlay` notifications), see `docs/E2E-TESTING.md` for the recommendation to
   adopt `jsonrpc-websocket`/`pykodi` instead of extending this by hand.
+- `driver/assertions.py` — shared post-scenario assertions (currently just
+  `assert_clean_shutdown`), used by every scenario.
 - `scenarios/` — the actual pytest test cases.
 
 ## Running locally
@@ -78,7 +99,7 @@ time and reliability haven't been proven out yet.
 
 ## Known limitations / not yet covered
 
-- No test media / playback testing yet (ping + quit, and a startup screenshot, only).
+- No test media / playback testing yet.
 - No Linux/Windows CI wiring yet (only macOS, per this POC's scope).
 - The screenshot check is a "did anything render at all" sanity check, not
   pixel/visual regression testing against a baseline (Phase 2).
