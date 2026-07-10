@@ -120,8 +120,9 @@ jobs:
           print("Makefile.include (cached):")
           show("Makefile.include")
 
-          rebuilds = ["m4", "cmake", "gettext", "giflib", "zlib", "pkg-config", "openssl"]
-          skips = ["autoconf", "automake", "bison", "nasm"]
+          rebuilds = ["m4", "cmake", "gettext", "giflib", "zlib", "pkg-config", "openssl",
+                      "autoconf", "automake", "bison", "nasm"]
+          skips = ["autoconf-archive", "libtool", "meson", "ninja"]
           for pkg in rebuilds + skips:
               label = "REBUILDS" if pkg in rebuilds else "skips"
               print(f"native/{pkg}  ({label}):")
@@ -141,6 +142,21 @@ jobs:
         run: |
           ./bootstrap
           ./configure --host="${HOST_TRIPLET}" --with-platform=macos
+
+          # Temporary diagnostic: m4 (and 10 other native packages) rm -rf + rebuild
+          # from scratch on every run despite a confirmed cache hit and Makefile.include
+          # coming back byte-identical ("unchanged, preserving mtime" above) - while
+          # most other native packages, with a structurally identical Makefile, correctly
+          # no-op. Ask make itself why, via a dry run (-n: prints what it would do
+          # without doing it) with full dependency-tracing verbosity, for one rebuilding
+          # and one skipping package. Remove once the cause is understood.
+          echo "::group::make -n --debug=v native/m4 (rebuilds every run)"
+          (cd native/m4 && make -n --debug=v .configured-aarch64-osx-native) 2>&1 | tail -100
+          echo "::endgroup::"
+          echo "::group::make -n --debug=v native/autoconf-archive (skips correctly)"
+          (cd native/autoconf-archive && make -n --debug=v .configured-aarch64-osx-native) 2>&1 | tail -100
+          echo "::endgroup::"
+
           make -j"$(sysctl -n hw.ncpu)"
 
       - name: Generate Kodi build system
