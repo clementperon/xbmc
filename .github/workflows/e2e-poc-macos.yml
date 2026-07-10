@@ -92,6 +92,50 @@ jobs:
           restore-keys: |
             macos-${{ runner.arch }}-ccache-
 
+      # Temporary diagnostic: some native packages (m4, cmake, gettext, giflib, zlib,
+      # pkg-config, openssl) keep rebuilding from scratch even on a genuine cache hit
+      # for tools/depends, while most others correctly no-op. Dump the mtimes make
+      # actually compares - as restored from cache, before bootstrap/configure touch
+      # anything - to see which prerequisite is (still) newer than the stamp file and
+      # why. Remove once the cause is understood.
+      - name: Debug dependency cache timestamps
+        working-directory: tools/depends
+        run: |
+          python3 - <<'EOF'
+          import glob
+          import os
+          import time
+
+          def show(path):
+              if os.path.exists(path):
+                  mtime = os.path.getmtime(path)
+                  stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
+                  print(f"  {mtime:>18.3f}  {stamp}  {path}")
+              else:
+                  print(f"  {'(missing)':>18}  {'':19}  {path}")
+
+          print(f"now                 {time.time():.3f}")
+          print("checkout baseline (tracked, never cached):")
+          show("README.md")
+          print("Makefile.include (cached):")
+          show("Makefile.include")
+
+          rebuilds = ["m4", "cmake", "gettext", "giflib", "zlib", "pkg-config", "openssl"]
+          skips = ["autoconf", "automake", "bison", "nasm"]
+          for pkg in rebuilds + skips:
+              label = "REBUILDS" if pkg in rebuilds else "skips"
+              print(f"native/{pkg}  ({label}):")
+              show(f"native/{pkg}/Makefile")
+              for p in sorted(glob.glob(f"native/{pkg}/*-VERSION")):
+                  show(p)
+              for p in sorted(glob.glob(f"native/{pkg}/*.patch")):
+                  show(p)
+              for p in sorted(glob.glob(f"native/{pkg}/.configured-*")):
+                  show(p)
+              for p in sorted(glob.glob(f"native/{pkg}/.installed-*")):
+                  show(p)
+          EOF
+
       - name: Configure and build dependencies
         working-directory: tools/depends
         run: |
