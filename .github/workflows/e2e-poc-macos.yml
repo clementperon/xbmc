@@ -59,11 +59,20 @@ jobs:
       # its save step defaults to post-if: success() - a later step failing (e.g. Build
       # Kodi) would silently skip saving, discarding a fully-built depends tree. Saving
       # explicitly with if: always() keeps it even when a later step fails.
+      # Caching only the install prefix isn't enough: make's up-to-date checks for
+      # each dependency key off .configured-*/.installed-* stamp files and the
+      # extracted/built source trees under tools/depends/{native,target}/*/, and
+      # actions/checkout always hands us those fresh (i.e. absent), so without also
+      # caching this state make re-extracts and rebuilds every dependency from
+      # scratch on every run - even on a cache hit for the prefix.
       - name: Restore Kodi dependencies cache (tools/depends)
         id: depends-cache
         uses: actions/cache/restore@v6
         with:
-          path: /Users/Shared/xbmc-depends
+          path: |
+            /Users/Shared/xbmc-depends
+            tools/depends/native
+            tools/depends/target
           key: macos-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
 
       # Secondary cache: speeds up rebuilding xbmc/ core sources across commits even
@@ -144,7 +153,10 @@ jobs:
         if: always() && steps.depends-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: /Users/Shared/xbmc-depends
+          path: |
+            /Users/Shared/xbmc-depends
+            tools/depends/native
+            tools/depends/target
           key: macos-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
 
       - name: Save ccache
