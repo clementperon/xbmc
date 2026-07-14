@@ -103,8 +103,7 @@ class KodiProcess:
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         settings_file = userdata_dir / "guisettings.xml"
-        # Don't overwrite settings from a previous run in the same portable_data dir;
-        # each test run should use a fresh directory anyway, but this keeps re-runs safe.
+        # Safety net for callers that skip the conftest.py wipe (e.g. ad-hoc KodiProcess use).
         if not settings_file.exists():
             settings_file.write_text(
                 _GUISETTINGS_TEMPLATE.format(port=self.port, screenshot_dir=self.screenshot_dir)

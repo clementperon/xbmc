@@ -1,5 +1,6 @@
 import os
 import pathlib
+import shutil
 import sys
 
 import pytest
@@ -20,6 +21,9 @@ def _kodi_binary_path() -> pathlib.Path:
 @pytest.fixture
 def kodi():
     proc = KodiProcess(_kodi_binary_path())
+    # Kodi's clean shutdown rewrites guisettings.xml, and NetworkServices::Start()'s
+    # auth guard can flip services.webserver off - wipe the profile so that never leaks into the next test.
+    shutil.rmtree(proc.portable_data_dir, ignore_errors=True)
     proc.start()
     try:
         yield proc
