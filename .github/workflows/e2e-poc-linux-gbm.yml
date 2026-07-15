@@ -1,0 +1,202 @@
+name: E2E POC (Linux GBM)
+
+# Proof-of-concept end-to-end smoke test for docs/E2E-TESTING.md, GBM edition.
+#
+# Runs the same tools/e2e suite as e2e-poc-macos.yml, but against Kodi's GBM
+# windowing backend (xbmc/windowing/gbm) on a GitHub-hosted Linux runner. Mirrors
+# the macOS job's structure: build tools/depends first (cached), then generate and
+# build Kodi against it, then run the driver.
+#
+# The runner has no GPU and no display server: the vkms kernel module provides a
+# virtual KMS device with a connected virtual connector, and Mesa is built here
+# with an extra "kmsro,swrast" gallium driver (see the depends-build step) so EGL
+# falls back to software rendering on it - the same headless setup Weston/Mutter/
+# IGT use in their own CI. This exercises Kodi's real DRM/GBM/EGL/GLES pipeline
+# end to end; what it can't cover is real GPU driver behavior and HW video decode
+# (V4L2/VAAPI).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/e2e/**"
+      - ".github/workflows/e2e-poc-linux-gbm.yml"
+
+concurrency:
+  group: e2e-poc-linux-gbm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gbm-smoke:
+    # Pinned rather than ubuntu-latest so kernel module availability and the apt
+    # toolchain package set stay predictable (same reasoning as the macOS job's pin).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      HOST_TRIPLET: x86_64-linux-gnu
+      DEPENDS_PREFIX: /home/runner/xbmc-depends
+      CCACHE_DIR: /home/runner/.cache/kodi-e2e-ccache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # vkms ships in linux-modules-extra, not installed by default on the runner
+      # image. Kodi's CDRMUtils::OpenDrm() iterates DRM primary nodes and takes the
+      # first one with a connected connector - vkms's virtual connector reports
+      # connected, and it's the only card on the GPU-less runner, so Kodi finds it
+      # with no configuration. chmod instead of running Kodi as root: the card node
+      # is group "video", which the runner user isn't in (and a group change
+      # wouldn't take effect without a new login session anyway).
+      - name: Load vkms virtual display driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          sudo modprobe vkms
+          sudo chmod 666 /dev/dri/card*
+          ls -l /dev/dri
+
+      # Only host toolchain packages (compiler, autotools, meson/ninja for mesa and
+      # libdisplay-info, nasm for ffmpeg/dav1d asm) plus the handful of required
+      # libraries tools/depends does NOT build on Linux (see tools/depends/target/
+      # Makefile's DEPENDS list - it covers the GBM/media stack: mesa, libdrm,
+      # libinput, libdisplay-info, ffmpeg, dav1d, etc., but not these, since they
+      # have no Linux-specific version/patch requirements). ccache is picked up
+      # automatically by Kodi's own cmake (an "optional_buildtools" entry).
+      - name: Install build tools and non-depends libraries
+        run: |
+          sudo apt-get install -y \
+            build-essential autoconf automake autopoint cmake gawk gperf \
+            gettext libtool meson nasm ninja-build pkg-config swig \
+            python3-dev unzip zip ccache \
+            libass-dev libcurl4-openssl-dev libexiv2-dev libflatbuffers-dev \
+            libfmt-dev liblzo2-dev libpcre2-dev nlohmann-json3-dev \
+            libspdlog-dev libtag1-dev libtinyxml2-dev
+
+      - name: Compute tools/depends cache key
+        id: depends-key
+        run: echo "hash=$(git rev-parse HEAD:tools/depends)" >> "$GITHUB_OUTPUT"
+
+      # Same rationale as the macOS job: cache the whole tools/depends tree (not
+      # individual paths within it) so restored stamp-file/source-tree mtimes stay
+      # correctly ordered, keyed on tools/depends' own git tree hash so it only
+      # rebuilds when the depends recipes actually change.
+      - name: Restore Kodi dependencies cache (tools/depends)
+        id: depends-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.DEPENDS_PREFIX }}
+            tools/depends
+          key: linux-gbm-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: linux-gbm-${{ runner.arch }}-ccache-${{ github.sha }}
+          restore-keys: |
+            linux-gbm-${{ runner.arch }}-ccache-
+
+      # --with-rendersystem=gles matches the -DAPP_RENDER_SYSTEM=gles passed to
+      # Kodi's own cmake below, so the mesa this builds has GLES enabled to match.
+      #
+      # MESA_GALLIUM_DRIVERS override: tools/depends/target/mesa/Makefile only asks
+      # for the "iris" gallium driver on x86_64 (a real-Intel-GPU driver, meant for
+      # actual GBM set-top hardware) - there's no software rasterizer in a stock
+      # build, so EGL/GBM context creation would have nothing to bind to on this
+      # GPU-less runner. "kmsro,swrast" adds the KMS render-only wrapper + software
+      # pipe driver that vkms's primary-only (no render node) device needs - the
+      # same pairing already used unconditionally for arm/aarch64 in that Makefile.
+      # This is a make command-line override (not a change to the tracked mesa
+      # recipe): GNU Make lets a command-line variable override a plain in-makefile
+      # assignment, and it propagates through every recursive $(MAKE) call below it
+      # automatically - so real hardware GBM builds elsewhere are unaffected.
+      - name: Configure and build dependencies
+        working-directory: tools/depends
+        run: |
+          ./bootstrap
+          ./configure --host="${HOST_TRIPLET}" --with-rendersystem=gles --prefix="${DEPENDS_PREFIX}"
+          make -j"$(nproc)" MESA_GALLIUM_DRIVERS=iris,kmsro,swrast
+
+      # CORE_PLATFORM_NAME=gbm restricts the build to the GBM windowing backend -
+      # without it, Linux's default is "x11 wayland gbm" combined, which would also
+      # need X11/Wayland compositor libs we have no use for here. ENABLE_INTERNAL_
+      # CROSSGUID is already added unconditionally by cmakebuildsys's own Makefile.
+      - name: Generate Kodi build system
+        run: |
+          make -C tools/depends/target/cmakebuildsys \
+            CMAKE_EXTRA_ARGUMENTS="-DCORE_PLATFORM_NAME=gbm -DAPP_RENDER_SYSTEM=gles"
+
+      - name: Build Kodi
+        run: make -j"$(nproc)" -C build
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s || true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "tools/e2e/uv.lock"
+
+      # The runner has no audio hardware; that's fine - ActiveAE startup isn't
+      # error-checked (Application.cpp's m_pActiveAE->Start()), so Kodi runs with
+      # no sink. No input devices either, which CLibInputHandler treats as
+      # non-fatal. Everything is driven over JSON-RPC.
+      #
+      # ENABLE_APP_AUTONAME (default ON, single-platform Linux build) names the
+      # binary kodi-gbm; it runs in place from the build tree, so portable_data
+      # lands at build/portable_data (POSIX GetHomePath() resolves to the binary's
+      # directory - xbmc/Util.cpp).
+      - name: Run E2E smoke test
+        working-directory: tools/e2e
+        env:
+          KODI_BINARY: ${{ github.workspace }}/build/kodi-gbm
+        run: uv run pytest scenarios -v --junitxml=../../e2e-results.xml
+
+      - name: Upload Kodi log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kodi-linux-gbm-log
+          path: |
+            build/portable_data/temp/kodi.log
+            build/portable_data/temp/process-output.log
+          if-no-files-found: warn
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kodi-linux-gbm-screenshot
+          path: build/portable_data/screenshots/*.png
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results-linux-gbm
+          path: e2e-results.xml
+          if-no-files-found: warn
+
+      # Skipped on an exact key hit: nothing changed, so re-uploading would just
+      # waste time. On a miss (including a partial/failed build), save whatever
+      # got built - same reasoning as the macOS job.
+      - name: Save Kodi dependencies cache (tools/depends)
+        if: always() && steps.depends-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.DEPENDS_PREFIX }}
+            tools/depends
+          key: linux-gbm-${{ runner.arch }}-depends-${{ steps.depends-key.outputs.hash }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: linux-gbm-${{ runner.arch }}-ccache-${{ github.sha }}
