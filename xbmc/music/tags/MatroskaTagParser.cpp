@@ -27,6 +27,9 @@ void CMatroskaTagParser::ParseTag(const std::string& key,
   * Matroska Tag spec does not allow storing multi values in a single tag, but some tools
   * do it anyway using a delimiter. So we need to split the value using the separator and
   * then join it back using the music item separator from as.xml if needed.
+  *
+  * The spaced spellings (ALBUM ARTIST, ARTIST SORT, ...) are what mp3tag writes; the
+  * underscored and run-together ones are what the spec and most other taggers use.
   */
   if (key == "ALBUM")
     tag.SetAlbum(value);
@@ -35,9 +38,9 @@ void CMatroskaTagParser::ParseTag(const std::string& key,
     tag.SetArtist(value);
   else if (key == "ARTISTS")
     tag.SetMusicBrainzArtistHints(StringUtils::Split(value, separators));
-  else if (key == "ALBUMARTISTS" || key == "ALBUM_ARTISTS")
+  else if (key == "ALBUMARTISTS" || key == "ALBUM_ARTISTS" || key == "ALBUM ARTISTS")
     tag.SetAlbumArtist(value);
-  else if (key == "ALBUMARTIST" || key == "ALBUM_ARTIST")
+  else if (key == "ALBUMARTIST" || key == "ALBUM_ARTIST" || key == "ALBUM ARTIST")
     tag.SetAlbumArtist(StringUtils::Join(StringUtils::Split(value, separators), musicsep));
   else if (key == "TITLE")
     tag.SetTitle(value);
@@ -76,9 +79,9 @@ void CMatroskaTagParser::ParseTag(const std::string& key,
   // true trims any whitespace around the genre(s)
   else if (key == "COMMENT")
     tag.SetComment(value);
-  else if (key == "ARTIST-SORT" || key == "ARTISTSORT")
+  else if (key == "ARTIST-SORT" || key == "ARTISTSORT" || key == "ARTIST SORT")
     tag.SetArtistSort(StringUtils::Join(StringUtils::Split(value, separators), musicsep));
-  else if (key == "ALBUMARTISTSORT" || key == "SORT_ALBUM_ARTIST")
+  else if (key == "ALBUMARTISTSORT" || key == "SORT_ALBUM_ARTIST" || key == "ALBUM ARTIST SORT")
     tag.SetAlbumArtistSort(StringUtils::Join(StringUtils::Split(value, separators), musicsep));
   else if (key == "COMPOSERSORT")
     tag.SetComposerSort(StringUtils::Join(StringUtils::Split(value, separators), musicsep));

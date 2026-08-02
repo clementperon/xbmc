@@ -11,12 +11,15 @@
 #include "ImusicInfoTagLoader.h"
 #include "MatroskaTagLibStream.h"
 #include "MusicInfoTag.h"
+#include "TagLibVersion.h"
 #include "utils/EmbeddedArt.h"
 
 #include <map>
 #include <string>
 #include <tuple>
 #include <vector>
+
+#ifdef HAS_TAGLIB_MATROSKA
 
 namespace MUSIC_INFO
 {
@@ -54,3 +57,5 @@ private:
       EmbeddedArt* art = nullptr);
 };
 } // namespace MUSIC_INFO
+
+#endif // TagLib >= 2.3.1

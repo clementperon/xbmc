@@ -21,7 +21,10 @@
 #include "music/tags/MatroskaTagParser.h"
 #include "music/tags/MusicCodecInfoFFmpeg.h"
 #include "music/tags/MusicInfoTag.h"
+#include "music/tags/TagLibVersion.h"
+#ifdef HAS_TAGLIB_MATROSKA
 #include "music/tags/MusicInfoTagLoaderMatroska.h"
+#endif
 #include "resources/LocalizeStrings.h"
 #include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
@@ -62,6 +65,93 @@ static int64_t cfile_file_seek(void* h, int64_t pos, int whence)
     return pFile->Seek(pos, whence & ~AVSEEK_FORCE);
 }
 
+namespace
+{
+//! Tags of one chapter, plus its play range when the tag reader supplies one.
+struct ChapterTags
+{
+  std::map<std::string, std::string> tags;
+  double start = -1.0; //!< seconds; negative means "use the FFmpeg chapter timestamps"
+  double end = -1.0;
+};
+
+//! Matroska tags of a whole file: file (album) level plus one entry per chapter, in file order.
+struct MatroskaAlbum
+{
+  std::map<std::string, std::string> fileTags;
+  std::vector<ChapterTags> chapters;
+  bool valid = false;
+};
+
+#ifdef HAS_TAGLIB_MATROSKA
+
+//! Read Matroska tags with TagLib, which follows the full tag hierarchy.
+MatroskaAlbum ReadMatroskaTags(const CURL& url, const AVFormatContext* /*fctx*/)
+{
+  MatroskaAlbum album;
+
+  std::map<unsigned long long, std::map<std::string, std::string>> chapterTags;
+  std::vector<std::tuple<unsigned long long, std::string, double, double, unsigned long long>>
+      chapterOrder;
+  CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(url.Get(), album.fileTags, chapterTags,
+                                                    chapterOrder);
+  if (album.fileTags.empty())
+    return album;
+
+  album.chapters.resize(chapterOrder.size());
+  for (size_t i = 0; i < chapterOrder.size(); ++i)
+  {
+    const auto it = chapterTags.find(std::get<0>(chapterOrder[i]));
+    if (it != chapterTags.end())
+      album.chapters[i].tags = it->second;
+    album.chapters[i].start = std::get<2>(chapterOrder[i]);
+    album.chapters[i].end = std::get<3>(chapterOrder[i]);
+  }
+
+  album.valid = true;
+  return album;
+}
+
+#else
+
+//! Harvest one FFmpeg metadata dictionary into the map CMatroskaTagParser expects.
+void CollectTags(const AVDictionary* metadata, std::map<std::string, std::string>& tags)
+{
+  const AVDictionaryEntry* entry = nullptr;
+  while ((entry = av_dict_get(metadata, "", entry, AV_DICT_IGNORE_SUFFIX)))
+    tags[StringUtils::ToUpper(entry->key)] = entry->value;
+}
+
+/*!
+ * Read Matroska tags with FFmpeg.
+ *
+ * FFmpeg flattens the SimpleTag hierarchy into a file-level and a per-chapter dictionary, so
+ * nesting and TargetTypeValue are lost, and only the last of a repeated set of SimpleTags
+ * survives (https://trac.ffmpeg.org/ticket/9641) - which is why taggers write the comma
+ * delimited INVOLVEDPEOPLE/INSTRUMENTS forms CMatroskaTagParser understands. Tag names and their
+ * meanings match the TagLib variant above: both feed CMatroskaTagParser.
+ */
+MatroskaAlbum ReadMatroskaTags(const CURL& /*url*/, const AVFormatContext* fctx)
+{
+  MatroskaAlbum album;
+
+  CollectTags(fctx->metadata, album.fileTags);
+
+  album.chapters.resize(fctx->nb_chapters);
+  for (unsigned int i = 0; fctx->chapters && i < fctx->nb_chapters; ++i)
+  {
+    if (fctx->chapters[i])
+      CollectTags(fctx->chapters[i]->metadata, album.chapters[i].tags);
+  }
+
+  // Chapter play ranges stay unset; the caller takes them from the FFmpeg chapter timestamps.
+  album.valid = true;
+  return album;
+}
+
+#endif // HAS_TAGLIB_MATROSKA
+} // unnamed namespace
+
 CAudioBookFileDirectory::~CAudioBookFileDirectory(void)
 {
   if (m_fctx)
@@ -91,12 +181,14 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
     separators.push_back(musicsep); // add custom music separator from as.xml
 
   const bool isAudioBook = url.IsFileType("m4b");
+
   // Some tags are relevant to the whole album - these are read first
   CMusicInfoTag albumtag;
+  MatroskaAlbum matroska;
 
-  AVDictionaryEntry* tag = nullptr;
   if (isAudioBook)
   {
+    AVDictionaryEntry* tag = nullptr;
     while ((tag = av_dict_get(m_fctx->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
     {
       if (StringUtils::CompareNoCase(tag->key, "title") == 0)
@@ -109,32 +201,24 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
         desc = tag->value;
     }
   }
-
-  std::map<std::string, std::string> fileTags;
-  std::map<unsigned long long, std::map<std::string, std::string>> chapterTags;
-  std::vector<std::tuple<unsigned long long, std::string, double, double, unsigned long long>>
-      chapterOrder;
-
-  if (!isAudioBook)
+  else
   {
-    CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(url.Get(), fileTags, chapterTags,
-                                                      chapterOrder);
-    if (fileTags.empty())
+    matroska = ReadMatroskaTags(url, m_fctx);
+    if (!matroska.valid)
       return true;
     /*!
      * initially just get the (file) Album level tags to be use in subsequent tracks
      * (chapters) processed below to create Kodi music Songs
     */
-    for (const auto& t : fileTags)
+    for (const auto& t : matroska.fileTags)
       CMatroskaTagParser::ParseTag(t.first, t.second, separators, musicsep, albumtag);
   }
 
   std::string thumb;
   thumb = IMAGE_FILES::URLFromFile(url.Get(), "music");
   /*! Look for any embedded cover art
-  * This can be dropped when taglib 2.3.1 is released with the embedded cover art performance
-  * fix for Matroska files and we can just use TagLib to read the embedded cover art for Matroska
-  * files. Until then, we need to use FFmpeg to read the embedded cover art for Matroska files.
+  * FFmpeg rather than TagLib: TagLib reads whole Matroska attachments eagerly, which is slow for
+  * large attachments over SMB/NFS. Still unfixed as of TagLib 2.3.1 (it was expected there).
   */
   CMusicEmbeddedCoverLoaderFFmpeg::GetEmbeddedCover(m_fctx, albumtag);
 
@@ -173,17 +257,21 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
       continue;
     }
 
-    tag = nullptr;
-    std::string chaptitle = StringUtils::Format(
-        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(25010), i + 1);
-    std::string chapauthor;
-    std::string chapalbum;
-
     std::shared_ptr<CFileItem> item(new CFileItem(url.Get(), false));
     *item->GetMusicInfoTag() = albumtag;
 
+    // Chapter play range as FFmpeg reports it. The Matroska tag reader may override it below.
+    double start = m_fctx->chapters[i]->start * av_q2d(m_fctx->chapters[i]->time_base);
+    double end = m_fctx->chapters[i]->end * av_q2d(m_fctx->chapters[i]->time_base);
+
     if (isAudioBook)
     {
+      AVDictionaryEntry* tag = nullptr;
+      std::string chaptitle = StringUtils::Format(
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(25010), i + 1);
+      std::string chapauthor;
+      std::string chapalbum;
+
       while ((tag = av_dict_get(m_fctx->chapters[i]->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
       {
         if (StringUtils::CompareNoCase(tag->key, "title") == 0)
@@ -199,33 +287,26 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
       item->GetMusicInfoTag()->SetArtist(chapauthor.empty() ? author : chapauthor);
       if (!desc.empty())
         item->GetMusicInfoTag()->SetComment(desc);
-
-      item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(m_fctx->chapters[i]->start *
-                                                         av_q2d(m_fctx->chapters[i]->time_base)));
-      item->SetEndOffset(CUtil::ConvertSecsToMilliSecs(m_fctx->chapters[i]->end *
-                                                       av_q2d(m_fctx->chapters[i]->time_base)));
-      item->GetMusicInfoTag()->SetDuration(
-          CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
     }
-    else
+    else if (i < matroska.chapters.size())
     {
-      // process chapter tags for this track using file-order chapter UID
-      if (i < chapterOrder.size())
-      {
-        auto it = chapterTags.find(std::get<0>(chapterOrder[i]));
-        if (it != chapterTags.end())
-        {
-          for (const auto& Tracktag : it->second)
-            CMatroskaTagParser::ParseTag(Tracktag.first, Tracktag.second, separators, musicsep,
-                                         *item->GetMusicInfoTag());
+      // process chapter tags for this track, in file order
+      const ChapterTags& chapter = matroska.chapters[i];
+      for (const auto& t : chapter.tags)
+        CMatroskaTagParser::ParseTag(t.first, t.second, separators, musicsep,
+                                     *item->GetMusicInfoTag());
 
-          item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(std::get<2>(chapterOrder[i])));
-          item->SetEndOffset(CUtil::ConvertSecsToMilliSecs(std::get<3>(chapterOrder[i])));
-          item->GetMusicInfoTag()->SetDuration(
-              CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
-        }
+      if (chapter.start >= 0.0)
+      {
+        start = chapter.start;
+        end = chapter.end;
       }
     }
+
+    item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(start));
+    item->SetEndOffset(CUtil::ConvertSecsToMilliSecs(end));
+    item->GetMusicInfoTag()->SetDuration(
+        CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
 
     item->GetMusicInfoTag()->SetTrackNumber(i + 1);
     item->GetMusicInfoTag()->SetLoaded(true);
