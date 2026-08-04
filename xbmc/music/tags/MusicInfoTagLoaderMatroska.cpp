@@ -361,8 +361,9 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
     {
       chapterOrder.push_back(
           std::make_tuple(DummyChapterUid, std::string("SongTags"), 0.0, 0.0, 0ULL));
-      std::map<std::string, std::string> chapterTagList = {{"CHAPTERNAME", "SongTags"}};
-      chapterTags[DummyChapterUid] = chapterTagList;
+      // No name: "SongTags" marks the placeholder in chapterOrder, it is not a chapter title and
+      // must not reach the title fallback below.
+      chapterTags[DummyChapterUid] = {};
     }
     else
     {
@@ -596,6 +597,21 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
           }
         }
       }
+    }
+
+    /*!
+    * A chapter carrying only a ChapterDisplay name still names its track - taggers that write
+    * chapter names rather than per-chapter tags are common. The TargetTypeValue 30 TITLE read
+    * above says the same thing more precisely, so it keeps precedence and this only fills the gap.
+    */
+    for (auto& chapter : chapterTags)
+    {
+      auto& chapterTagList = chapter.second;
+      const auto chapterName = chapterTagList.find("CHAPTERNAME");
+      if (chapterName == chapterTagList.end() || chapterName->second.empty())
+        continue;
+      if (chapterTagList.find("TITLE") == chapterTagList.end())
+        chapterTagList.emplace("TITLE", chapterName->second);
     }
 
     // bufferedStream and matroskaFile are destroyed when scope exits.
