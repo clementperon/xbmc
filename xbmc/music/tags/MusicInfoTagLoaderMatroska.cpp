@@ -27,6 +27,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -277,15 +278,44 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
     * real tracks/songs — they can occur in some Matroska files as artifacts.
     */
     int chapterCount = 0;
+    unsigned long long editionUid = 0;
+    std::set<unsigned long long> unselectedChapterUids;
     TagLib::Matroska::Chapters* chapters = matroskaFile->chapters();
     if (chapters)
     {
+      /*!
+      * A file can hold several editions - an ordered presentation cut alongside the full
+      * transfer, say - of which only one is what gets played. Take the one flagged default,
+      * falling back to the first, so the tracks come from a single running order instead of
+      * every edition's chapters concatenated.
+      */
       const TagLib::Matroska::Chapters::ChapterEditionList& editions =
           chapters->chapterEditionList();
+      const TagLib::Matroska::ChapterEdition* selectedEdition = nullptr;
       for (const auto& edition : editions)
       {
-        unsigned long long editionUid = edition.uid();
+        if (!selectedEdition || edition.isDefault())
+          selectedEdition = &edition;
+        if (edition.isDefault())
+          break;
+      }
+
+      /*!
+      * The chapters of the editions left behind, so that a tag naming one of them can be told
+      * apart from a tag naming a chapter this file does not have at all.
+      */
+      for (const auto& edition : editions)
+      {
+        if (&edition == selectedEdition)
+          continue;
         for (const auto& chapter : edition.chapterList())
+          unselectedChapterUids.insert(chapter.uid());
+      }
+
+      if (selectedEdition)
+      {
+        editionUid = selectedEdition->uid();
+        for (const auto& chapter : selectedEdition->chapterList())
         {
           unsigned long long chapUid = chapter.uid();
 
@@ -454,6 +484,10 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
       if (targetTypeValue == 50 || targetTypeValue == 60)
         continue; // already processed in Pass 1
 
+      // A tag naming another edition describes tracks this file will not produce - see Pass 1.
+      if (tag.editionUid() != 0 && tag.editionUid() != editionUid)
+        continue;
+
       TagName = StringUtils::ToUpper(tag.name().to8Bit(true));
       TagValue = tag.toString().to8Bit(true);
 
@@ -490,6 +524,14 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
       }
       else if (targetTypeValue == 30)
       {
+        /*!
+        * A tag naming a chapter of an edition that was not selected describes a track this file
+        * will not produce. Neither merging it into a chapter it does not describe nor promoting
+        * it to the album is right, so it goes no further.
+        */
+        if (unselectedChapterUids.count(chapterUid) != 0)
+          continue;
+
         if (chapterCount == 1)
         {
           // Single chapter: route to the only chapter with duplicate check
