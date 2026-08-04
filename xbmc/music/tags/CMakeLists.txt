@@ -1,4 +1,5 @@
 set(SOURCES MatroskaTagParser.cpp
+            MatroskaTagReader.cpp
             MusicCodecInfoFFmpeg.cpp
             MusicInfoTag.cpp
             MusicInfoTagLoaderDatabase.cpp
@@ -12,6 +13,7 @@ set(SOURCES MatroskaTagParser.cpp
 
 set(HEADERS ImusicInfoTagLoader.h
             MatroskaTagParser.h
+            MatroskaTagReader.h
             MusicCodecInfoFFmpeg.h
             MusicInfoTag.h
             MusicInfoTagLoaderDatabase.h

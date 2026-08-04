@@ -9,6 +9,9 @@
 #pragma once
 
 #include "IFileDirectory.h"
+#include "music/tags/MatroskaTagReader.h"
+
+#include <memory>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -28,5 +31,7 @@ namespace XFILE
     protected:
       AVIOContext* m_ioctx = nullptr;
       AVFormatContext* m_fctx = nullptr;
+      //! Read by ContainsFiles() to count the tracks, consumed by GetDirectory() to build them.
+      std::unique_ptr<MUSIC_INFO::MatroskaAlbum> m_matroska;
   };
 }
