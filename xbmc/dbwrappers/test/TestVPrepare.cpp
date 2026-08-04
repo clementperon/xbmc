@@ -93,3 +93,71 @@ TEST_P(VPrepareNoParamTester, MySql)
 INSTANTIATE_TEST_SUITE_P(TestDbWrappers,
                          VPrepareNoParamTester,
                          testing::ValuesIn(VPrepareNoParamTests));
+
+struct VPrepareStringParamTest
+{
+  std::string format;
+  std::string param;
+  std::string expectedSqlite;
+  std::string expectedMySql;
+};
+
+const auto VPrepareStringParamTests = std::array{
+    // %s is the escaping conversion: a quote in the value has to come out doubled
+    VPrepareStringParamTest{"WHERE name = '%s'", "O'Brien", "WHERE name = 'O''Brien'",
+                            "WHERE name = 'O''Brien'"},
+    // ... including behind the LIKE wildcards, where the %% before it is a literal percent and
+    // does not turn the %s into the literal "%s" that %%s asks for
+    VPrepareStringParamTest{"WHERE name LIKE '%%%s%%'", "O'Brien", "WHERE name LIKE '%O''Brien%'",
+                            "WHERE name LIKE '%O''Brien%'"},
+    VPrepareStringParamTest{"WHERE name LIKE '%%%s'", "O'Brien", "WHERE name LIKE '%O''Brien'",
+                            "WHERE name LIKE '%O''Brien'"},
+    VPrepareStringParamTest{"WHERE name LIKE '%s%%'", "O'Brien", "WHERE name LIKE 'O''Brien%'",
+                            "WHERE name LIKE 'O''Brien%'"},
+    // a literal %s still survives, and does not consume the conversion that follows it
+    VPrepareStringParamTest{"CAST(strftime(\"%%s\",c01) AS REAL) = '%s'", "O'Brien",
+                            "CAST(strftime(\"%s\",c01) AS REAL) = 'O''Brien'",
+                            "CAST(strftime(\"%s\",c01) AS REAL) = 'O''Brien'"},
+};
+
+class VPrepareStringParamTester : public testing::WithParamInterface<VPrepareStringParamTest>,
+                                  public testing::Test
+{
+};
+
+TEST_P(VPrepareStringParamTester, Sqlite)
+{
+  const auto params = GetParam();
+  EXPECT_EQ(params.expectedSqlite,
+            PrepareSQL<dbiplus::SqliteDatabase>(params.format, params.param.c_str()));
+}
+
+#if defined(HAS_MYSQL) || defined(HAS_MARIADB)
+TEST_P(VPrepareStringParamTester, MySql)
+{
+  const auto params = GetParam();
+  EXPECT_EQ(params.expectedMySql,
+            PrepareSQL<dbiplus::MysqlDatabase>(params.format, params.param.c_str()));
+}
+#endif
+
+INSTANTIATE_TEST_SUITE_P(TestDbWrappers,
+                         VPrepareStringParamTester,
+                         testing::ValuesIn(VPrepareStringParamTests));
+
+// A conversion that is neither %% nor %s must not put the left to right scan out of step, so the
+// LIKE wildcards after one are still recognised as literal percents. VIDEODB_ID_* queries look
+// exactly like this.
+TEST(TestDbWrappers, VPrepareMixedConversionsSqlite)
+{
+  EXPECT_EQ("WHERE c07 LIKE '%O''Brien%'",
+            PrepareSQL<dbiplus::SqliteDatabase>("WHERE c%02d LIKE '%%%s%%'", 7, "O'Brien"));
+}
+
+#if defined(HAS_MYSQL) || defined(HAS_MARIADB)
+TEST(TestDbWrappers, VPrepareMixedConversionsMySql)
+{
+  EXPECT_EQ("WHERE c07 LIKE '%O''Brien%'",
+            PrepareSQL<dbiplus::MysqlDatabase>("WHERE c%02d LIKE '%%%s%%'", 7, "O'Brien"));
+}
+#endif
