@@ -30,6 +30,11 @@
  * When this is not defined, Matroska music tags are read through FFmpeg instead - see
  * CAudioBookFileDirectory and CMusicInfoTagLoaderFFmpeg. Both paths share the tag name mapping in
  * CMatroskaTagParser, so the feature degrades in fidelity rather than disappearing.
+ *
+ * 2.3.1 needs 002-matroska-fast-scan-segment-lookup.patch: it bounds the Segment lookup by the
+ * AudioProperties::Fast scan limit and so reads no tags from any Matroska over 512 KiB. Internal
+ * builds carry the patch, a distro 2.3.1 does not. Move this floor to the first release carrying
+ * the fix upstream.
  */
 #if TAGLIB_VERSION_INT >= 20301
 #define HAS_TAGLIB_MATROSKA 1
