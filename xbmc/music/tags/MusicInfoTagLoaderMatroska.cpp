@@ -444,6 +444,14 @@ void CMusicInfoTagLoaderMatroska::GetMatroskaMusicTags(
     {
       if (tag.targetTypeValue() == 50 || tag.targetTypeValue() == 60)
       {
+        /*!
+        * A tag naming an edition belongs to that edition alone. Files with several editions carry
+        * one such TITLE each, and taking whichever came first in the file names the album after an
+        * edition that is not the one being read. A zero EditionUID applies to all editions.
+        */
+        if (tag.editionUid() != 0 && tag.editionUid() != editionUid)
+          continue;
+
         TagName = StringUtils::ToUpper(tag.name().to8Bit(true));
         TagValue = tag.toString().to8Bit(true);
         /*!
