@@ -15,6 +15,7 @@ xbmc/filesystem/test/data/audiobook/partnumber.mka
 xbmc/filesystem/test/data/audiobook/precedence.mka
 xbmc/filesystem/test/data/audiobook/repeated.mka
 xbmc/filesystem/test/data/audiobook/singlefile.mka
+xbmc/filesystem/test/data/audiobook/twoeditions.mka
 xbmc/filesystem/test/data/httpdirectory/apache-default.html
 xbmc/filesystem/test/data/httpdirectory/apache-fancy.html
 xbmc/filesystem/test/data/httpdirectory/apache-html.html

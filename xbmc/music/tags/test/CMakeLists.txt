@@ -1,4 +1,5 @@
 set(SOURCES TestMatroskaTagParser.cpp
+            TestMatroskaTagReaderFFmpeg.cpp
             TestMusicInfoTagLoaderMatroska.cpp
             TestTagLoaderTagLib.cpp)
 
