@@ -14,8 +14,11 @@
 #endif // HAS_OPTICAL_DRIVE
 #include "MusicInfoTagLoaderDatabase.h"
 #include "MusicInfoTagLoaderFFmpeg.h"
-#include "MusicInfoTagLoaderMatroska.h"
 #include "MusicInfoTagLoaderShn.h"
+#include "TagLibVersion.h"
+#ifdef HAS_TAGLIB_MATROSKA
+#include "MusicInfoTagLoaderMatroska.h"
+#endif
 #include "ServiceBroker.h"
 #include "TagLoaderTagLib.h"
 #include "addons/AudioDecoder.h"
@@ -89,7 +92,15 @@ IMusicInfoTagLoader* CMusicInfoTagLoaderFactory::CreateLoader(const CFileItem& i
     return pTagLoader;
   }
   else if (strExtension == "mka" || strExtension == "mkv")
+  {
+#ifdef HAS_TAGLIB_MATROSKA
     return new CMusicInfoTagLoaderMatroska();
+#else
+    // FFmpeg reads a subset of the same Matroska tags. MUSIC::IsAudioBook() admits mka/mkv from
+    // a music source whether or not TagLib can read them, so without this they get no tags.
+    return new CMusicInfoTagLoaderFFmpeg();
+#endif
+  }
   else if (strExtension == "dsf" || strExtension == "dff")
     return new CMusicInfoTagLoaderFFmpeg();
 
