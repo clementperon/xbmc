@@ -185,7 +185,6 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
     * Micro chapters (less than 1 second long) are skipped as they are not
     * real tracks/songs — they can occur in some Matroska files as artifacts.
     */
-    int chapterCount = 0;
     unsigned long long editionUid = 0;
     std::set<unsigned long long> unselectedChapterUids;
     TagLib::Matroska::Chapters* chapters = matroskaFile->chapters();
@@ -227,12 +226,6 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
         {
           unsigned long long chapUid = chapter.uid();
 
-          // Skip micro chapters less than 1 second long
-          long long durationNs = std::abs(static_cast<long long>(chapter.timeEnd()) -
-                                          static_cast<long long>(chapter.timeStart()));
-          if (durationNs < 1000000000LL)
-            continue;
-
           std::string chapterName;
           if (chapUid > 0 && !chapter.displayList().isEmpty())
           {
@@ -246,7 +239,6 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
           entry.tags.emplace("CHAPTERNAME", chapterName);
           entry.start = static_cast<double>(chapter.timeStart()) / 1000000000.0;
           entry.end = static_cast<double>(chapter.timeEnd()) / 1000000000.0;
-          chapterCount++;
         }
       }
     }
@@ -262,15 +254,7 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
     *  - use the next chapter's start time, or
     *  - use the file duration for the last chapter.
     */
-    constexpr unsigned long long DummyChapterUid = 999000999000999;
-    if (album.chapters.empty())
-    {
-      // Nameless on purpose: it is somewhere to route song tags, not a chapter, so nothing of it
-      // may reach the title fallback below.
-      chapterIndex[DummyChapterUid] = album.chapters.size();
-      album.chapters.emplace_back();
-    }
-    else
+    if (!album.chapters.empty())
     {
       for (size_t i = 0; i < album.chapters.size(); ++i)
       {
@@ -437,7 +421,7 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
         * one naming a chapter this file does not have falls back to the album.
         */
         ChapterTags* target = nullptr;
-        if (chapterCount == 1)
+        if (album.chapters.size() == 1)
           target = &album.chapters.front();
         else if (chapterUid > 1)
         {
@@ -454,9 +438,10 @@ MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
                              TagName) != std::end(MULTIPLE_VALUE_TAGS))
             AppendIfNotDuplicate(it->second, TagValue, TagName);
         }
-        else if (chapterUid > 1)
+        else
         {
-          // so this chapter was not in the Chapters element. Fall back to fileTags.
+          // Either the file has no chapters at all, or names one it does not contain. Either way
+          // the tag describes the file rather than a track of it.
           if (fileTags.find(TagName) == fileTags.end())
           {
             fileTags[TagName] = TagValue;

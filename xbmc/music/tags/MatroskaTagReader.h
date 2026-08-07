@@ -25,7 +25,13 @@ struct ChapterTags
   double end = 0.0;
 };
 
-//! Matroska tags of a whole file: file (album) level plus one entry per chapter, in file order.
+/*!
+ * \brief Matroska tags of a whole file: album level, plus one entry per chapter in file order.
+ *
+ * Every chapter the file declares is here, with a play range both readers fill. Whether a chapter
+ * is short enough not to be a track is the library's call and is made by the caller, so that the
+ * two readers describe the same file the same way.
+ */
 struct MatroskaAlbum
 {
   std::map<std::string, std::string> fileTags;

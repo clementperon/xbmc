@@ -30,6 +30,7 @@
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -60,6 +61,21 @@ static int64_t cfile_file_seek(void* h, int64_t pos, int whence)
   else
     return pFile->Seek(pos, whence & ~AVSEEK_FORCE);
 }
+
+namespace
+{
+/*!
+ * Whether a chapter is long enough to stand as a track. Files carrying a chapter of a fraction of
+ * a second happen; neither reader drops them, so that both describe a file the same way, and the
+ * call is made here once for both.
+ */
+constexpr double MinimumTrackSeconds = 1.0;
+
+bool IsTrack(const ChapterTags& chapter)
+{
+  return chapter.end - chapter.start >= MinimumTrackSeconds;
+}
+} // unnamed namespace
 
 CAudioBookFileDirectory::~CAudioBookFileDirectory(void)
 {
@@ -177,13 +193,12 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
       end = m_matroska->chapters[i].end;
     }
 
-    const double chapter_size = end - start;
-    if (chapter_size < 1) // Chapter must have positive time of more than 1 sec
+    if (!IsTrack({{}, start, end}))
     {
       CLog::Log(LOGWARNING,
                 "CAudioBookFileDirectory: Tiny chapter of size {}s detected when scanning {} Most "
                 "likely this file needs the chapters correcting",
-                chapter_size, url.GetRedacted());
+                end - start, url.GetRedacted());
       chapter_error = true;
       continue;
     }
@@ -323,5 +338,7 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
    */
   m_matroska = std::make_unique<MatroskaAlbum>(ReadMatroskaTags(url, m_fctx));
 
-  return m_matroska->hasAlbumTags() && m_matroska->chapters.size() > 1;
+  const auto tracks =
+      std::count_if(m_matroska->chapters.begin(), m_matroska->chapters.end(), IsTrack);
+  return m_matroska->hasAlbumTags() && tracks > 1;
 }

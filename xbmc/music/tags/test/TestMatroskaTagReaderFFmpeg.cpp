@@ -9,6 +9,7 @@
 #include "URL.h"
 #include "filesystem/File.h"
 #include "music/tags/MatroskaTagReader.h"
+#include "music/tags/TagLibVersion.h"
 #include "test/TestUtils.h"
 
 #include <string>
@@ -53,7 +54,8 @@ class Fixture
 public:
   explicit Fixture(const std::string& name)
   {
-    const std::string path = XBMC_REF_FILE_PATH("xbmc/filesystem/test/data/audiobook/" + name);
+    m_path = XBMC_REF_FILE_PATH("xbmc/filesystem/test/data/audiobook/" + name);
+    const std::string& path = m_path;
     if (!m_file.Open(CURL(path)))
       return;
 
@@ -86,8 +88,11 @@ public:
   }
 
   const MatroskaAlbum& album() const { return m_album; }
+  const AVFormatContext* context() const { return m_fctx; }
+  const std::string& path() const { return m_path; }
 
 private:
+  std::string m_path;
   XFILE::CFile m_file;
   AVIOContext* m_ioctx = nullptr;
   AVFormatContext* m_fctx = nullptr;
@@ -179,3 +184,27 @@ TEST(TestMatroskaTagReaderFFmpeg, ReportsEveryChapterIncludingTheTiniest)
   EXPECT_DOUBLE_EQ(3.0, f.album().chapters[1].start);
   EXPECT_DOUBLE_EQ(3.4, f.album().chapters[1].end);
 }
+
+#ifdef HAS_TAGLIB_MATROSKA
+/*!
+ * Whatever else the two readers differ on, the shape of what they return has to match: the same
+ * chapters, in the same order, with the same ranges. Which of them count as tracks is decided once
+ * by the caller, which is only sound if both readers describe a file the same way.
+ */
+TEST(TestMatroskaTagReaderFFmpeg, AgreesWithTagLibOnTheChapterList)
+{
+  for (const char* name : {"chaptered.mka", "chapternames-only.mka", "precedence.mka",
+                           "microchapter.mka", "twoeditions.mka", "singlefile.mka"})
+  {
+    const Fixture f(name);
+    const MatroskaAlbum taglib = ReadMatroskaTags(CURL(f.path()), f.context());
+
+    ASSERT_EQ(f.album().chapters.size(), taglib.chapters.size()) << name;
+    for (size_t i = 0; i < taglib.chapters.size(); ++i)
+    {
+      EXPECT_DOUBLE_EQ(f.album().chapters[i].start, taglib.chapters[i].start) << name << ' ' << i;
+      EXPECT_DOUBLE_EQ(f.album().chapters[i].end, taglib.chapters[i].end) << name << ' ' << i;
+    }
+  }
+}
+#endif // TagLib >= 2.3.1
