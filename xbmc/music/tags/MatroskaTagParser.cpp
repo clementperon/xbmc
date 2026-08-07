@@ -13,6 +13,7 @@
 
 #include <exception>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace MUSIC_INFO;
@@ -23,24 +24,51 @@ void CMatroskaTagParser::ParseTag(const std::string& key,
                                   const std::string& musicsep,
                                   CMusicInfoTag& tag)
 {
+  if (Map(key, value, separators, musicsep, tag))
+    return;
+
+  /*!
+  * FFmpeg's demuxer has no TargetTypeValue to carry, so it prefixes a tag with the TargetType name
+  * the file gives it and a slash: a TargetTypeValue 50 COMPOSER arrives as ALBUM/COMPOSER. Under
+  * the prefix the name is the ordinary one, so strip it and try again. The two whose meaning
+  * changes with the prefix, ALBUM/TITLE and ALBUM/ARTIST, are matched above and never reach here.
+  *
+  * ALBUM is the conventional TargetType name for TargetTypeValue 50; a file naming it otherwise is
+  * not recognised.
+  */
+  constexpr std::string_view albumPrefix = "ALBUM/";
+  if (key.starts_with(albumPrefix))
+    Map(key.substr(albumPrefix.size()), value, separators, musicsep, tag);
+}
+
+bool CMatroskaTagParser::Map(const std::string& key,
+                             const std::string& value,
+                             const std::vector<std::string>& separators,
+                             const std::string& musicsep,
+                             CMusicInfoTag& tag)
+{
   /*!
   * Matroska Tag spec does not allow storing multi values in a single tag, but some tools
   * do it anyway using a delimiter. So we need to split the value using the separator and
   * then join it back using the music item separator from as.xml if needed.
   *
   * The spaced spellings (ALBUM ARTIST, ARTIST SORT, ...) are what mp3tag writes; the
-  * underscored and run-together ones are what the spec and most other taggers use.
+  * underscored and run-together ones are what the spec and most other taggers use. The ALBUM/
+  * prefixed ones come from FFmpeg's demuxer alone - see ParseTag() - and mean the same tag at
+  * album level; only these two change field with the prefix.
   */
-  if (key == "ALBUM")
+  if (key == "ALBUM" || key == "ALBUM/TITLE")
     tag.SetAlbum(value);
   else if (key == "ARTIST")
     // tag.SetArtist(StringUtils::Join(StringUtils::Split(value, separators), musicsep));
     tag.SetArtist(value);
   else if (key == "ARTISTS")
     tag.SetMusicBrainzArtistHints(StringUtils::Split(value, separators));
-  else if (key == "ALBUMARTISTS" || key == "ALBUM_ARTISTS" || key == "ALBUM ARTISTS")
+  else if (key == "ALBUMARTISTS" || key == "ALBUM_ARTISTS" || key == "ALBUM ARTISTS" ||
+           key == "ALBUM/ARTISTS")
     tag.SetAlbumArtist(value);
-  else if (key == "ALBUMARTIST" || key == "ALBUM_ARTIST" || key == "ALBUM ARTIST")
+  else if (key == "ALBUMARTIST" || key == "ALBUM_ARTIST" || key == "ALBUM ARTIST" ||
+           key == "ALBUM/ARTIST")
     tag.SetAlbumArtist(StringUtils::Join(StringUtils::Split(value, separators), musicsep));
   else if (key == "TITLE")
     tag.SetTitle(value);
@@ -157,6 +185,10 @@ void CMatroskaTagParser::ParseTag(const std::string& key,
 
     AddCommaDelimitedString(tagdata, separators, tag);
   }
+  else
+    return false;
+
+  return true;
 }
 
 void CMatroskaTagParser::AddRole(const std::vector<std::string>& data,

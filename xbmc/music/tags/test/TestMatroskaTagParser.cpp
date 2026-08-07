@@ -48,6 +48,7 @@ bool HasRole(const CMusicInfoTag& tag, const std::string& role, const std::strin
 TEST(TestMatroskaTagParser, MapsFileLevelTagsToTheirFields)
 {
   EXPECT_EQ(Parse("ALBUM", "Kind of Blue").GetAlbum(), "Kind of Blue");
+  EXPECT_EQ(Parse("ALBUM/TITLE", "Kind of Blue").GetAlbum(), "Kind of Blue");
   EXPECT_EQ(Parse("TITLE", "So What").GetTitle(), "So What");
   EXPECT_EQ(Parse("ARTIST", "Miles Davis").GetArtistString(), "Miles Davis");
   EXPECT_EQ(Parse("PUBLISHER", "Columbia").GetRecordLabel(), "Columbia");
@@ -67,6 +68,7 @@ TEST(TestMatroskaTagParser, MapsDatesToReleaseAndOriginal)
 {
   EXPECT_EQ(Parse("DATE", "1959-08-17").GetReleaseDate(), "1959-08-17");
   EXPECT_EQ(Parse("DATE_RELEASED", "1959-08-17").GetReleaseDate(), "1959-08-17");
+  EXPECT_EQ(Parse("ALBUM/DATE_RELEASED", "1959-08-17").GetReleaseDate(), "1959-08-17");
   EXPECT_EQ(Parse("YEAR", "1959").GetReleaseDate(), "1959");
   EXPECT_EQ(Parse("DATE_RECORDED", "1959-03-02").GetOriginalDate(), "1959-03-02");
   EXPECT_EQ(Parse("ORIGYEAR", "1959").GetOriginalDate(), "1959");
@@ -93,7 +95,7 @@ TEST(TestMatroskaTagParser, MapsMusicBrainzIdentifiers)
  */
 TEST(TestMatroskaTagParser, AcceptsEverySpellingOfTheAlbumArtistKeys)
 {
-  for (const char* key : {"ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST"})
+  for (const char* key : {"ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST", "ALBUM/ARTIST"})
     EXPECT_EQ(Parse(key, "Miles Davis").GetAlbumArtistString(), "Miles Davis") << key;
 
   for (const char* key : {"ALBUMARTISTSORT", "SORT_ALBUM_ARTIST", "ALBUM ARTIST SORT"})
@@ -162,6 +164,21 @@ TEST(TestMatroskaTagParser, MatchesUpperCaseKeysOnly)
 {
   EXPECT_TRUE(Parse("album", "Kind of Blue").GetAlbum().empty());
   EXPECT_TRUE(Parse("Artist", "Miles Davis").GetArtistString().empty());
+}
+
+/*!
+ * FFmpeg names a tag after the TargetType the file gives it, so an album level tag arrives under
+ * ALBUM/. Anything the prefix does not change the meaning of maps as it would without it.
+ */
+TEST(TestMatroskaTagParser, StripsFFmpegsAlbumPrefix)
+{
+  EXPECT_TRUE(HasRole(Parse("ALBUM/COMPOSER", "Bill Evans"), "Composer", "Bill Evans"));
+  EXPECT_EQ(Parse("ALBUM/GENRE", "Jazz").GetGenre(), (std::vector<std::string>{"Jazz"}));
+  EXPECT_EQ(Parse("ALBUM/MUSICBRAINZ_ALBUMID", "abc").GetMusicBrainzAlbumID(), "abc");
+
+  // but not where the prefix is what tells the two fields apart
+  EXPECT_EQ(Parse("ALBUM/TITLE", "Kind of Blue").GetTitle(), "");
+  EXPECT_EQ(Parse("ALBUM/ARTIST", "Miles Davis").GetArtistString(), "");
 }
 
 TEST(TestMatroskaTagParser, LeavesTheTagUntouchedForUnknownKeys)

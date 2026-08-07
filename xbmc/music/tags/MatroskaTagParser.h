@@ -47,6 +47,18 @@ public:
                        CMusicInfoTag& tag);
 
 private:
+  /*!
+   * \brief Apply one tag, reporting whether the name was one this knows.
+   *
+   * Separate from ParseTag() so that a name it does not know can be retried with FFmpeg's ALBUM_
+   * prefix removed - see ParseTag().
+   */
+  static bool Map(const std::string& key,
+                  const std::string& value,
+                  const std::vector<std::string>& separators,
+                  const std::string& musicsep,
+                  CMusicInfoTag& tag);
+
   static void AddRole(const std::vector<std::string>& data,
                       const std::vector<std::string>& separators,
                       CMusicInfoTag& musictag);
