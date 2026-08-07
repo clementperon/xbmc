@@ -30,7 +30,9 @@ struct MatroskaAlbum
 {
   std::map<std::string, std::string> fileTags;
   std::vector<ChapterTags> chapters;
-  bool valid = false;
+
+  //! Whether the file carries album level tags, which is what makes it worth expanding.
+  bool hasAlbumTags() const { return !fileTags.empty(); }
 };
 
 /*!
@@ -44,7 +46,20 @@ struct MatroskaAlbum
  *
  * \param url The file, for a reader that opens it itself.
  * \param fctx A demuxer context already opened on it, for a reader that does not.
- * \return The album, its valid flag false if the file holds nothing worth an album.
+ * \return What the file holds. Both members are empty for a file the reader could not read, so
+ *         what counts as an album is the caller's to decide.
  */
 MatroskaAlbum ReadMatroskaTags(const CURL& url, const AVFormatContext* fctx);
+
+/*!
+ * \brief Read with FFmpeg's demuxer, whether or not it is the reader this build uses.
+ *
+ * ReadMatroskaTags() is what production calls. This names the FFmpeg reader directly so that the
+ * fallback can be tested from a build that has TagLib, which is every build the CI makes - it is
+ * otherwise compiled and never run.
+ *
+ * \param fctx A demuxer context already opened on the file. Required: this reader has no other
+ *             way to reach it.
+ */
+MatroskaAlbum ReadMatroskaTagsWithFFmpeg(const CURL& url, const AVFormatContext* fctx);
 } // namespace MUSIC_INFO

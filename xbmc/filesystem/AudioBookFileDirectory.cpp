@@ -113,7 +113,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   {
     if (!m_matroska)
       m_matroska = std::make_unique<MatroskaAlbum>(ReadMatroskaTags(url, m_fctx));
-    if (!m_matroska->valid)
+    if (!m_matroska->hasAlbumTags())
       return true;
     /*!
      * initially just get the (file) Album level tags to be use in subsequent tracks
@@ -323,5 +323,5 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
    */
   m_matroska = std::make_unique<MatroskaAlbum>(ReadMatroskaTags(url, m_fctx));
 
-  return m_matroska->valid && m_matroska->chapters.size() > 1;
+  return m_matroska->hasAlbumTags() && m_matroska->chapters.size() > 1;
 }
