@@ -10,6 +10,7 @@
 #include "FileItemList.h"
 #include "URL.h"
 #include "filesystem/AudioBookFileDirectory.h"
+#include "music/Artist.h"
 #include "music/tags/MusicInfoTag.h"
 #include "music/tags/TagLibVersion.h"
 #include "test/TestUtils.h"
@@ -20,11 +21,8 @@
 
 /*!
  * The fixtures come from tools/testdata/mkmka.py, which is also where what each one holds is
- * written down. Only the TagLib reader is asserted here: below its version floor Kodi reads
- * Matroska with FFmpeg, which returns a documented subset - see MatroskaTagReader.cpp.
+ * written down. These hold for either reader, bar the one marked below.
  */
-#ifdef HAS_TAGLIB_MATROSKA
-
 using namespace XFILE;
 
 namespace
@@ -121,6 +119,26 @@ TEST(TestAudioBookFileDirectory, KeepsTheTrackNumberAChapterGivesItself)
   EXPECT_EQ(7, items[2]->GetMusicInfoTag()->GetTrackNumber());
 }
 
+/*!
+ * A file can hold several editions and only one of them is followed. Tags targeting a chapter of
+ * an edition that was not selected describe tracks this file does not produce, so they must reach
+ * neither the tracks nor the album.
+ */
+TEST(TestAudioBookFileDirectory, IgnoresTagsFromAnEditionItDidNotSelect)
+{
+  CFileItemList items;
+  Expand("twoeditions.mka", items);
+
+  ASSERT_EQ(3, items.Size());
+  for (int i = 0; i < items.Size(); ++i)
+  {
+    EXPECT_NE("FOREIGN TITLE", items[i]->GetMusicInfoTag()->GetTitle()) << i;
+    for (const auto& c : items[i]->GetMusicInfoTag()->GetContributors())
+      EXPECT_NE("Foreign Composer", c.GetArtist()) << i;
+  }
+}
+
+#ifdef HAS_TAGLIB_MATROSKA
 /*!
  * The Matroska spec writes one SimpleTag per value, so three composers are three tags. Keeping only
  * the last is the fidelity FFmpeg's demuxer cannot offer and TagLib can.
