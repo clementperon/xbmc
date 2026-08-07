@@ -57,9 +57,9 @@ def simple_tag(name, value):
     return el("67C8", txt("45A3", name) + txt("4487", value) + uint("4484", 1) + txt("447A", "und"))
 
 
-def build(chapters, album_tags, chapter_tags):
+def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_tags=()):
     """chapters: (uid, start_ms, end_ms, display name). *_tags: (name, value) pairs."""
-    duration = max(end for _uid, _start, end, _name in chapters)
+    duration = max((end for _uid, _start, end, _name in chapters), default=9000)
 
     header = el(
         "1A45DFA3",
@@ -92,9 +92,22 @@ def build(chapters, album_tags, chapter_tags):
         )
         for uid, start, end, name in chapters
     )
-    chapters_el = el(
-        "1043A770", el("45B9", uint("45BC", 1) + uint("45DB", 1) + uint("45DD", 0) + atoms)
+    editions = (
+        el("45B9", uint("45BC", 1) + uint("45DB", 1) + uint("45DD", 0) + atoms) if chapters else b""
     )
+    if other_edition:
+        # A second, non-default edition. Its chapters are not the ones a player follows.
+        other_atoms = b"".join(
+            el(
+                "B6",
+                uint("73C4", uid) + uint("91", start * TIMESCALE) + uint("92", end * TIMESCALE)
+                + uint("98", 0) + uint("4598", 1)
+                + el("80", txt("85", name) + txt("437C", "eng")),
+            )
+            for uid, start, end, name in other_edition
+        )
+        editions += el("45B9", uint("45BC", 2) + uint("45DB", 0) + uint("45DD", 0) + other_atoms)
+    chapters_el = el("1043A770", editions) if editions else b""
 
     # TargetTypeValue 50 is the album, 30 a track - the distinction TagLib keeps and FFmpeg flattens.
     album = el(
@@ -115,7 +128,16 @@ def build(chapters, album_tags, chapter_tags):
     frame = b"\x00" * 192
     cluster = el("1F43B675", uint("E7", 0) + el("A3", b"\x81\x00\x00\x80" + frame))
 
-    tags = el("1254C367", album + tracks_tags)
+    other_tags = b"".join(
+        el(
+            "7373",
+            el("63C0", uint("68CA", 30) + txt("63CA", "TRACK") + uint("63C4", uid))
+            + b"".join(simple_tag(n, v) for n, v in other_edition_tags),
+        )
+        for uid, _s, _e, _n in (other_edition or [])
+    ) if other_edition_tags else b""
+
+    tags = el("1254C367", album + tracks_tags + other_tags)
 
     return header + el("18538067", info + tracks + chapters_el + tags + cluster)
 
@@ -161,6 +183,20 @@ FIXTURES = {
     # PART_NUMBER disagreeing with file order: the tags number the tracks, not the position.
     "partnumber.mka": lambda: build(
         THREE, ALBUM, lambda uid, index, name: [("TITLE", name), ("PART_NUMBER", str(index + 4))]
+    ),
+    # One song in one file, the common case: album level tags and no chapters at all. This is what
+    # CMusicInfoTagLoaderMatroska reads, the path that never goes through CAudioBookFileDirectory.
+    "singlefile.mka": lambda: build([], ALBUM + [("COMPOSER", "Bill Evans")], lambda *_: []),
+    # A second edition whose chapters carry their own tags. None of it describes a track this
+    # file produces, so none of it may reach the selected edition's tracks or the album.
+    "twoeditions.mka": lambda: build(
+        THREE,
+        ALBUM,
+        per_track,
+        other_edition=[(2001, 0, 5000, "Other edition track")],
+        # COMPOSER, which the per-track tags do not set: a track level tag of the same name would
+        # overwrite the contamination and hide it.
+        other_edition_tags=[("TITLE", "FOREIGN TITLE"), ("COMPOSER", "Foreign Composer")],
     ),
     # Three composers as the spec asks for them. FFmpeg keeps only the last, TagLib all three.
     "repeated.mka": lambda: build(

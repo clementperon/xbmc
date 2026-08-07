@@ -14,11 +14,8 @@
 #endif // HAS_OPTICAL_DRIVE
 #include "MusicInfoTagLoaderDatabase.h"
 #include "MusicInfoTagLoaderFFmpeg.h"
-#include "MusicInfoTagLoaderShn.h"
-#include "TagLibVersion.h"
-#ifdef HAS_TAGLIB_MATROSKA
 #include "MusicInfoTagLoaderMatroska.h"
-#endif
+#include "MusicInfoTagLoaderShn.h"
 #include "ServiceBroker.h"
 #include "TagLoaderTagLib.h"
 #include "addons/AudioDecoder.h"
@@ -76,31 +73,23 @@ IMusicInfoTagLoader* CMusicInfoTagLoaderFactory::CreateLoader(const CFileItem& i
       strExtension == "wav" || strExtension == "mod" || strExtension == "s3m" ||
       strExtension == "it" || strExtension == "xm" || strExtension == "wv")
   {
-    CTagLoaderTagLib *pTagLoader = new CTagLoaderTagLib();
+    CTagLoaderTagLib* pTagLoader = new CTagLoaderTagLib();
     return pTagLoader;
   }
 #ifdef HAS_OPTICAL_DRIVE
   else if (strExtension == "cdda")
   {
-    CMusicInfoTagLoaderCDDA *pTagLoader = new CMusicInfoTagLoaderCDDA();
+    CMusicInfoTagLoaderCDDA* pTagLoader = new CMusicInfoTagLoaderCDDA();
     return pTagLoader;
   }
 #endif
   else if (strExtension == "shn")
   {
-    CMusicInfoTagLoaderSHN *pTagLoader = new CMusicInfoTagLoaderSHN();
+    CMusicInfoTagLoaderSHN* pTagLoader = new CMusicInfoTagLoaderSHN();
     return pTagLoader;
   }
   else if (strExtension == "mka" || strExtension == "mkv")
-  {
-#ifdef HAS_TAGLIB_MATROSKA
     return new CMusicInfoTagLoaderMatroska();
-#else
-    // FFmpeg reads a subset of the same Matroska tags. MUSIC::IsAudioBook() admits mka/mkv from
-    // a music source whether or not TagLib can read them, so without this they get no tags.
-    return new CMusicInfoTagLoaderFFmpeg();
-#endif
-  }
   else if (strExtension == "dsf" || strExtension == "dff")
     return new CMusicInfoTagLoaderFFmpeg();
 
