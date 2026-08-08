@@ -150,7 +150,7 @@ bool AppendIfNotDuplicate(std::string& currentValue,
  * ChapterUID all survive, so album level tags stay apart from a chapter's own, repeated tags all
  * arrive, and both stay tied to the edition they belong to.
  */
-MatroskaAlbum ReadWithTagLib(const CURL& url, const AVFormatContext* /*fctx*/)
+MatroskaAlbum ReadWithTagLib(const CURL& url)
 {
   MatroskaAlbum album;
   auto& fileTags = album.fileTags;
@@ -495,11 +495,19 @@ MatroskaAlbum MUSIC_INFO::ReadMatroskaTagsWithFFmpeg(const CURL& /*url*/,
   return ReadWithFFmpegImpl(fctx);
 }
 
+#ifdef HAS_TAGLIB_MATROSKA
+MatroskaAlbum MUSIC_INFO::ReadMatroskaTagsWithTagLib(const CURL& url,
+                                                     const AVFormatContext* /*fctx*/)
+{
+  return ReadWithTagLib(url);
+}
+#endif
+
 MatroskaAlbum MUSIC_INFO::ReadMatroskaTags(const CURL& url, const AVFormatContext* fctx)
 {
   // TagLib wherever the version floor allows it, FFmpeg below that: fewer tags rather than none.
 #ifdef HAS_TAGLIB_MATROSKA
-  return ReadWithTagLib(url, fctx);
+  return ReadMatroskaTagsWithTagLib(url, fctx);
 #else
   return ReadMatroskaTagsWithFFmpeg(url, fctx);
 #endif

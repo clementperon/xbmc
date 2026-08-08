@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "TagLibVersion.h"
+
 #include <map>
 #include <string>
 #include <vector>
@@ -50,8 +52,10 @@ struct MatroskaAlbum
  * agree on how many chapters a file has nor on their order. The tag names both produce mean the
  * same thing; CMatroskaTagParser is where that is settled.
  *
- * \param url The file, for a reader that opens it itself.
- * \param fctx A demuxer context already opened on it, for a reader that does not.
+ * \param url The file. Supply it whichever reader this build has.
+ * \param fctx A demuxer context already opened on the file. Supply it too: one reader reaches the
+ *             file through it, the other through the URL, and which one this is is not the
+ *             caller's business.
  * \return What the file holds. Both members are empty for a file the reader could not read, so
  *         what counts as an album is the caller's to decide.
  */
@@ -59,13 +63,15 @@ MatroskaAlbum ReadMatroskaTags(const CURL& url, const AVFormatContext* fctx);
 
 /*!
  * \brief Read with FFmpeg's demuxer, whether or not it is the reader this build uses.
- *
- * ReadMatroskaTags() is what production calls. This names the FFmpeg reader directly so that the
- * fallback can be tested from a build that has TagLib, which is every build the CI makes - it is
- * otherwise compiled and never run.
- *
- * \param fctx A demuxer context already opened on the file. Required: this reader has no other
- *             way to reach it.
+ * \param fctx A demuxer context already opened on the file. This reader has no other way to it.
  */
 MatroskaAlbum ReadMatroskaTagsWithFFmpeg(const CURL& url, const AVFormatContext* fctx);
+
+#ifdef HAS_TAGLIB_MATROSKA
+/*!
+ * \brief Read with TagLib's Matroska API, which this build has.
+ * \param url The file. This reader opens it itself and ignores any context.
+ */
+MatroskaAlbum ReadMatroskaTagsWithTagLib(const CURL& url, const AVFormatContext* fctx);
+#endif
 } // namespace MUSIC_INFO
