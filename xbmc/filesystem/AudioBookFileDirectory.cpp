@@ -127,8 +127,11 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   }
   else
   {
-    if (!m_matroska)
+    if (!m_matroska || m_matroskaUrl != url.Get())
+    {
       m_matroska = std::make_unique<MatroskaAlbum>(ReadMatroskaTags(url, m_fctx));
+      m_matroskaUrl = url.Get();
+    }
     if (!m_matroska->hasAlbumTags())
       return true;
     /*!
@@ -337,6 +340,7 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
    * the result is what keeps that from costing a second parse in GetDirectory().
    */
   m_matroska = std::make_unique<MatroskaAlbum>(ReadMatroskaTags(url, m_fctx));
+  m_matroskaUrl = url.Get();
 
   const auto tracks =
       std::count_if(m_matroska->chapters.begin(), m_matroska->chapters.end(), IsTrack);
