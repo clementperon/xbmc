@@ -193,8 +193,9 @@ TEST(TestMatroskaTagReaderFFmpeg, ReportsEveryChapterIncludingTheTiniest)
  */
 TEST(TestMatroskaTagReaderFFmpeg, AgreesWithTagLibOnTheChapterList)
 {
-  for (const char* name : {"chaptered.mka", "chapternames-only.mka", "precedence.mka",
-                           "microchapter.mka", "twoeditions.mka", "singlefile.mka"})
+  for (const char* name :
+       {"chaptered.mka", "chapternames-only.mka", "precedence.mka", "microchapter.mka",
+        "twoeditions.mka", "singlefile.mka", "noendtimes.mka"})
   {
     const Fixture f(name);
     const MatroskaAlbum taglib = ReadMatroskaTags(CURL(f.path()), f.context());

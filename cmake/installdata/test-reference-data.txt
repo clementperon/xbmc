@@ -11,6 +11,7 @@ xbmc/cores/VideoPlayer/Edl/test/testdata/videoredo.Vprj
 xbmc/filesystem/test/data/audiobook/chaptered.mka
 xbmc/filesystem/test/data/audiobook/chapternames-only.mka
 xbmc/filesystem/test/data/audiobook/microchapter.mka
+xbmc/filesystem/test/data/audiobook/noendtimes.mka
 xbmc/filesystem/test/data/audiobook/partnumber.mka
 xbmc/filesystem/test/data/audiobook/precedence.mka
 xbmc/filesystem/test/data/audiobook/repeated.mka

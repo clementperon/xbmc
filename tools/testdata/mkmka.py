@@ -57,7 +57,8 @@ def simple_tag(name, value):
     return el("67C8", txt("45A3", name) + txt("4487", value) + uint("4484", 1) + txt("447A", "und"))
 
 
-def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_tags=()):
+def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_tags=(),
+          omit_end_times=False):
     """chapters: (uid, start_ms, end_ms, display name). *_tags: (name, value) pairs."""
     duration = max((end for _uid, _start, end, _name in chapters), default=9000)
 
@@ -86,7 +87,9 @@ def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_
     atoms = b"".join(
         el(
             "B6",
-            uint("73C4", uid) + uint("91", start * TIMESCALE) + uint("92", end * TIMESCALE)
+            uint("73C4", uid) + uint("91", start * TIMESCALE)
+            # ChapterTimeEnd is optional in the spec and some taggers leave it out
+            + (b"" if omit_end_times else uint("92", end * TIMESCALE))
             + uint("98", 0) + uint("4598", 1)
             + el("80", txt("85", name) + txt("437C", "eng")),
         )
@@ -187,6 +190,9 @@ FIXTURES = {
     # One song in one file, the common case: album level tags and no chapters at all. This is what
     # CMusicInfoTagLoaderMatroska reads, the path that never goes through CAudioBookFileDirectory.
     "singlefile.mka": lambda: build([], ALBUM + [("COMPOSER", "Bill Evans")], lambda *_: []),
+    # Chapters with no ChapterTimeEnd, which the spec allows. Each reader has to work the end out
+    # for itself, and they have to reach the same answer.
+    "noendtimes.mka": lambda: build(THREE, ALBUM, per_track, omit_end_times=True),
     # A second edition whose chapters carry their own tags. None of it describes a track this
     # file produces, so none of it may reach the selected edition's tracks or the album.
     "twoeditions.mka": lambda: build(
