@@ -1,155 +1,211 @@
-diff -Naur base/meson.build mod/meson.build
---- base/meson.build	2026-07-13 16:07:35
-+++ mod/meson.build	2026-08-11 11:37:54
-@@ -69,8 +69,10 @@
+diff -Naur a/meson.build b/meson.build
+--- a/meson.build	2026-07-13 16:07:35
++++ b/meson.build	2026-08-11 13:29:40
+@@ -67,7 +67,9 @@
+ if host_machine.system() == 'windows'\
+    and cc.has_header('winioctl.h', args: test_args)
     # Windows is supported as long as winioctl.h is found
- elif host_machine.system() == 'darwin'
+-elif host_machine.system() == 'darwin'
++elif host_machine.system() == 'darwin' \
++     and cc.has_header('IOKit/storage/IODVDMediaBSDClient.h', args: test_args)
++    # iOS and tvOS also report as darwin but ship no DVD IOKit headers
      add_project_arguments(cc.get_supported_arguments('-no-cpp-precomp'), language: 'c')
--    cdata.set('DARWIN_DVD_IOCTL', 1)
--    extra_dependencies += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit'])
-+    if cc.has_header('IOKit/storage/IODVDMediaBSDClient.h', args: test_args)
-+      cdata.set('DARWIN_DVD_IOCTL', 1)
-+      extra_dependencies += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit'])
-+    endif
- elif host_machine.system() == 'sunos' \
-      and cc.has_header('sys/scsi/scsi_types.h', args: test_args) \
-      and cc.has_header('sys/scsi/impl/uscsi.h', args: test_args)
-diff -Naur base/src/device.c mod/src/device.c
---- base/src/device.c	2026-08-11 11:37:54
-+++ mod/src/device.c	2026-08-11 11:37:54
-@@ -124,6 +124,8 @@
-         return 1;
+     cdata.set('DARWIN_DVD_IOCTL', 1)
+     extra_dependencies += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit'])
+@@ -96,7 +98,8 @@
+     cdata.set('DVD_STRUCT_IN_SYS_DVDIO_H', 1)
+     cdata.set('HAVE_BSD_DVD_STRUCT', 1)
+ else
+-    warning('No DVD ioctls found for this system. libdvdcss will probably fail to build.')
++    cdata.set('DVDCSS_NO_IOCTLS', 1)
++    warning('No DVD ioctls found for this system. Title keys will be cracked rather than read from the drive.')
+ endif
  
-     return 0;
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
+ posix_mkdir = ''
+diff -Naur a/src/device.c b/src/device.c
+--- a/src/device.c	2026-08-11 13:29:40
++++ b/src/device.c	2026-08-11 13:29:40
+@@ -106,7 +106,9 @@
+     if( dvdcss->p_stream )
+         return 0;
+ 
+-#if defined( _WIN32 )
++#if defined( DVDCSS_NO_IOCTLS )
 +    return 0;
- #else
-     struct stat fileinfo;
-     int ret;
-diff -Naur base/src/ioctl.c mod/src/ioctl.c
---- base/src/ioctl.c	2026-07-13 16:07:35
-+++ mod/src/ioctl.c	2026-08-11 11:37:54
-@@ -229,10 +229,11 @@
-                         p_buffer, sizeof(p_buffer), &ulDataLen);
- 
++#elif defined( _WIN32 )
+     if( dvdcss->b_file )
+     {
+         return 0;
+diff -Naur a/src/ioctl.c b/src/ioctl.c
+--- a/src/ioctl.c	2026-07-13 16:07:35
++++ b/src/ioctl.c	2026-08-11 13:29:40
+@@ -231,7 +231,11 @@
      *pi_copyright = p_buffer[ 4 ];
--
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+    *pi_copyright = 0;
-+    i_ret = 0;
+ 
  #else
- #   error "DVD ioctls are unavailable on this system"
--
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)i_layer;
++    (void)pi_copyright;
++    i_ret = -1;
+ 
  #endif
      return i_ret;
- }
-@@ -359,7 +360,8 @@
-     }
- 
+@@ -361,7 +365,11 @@
      memcpy( p_key, p_buffer + 4, DVD_DISCKEY_SIZE );
--
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
+ 
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)p_key;
++    i_ret = -1;
  
-@@ -492,6 +494,8 @@
- 
+ #endif
+     return i_ret;
+@@ -493,7 +501,12 @@
      memcpy( p_key, p_buffer + 5, DVD_KEY_SIZE );
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)i_pos;
++    (void)p_key;
++    i_ret = -1;
  
-@@ -591,6 +595,8 @@
+ #endif
  
+@@ -592,7 +605,10 @@
      *pi_agid = p_buffer[ 7 ] >> 6;
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    i_ret = -1;
  
-@@ -701,6 +707,8 @@
- 
+ #endif
+     return i_ret;
+@@ -702,7 +718,11 @@
      memcpy( p_challenge, p_buffer + 4, DVD_CHALLENGE_SIZE );
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)p_challenge;
++    i_ret = -1;
  
-@@ -813,6 +821,8 @@
- 
+ #endif
+     return i_ret;
+@@ -814,7 +834,10 @@
      *pi_asf = p_buffer[ 7 ] & 1;
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_asf;
++    i_ret = -1;
  
-@@ -918,6 +928,8 @@
- 
+ #endif
+     return i_ret;
+@@ -919,7 +942,11 @@
      memcpy( p_key, p_buffer + 4, DVD_KEY_SIZE );
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)p_key;
++    i_ret = -1;
  
-@@ -1003,6 +1015,9 @@
-     i_ret = DosDevIOCtl(i_fd, IOCTL_CDROMDISK, CDROMDISK_EXECMD,
+ #endif
+     return i_ret;
+@@ -1004,7 +1031,10 @@
                          &sdc, sizeof(sdc), &ulParamLen,
                          NULL, 0, &ulDataLen);
-+
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    i_ret = -1;
  
-@@ -1122,6 +1137,8 @@
-     if (i_ret == 0)
+ #endif
+     return i_ret;
+@@ -1123,7 +1153,11 @@
          memcpy(p_data_buffer, p_buffer, CPRM_MEDIA_ID_SIZE);
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+    i_ret = 0;
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)p_agid;
++    (void)p_data_buffer;
++    i_ret = -1;
  
-@@ -1271,6 +1288,8 @@
-         memcpy(p_mkb_pack, p_buffer + 4, CPRM_MKB_PACK_SIZE);
+ #endif
+     return i_ret;
+@@ -1272,7 +1306,13 @@
      }
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+    i_ret = 0;
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)p_agid;
++    (void)mkb_pack;
++    (void)p_mkb_pack;
++    (void)p_total_packs;
++    i_ret = -1;
  
-@@ -1383,6 +1402,8 @@
-                          &sdc, sizeof(sdc), &ulParamLen,
+ #endif
+     return i_ret;
+@@ -1384,7 +1424,11 @@
                           p_buffer, sizeof(p_buffer), &ulDataLen );
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)p_challenge;
++    i_ret = -1;
  
-@@ -1494,6 +1515,8 @@
-                          &sdc, sizeof(sdc), &ulParamLen,
+ #endif
+     return i_ret;
+@@ -1495,7 +1539,11 @@
                           p_buffer, sizeof(p_buffer), &ulDataLen );
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)pi_agid;
++    (void)p_key;
++    i_ret = -1;
  
-@@ -1623,6 +1646,8 @@
-     *p_mask = p_buffer[ 5 ];
+ #endif
+     return i_ret;
+@@ -1624,7 +1672,12 @@
      *p_scheme = p_buffer[ 6 ];
  
-+#elif defined(__APPLE__) && (defined(__arm__) || defined(__aarch64__))
-+// nothing
  #else
- #   error "DVD ioctls are unavailable on this system"
+-#   error "DVD ioctls are unavailable on this system"
++    /* No DVD ioctls on this platform. */
++    (void)i_fd;
++    (void)p_type;
++    (void)p_mask;
++    (void)p_scheme;
++    i_ret = -1;
  
+ #endif
+     return i_ret;

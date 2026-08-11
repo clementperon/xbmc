@@ -18,6 +18,10 @@ if(NOT TARGET LIBRARY::${CMAKE_FIND_PACKAGE_NAME})
 
     set(patches "${CORE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/01-all-libc_read_improvement.patch")
 
+    # iOS and tvOS report as darwin but ship no IOKit DVD headers, so libdvdcss
+    # enables DARWIN_DVD_IOCTL and then fails on the includes. The patch detects the
+    # headers instead and gives the unmatched case a working build - proposed upstream
+    # as https://code.videolan.org/videolan/libdvdcss/-/merge_requests/38.
     if(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
       list(APPEND patches "${CORE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/02-darwinembedded-enablebuild.patch")
     endif()
