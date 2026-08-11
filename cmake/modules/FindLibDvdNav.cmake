@@ -18,6 +18,11 @@ if(NOT TARGET LIBRARY::${CMAKE_FIND_PACKAGE_NAME})
 
     find_package(LibDvdRead 7.0.0 REQUIRED ${SEARCH_QUIET})
 
+    # Backport of https://code.videolan.org/videolan/libdvdnav/-/merge_requests/74,
+    # which adds dvdnav_open_files() so a caller can hand libdvdread its own
+    # filesystem implementation. Applies on every platform, unlike the two below.
+    list(APPEND patches "${CORE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/03-all-dvdnav_open_files.patch")
+
     if(WIN32 OR WINDOWS_STORE)
       set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_libType shared)
       list(APPEND patches "${CORE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/01-win-uwpcompat.patch"

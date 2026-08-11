@@ -1,0 +1,164 @@
+diff --color -Naur a/src/dvdnav/dvdnav.h b/src/dvdnav/dvdnav.h
+--- a/src/dvdnav/dvdnav.h	2025-09-23 16:53:05
++++ b/src/dvdnav/dvdnav.h	2026-08-11 11:36:28
+@@ -42,6 +42,7 @@
+ 
+ #include <dvdnav/version.h>
+ #include <dvdnav/dvd_types.h>
++#include <dvdread/dvd_filesystem.h>
+ #include <dvdread/dvd_reader.h>
+ #include <dvdread/nav_types.h>
+ #include <dvdnav/dvdnav_events.h>
+@@ -65,6 +66,8 @@
+ 
+ typedef dvd_reader_stream_cb dvdnav_stream_cb;
+ 
++typedef dvd_reader_filesystem_h dvdnav_filesystem_h;
++
+ /*
+  * Unless otherwise stated, all functions return DVDNAV_STATUS_OK if
+  * they succeeded, otherwise DVDNAV_STATUS_ERR is returned and the error may
+@@ -119,6 +122,15 @@
+ DVDNAV_API dvdnav_status_t dvdnav_open_stream2(dvdnav_t **dest,
+                                     void *priv, const dvdnav_logger_cb *,
+                                     dvdnav_stream_cb *stream_cb);
++
++/*
++ * Attempts to open files given that the calling application provides the dvd_reader_filesystem implementation
++ * and the path to the file. Supports logging callbacks similarly to other dvdnav_open methods.
++ * Useful for opening files located on a virtual file system (vfs) such as smb, nfs, etc
++ */
++DVDNAV_API dvdnav_status_t dvdnav_open_files(dvdnav_t **dest,
++                             void *priv, const dvdnav_logger_cb *,
++                             const char *path, dvdnav_filesystem_h *fs);
+ 
+ DVDNAV_API dvdnav_status_t dvdnav_dup(dvdnav_t **dest, dvdnav_t *src);
+ DVDNAV_API dvdnav_status_t dvdnav_free_dup(dvdnav_t * _this);
+diff --color -Naur a/src/dvdnav.c b/src/dvdnav.c
+--- a/src/dvdnav.c	2025-09-23 16:53:05
++++ b/src/dvdnav.c	2026-08-11 11:36:28
+@@ -151,7 +151,8 @@
+ static dvdnav_status_t dvdnav_open_common(dvdnav_t** dest,
+                                           void *priv, const dvdnav_logger_cb *logcb,
+                                           const char *path,
+-                                          dvdnav_stream_cb *stream_cb) {
++                                          dvdnav_stream_cb *stream_cb,
++                                          dvdnav_filesystem_h *fs) {
+   dvdnav_t *this;
+   struct timeval time;
+ 
+@@ -174,7 +175,7 @@
+   if(!this->vm) {
+     goto fail;
+   }
+-  if(!vm_reset(this->vm, path, priv, stream_cb)) {
++  if(!vm_reset(this->vm, path, priv, stream_cb, fs)) {
+     goto fail;
+   }
+ 
+@@ -213,26 +214,32 @@
+ }
+ 
+ dvdnav_status_t dvdnav_open(dvdnav_t** dest, const char *path) {
+-  return dvdnav_open_common(dest, NULL, NULL, path, NULL);
++  return dvdnav_open_common(dest, NULL, NULL, path, NULL, NULL);
+ }
+ 
+ dvdnav_status_t dvdnav_open2(dvdnav_t** dest,
+                              void *priv,const dvdnav_logger_cb *logcb,
+                              const char *path) {
+-  return dvdnav_open_common(dest, priv, logcb, path, NULL);
++  return dvdnav_open_common(dest, priv, logcb, path, NULL, NULL);
+ }
+ 
+ dvdnav_status_t dvdnav_open_stream(dvdnav_t** dest,
+                                    void *priv, dvdnav_stream_cb *stream_cb) {
+-  return dvdnav_open_common(dest, priv, NULL, NULL, stream_cb);
++  return dvdnav_open_common(dest, priv, NULL, NULL, stream_cb, NULL);
+ }
+ 
+ dvdnav_status_t dvdnav_open_stream2(dvdnav_t** dest,
+                                     void *priv,const dvdnav_logger_cb *logcb,
+                                     dvdnav_stream_cb *stream_cb) {
+-  return dvdnav_open_common(dest, priv, logcb, NULL, stream_cb);
++  return dvdnav_open_common(dest, priv, logcb, NULL, stream_cb, NULL);
+ }
+ 
++dvdnav_status_t dvdnav_open_files(dvdnav_t** dest,
++                                      void *priv, const dvdnav_logger_cb *logcb,
++                                      const char *path, dvdnav_filesystem_h *fs) {
++  return dvdnav_open_common(dest, priv, logcb, path, NULL, fs);
++}
++
+ dvdnav_status_t dvdnav_close(dvdnav_t *this) {
+ 
+ #ifdef LOG_DEBUG
+@@ -280,7 +287,7 @@
+ #ifdef LOG_DEBUG
+   Log3(this, "resetting vm");
+ #endif
+-  if(!vm_reset(this->vm, NULL, NULL, NULL)) {
++  if(!vm_reset(this->vm, NULL, NULL, NULL, NULL)) {
+     printerr("Error restarting the VM.");
+     pthread_mutex_unlock(&this->vm_lock);
+     return DVDNAV_STATUS_ERR;
+diff --color -Naur a/src/vm/vm.c b/src/vm/vm.c
+--- a/src/vm/vm.c	2025-09-23 16:53:05
++++ b/src/vm/vm.c	2026-08-11 11:36:28
+@@ -334,7 +334,7 @@
+ 
+ int vm_start(vm_t *vm) {
+   if (vm->stopped) {
+-    if (!vm_reset(vm, NULL, NULL, NULL))
++    if (!vm_reset(vm, NULL, NULL, NULL, NULL))
+       return 0;
+ 
+     vm->stopped = 0;
+@@ -368,7 +368,7 @@
+ }
+ 
+ int vm_reset(vm_t *vm, const char *dvdroot,
+-             void *priv, dvdnav_stream_cb *stream_cb) {
++             void *priv, dvdnav_stream_cb *stream_cb, dvdnav_filesystem_h *fs) {
+   /*  Setup State */
+   memset(vm->state.registers.SPRM, 0, sizeof(vm->state.registers.SPRM));
+   memset(vm->state.registers.GPRM, 0, sizeof(vm->state.registers.GPRM));
+@@ -410,6 +410,7 @@
+       vm->streamcb = *stream_cb;
+   else
+       vm->streamcb = (dvdnav_stream_cb) { NULL, NULL, NULL };
++  vm->dvdreaderfs = fs;
+ 
+   /* bind local callbacks */
+   vm->dvdstreamcb.pf_seek = vm->streamcb.pf_seek ? dvd_reader_seek_handler : NULL;
+@@ -426,7 +427,9 @@
+     dvd_logger_cb dvdread_logcb = { .pf_log = dvd_reader_logger_handler };
+     /* Only install log handler if we have one ourself */
+     dvd_logger_cb *p_dvdread_logcb = vm->logcb.pf_log ? &dvdread_logcb : NULL;
+-    if(dvdroot)
++    if(dvdroot && fs)
++        vm->dvd = DVDOpenFiles(vm, p_dvdread_logcb, dvdroot, vm->dvdreaderfs);
++    else if(dvdroot)
+         vm->dvd = DVDOpen2(vm, p_dvdread_logcb, dvdroot);
+     else if(vm->priv && vm->dvdstreamcb.pf_read)
+         vm->dvd = DVDOpenStream2(vm, p_dvdread_logcb, &vm->dvdstreamcb);
+diff --color -Naur a/src/vm/vm.h b/src/vm/vm.h
+--- a/src/vm/vm.h	2025-09-23 16:53:05
++++ b/src/vm/vm.h	2026-08-11 11:36:28
+@@ -72,6 +72,7 @@
+   dvdnav_stream_cb streamcb;
+   dvd_reader_t *dvd;
+   dvd_reader_stream_cb dvdstreamcb;
++  dvdnav_filesystem_h *dvdreaderfs;
+   ifo_handle_t *vmgi;
+   ifo_handle_t *vtsi;
+   dvd_state_t   state;
+@@ -119,7 +120,7 @@
+ int  vm_start(vm_t *vm);
+ void vm_stop(vm_t *vm);
+ int  vm_reset(vm_t *vm, const char *dvdroot, void *priv,
+-              dvdnav_stream_cb *stream_cb);
++              dvdnav_stream_cb *stream_cb, dvdnav_filesystem_h *fs);
+ 
+ /* copying and merging  - useful for try-running an operation */
+ vm_t *vm_new_copy(vm_t *vm);
