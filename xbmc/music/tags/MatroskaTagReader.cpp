@@ -203,19 +203,18 @@ bool AppendIfNotDuplicate(std::string& currentValue,
 
 /*!
 * Record one tag, keeping any value the same name already carries if the name is one that holds
-* several. The key is what the map is filed under and the name is what decides that, which differ
-* for an album level tag: ALBUM/ARTIST is filed apart from the track's, but takes several values
-* for the same reason ARTIST does.
+* several. An album level tag is told apart from a track's by which map it is handed, not by its
+* name: ALBUM/ARTIST is filed with the album's tags and ARTIST with the track's, both under the
+* name the file gave, and both taking several values for the same reason.
 */
 void AddTagValue(std::map<std::string, std::string>& tags,
-                 const std::string& key,
                  const std::string& name,
                  const std::string& value)
 {
-  const auto it = tags.find(key);
+  const auto it = tags.find(name);
   if (it == tags.end())
   {
-    tags.emplace(key, value);
+    tags.emplace(name, value);
     return;
   }
 
@@ -359,7 +358,7 @@ void CollectSimpleTags(const TagLib::Matroska::SimpleTagsList& list,
       continue;
 
     const std::string name = StringUtils::ToUpper(tag.name().to8Bit(true));
-    AddTagValue(album.albumTags, name, name, tag.toString().to8Bit(true));
+    AddTagValue(album.albumTags, name, tag.toString().to8Bit(true));
   }
 
   for (const TagLib::Matroska::SimpleTag& tag : list)
@@ -377,7 +376,7 @@ void CollectSimpleTags(const TagLib::Matroska::SimpleTagsList& list,
     */
     if (level == TagLib::Matroska::SimpleTag::None)
     {
-      AddTagValue(fileTags, name, name, value);
+      AddTagValue(fileTags, name, value);
       continue;
     }
 
@@ -410,7 +409,7 @@ void CollectSimpleTags(const TagLib::Matroska::SimpleTagsList& list,
 
     // Either the file has no chapters at all, or names one it does not contain. Either way the tag
     // describes the file rather than a track of it.
-    AddTagValue(target ? target->tags : fileTags, name, name, value);
+    AddTagValue(target ? target->tags : fileTags, name, value);
   }
 }
 
