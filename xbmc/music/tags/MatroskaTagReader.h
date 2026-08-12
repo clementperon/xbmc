@@ -61,10 +61,24 @@ struct MatroskaAlbum
  * both describe a file the same way, which leaves the call to whoever turns chapters into songs -
  * and there are two of those, which is why it is asked here rather than in either.
  *
- * An end of 0 is a chapter nothing could close rather than one of no length, and is a track: see
- * ChapterTags::end.
+ * Ask CloseOpenEndedChapters() first: a chapter still carrying no end cannot be told from an
+ * artefact, so one is taken on trust and answered for here rather than dropped.
  */
 bool IsTrack(double start, double end);
+
+/*!
+ * \brief Give an end to every chapter the file left open, so that each is a range to judge.
+ *
+ * A chapter with no end runs to the end of the file, and how long that is is not something the
+ * file said - the reader reports what it read. The caller has the file open and can measure it,
+ * which is what turns "unknown length" into a length, and an artefact at the end of a file that
+ * declared no ChapterTimeEnd into something IsTrack() can recognise as one.
+ *
+ * \param album Chapters are closed in place; one that already has an end keeps it.
+ * \param fileDuration Seconds. A chapter is left open where this is not past its start, which
+ *                     includes the caller having no measurement to offer.
+ */
+void CloseOpenEndedChapters(MatroskaAlbum& album, double fileDuration);
 
 /*!
  * \brief Read a Matroska file's album level tags and its chapters.

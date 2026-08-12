@@ -63,6 +63,13 @@ void CFFmpegVfsContext::Close()
   m_file.reset();
 }
 
+double CFFmpegVfsContext::Duration() const
+{
+  if (!m_fctx || m_fctx->duration == AV_NOPTS_VALUE || m_fctx->duration <= 0)
+    return 0.0;
+  return static_cast<double>(m_fctx->duration) / AV_TIME_BASE;
+}
+
 bool CFFmpegVfsContext::Open(const std::string& path)
 {
   Close();

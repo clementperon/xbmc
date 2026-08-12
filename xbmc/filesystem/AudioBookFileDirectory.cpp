@@ -216,16 +216,14 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
                                    separators, musicsep, *item->GetMusicInfoTag());
     }
 
-    /*!
-     * A chapter the file gave no end and nothing else could close either. What is left of the
-     * file after it starts is the track, so close it with the length FFmpeg reported: leaving the
-     * end offset at zero would play correctly but read as an unexpanded file elsewhere.
-     */
-    if (end <= start && haveFFmpegInfo && codec_info.duration > start)
-      end = codec_info.duration;
-
     item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(start));
     item->SetEndOffset(CUtil::ConvertSecsToMilliSecs(end));
+    /*!
+     * A chapter ContainsFiles() could not close has no end to play to and no length to state: the
+     * file said neither and nothing could measure it. An unset end offset is how the player is
+     * told to play to the end of the file, and the duration the album tag already carries is the
+     * closest thing to this track's there is.
+     */
     if (item->GetEndOffset() > item->GetStartOffset())
       item->GetMusicInfoTag()->SetDuration(
           CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
@@ -279,6 +277,12 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
    * the result is what keeps that from costing a second parse in GetDirectory().
    */
   m_read->album = ReadMatroskaTags(url, m_demux.FormatContext());
+
+  /*!
+   * Before counting, not after: a chapter the file left open is as long as what remains of the
+   * file, and until it is closed there is no telling a last song from a trailing artefact.
+   */
+  CloseOpenEndedChapters(m_read->album, m_demux.Duration());
 
   const auto tracks = std::count_if(m_read->album.chapters.begin(), m_read->album.chapters.end(),
                                     [](const ChapterTags& c) { return IsTrack(c.start, c.end); });

@@ -68,9 +68,13 @@ bool CMusicInfoTagLoaderMatroska::Load(const std::string& strFileName,
 
   AVFormatContext* const fctx = demux.FormatContext();
 
-  const MatroskaAlbum album = ReadMatroskaTags(CURL(strFileName), fctx);
+  MatroskaAlbum album = ReadMatroskaTags(CURL(strFileName), fctx);
   if (!album.hasAlbumTags())
     return true;
+
+  // Before anything below asks what is a track: a chapter the file left open runs to the end of
+  // the file, and only a measurement of the file says how long that is.
+  CloseOpenEndedChapters(album, demux.Duration());
 
   for (const auto& t : album.albumTags)
     MatroskaTagMapping::MapTag(t.first, t.second, MatroskaTagMapping::TagLevel::Album, separators,

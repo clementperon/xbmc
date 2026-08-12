@@ -52,6 +52,13 @@ public:
 
   bool IsOpen() const { return m_fctx != nullptr; }
 
+  /*!
+   * \brief What the demuxer makes of the file's length.
+   * \return Seconds, or 0 where nothing is open or the demuxer could not tell - which is a real
+   *         answer for a container that declares none and holds too little to measure.
+   */
+  double Duration() const;
+
   //! The demuxer context, or nullptr when nothing is open. Owned here, only borrowed by callers.
   AVFormatContext* FormatContext() const { return m_fctx; }
 

@@ -508,13 +508,20 @@ namespace
 constexpr long long MinimumTrackMilliseconds = 1000;
 } // namespace
 
+void MUSIC_INFO::CloseOpenEndedChapters(MatroskaAlbum& album, double fileDuration)
+{
+  for (auto& chapter : album.chapters)
+    if (chapter.end <= 0.0 && fileDuration > chapter.start)
+      chapter.end = fileDuration;
+}
+
 bool MUSIC_INFO::IsTrack(double start, double end)
 {
   /*!
-  * A chapter with no end runs to the end of the file: nothing said how long it is, and nothing
-  * said it was too short to be a song either. Reading the unset end as a length of zero - or, for
-  * a chapter that starts anywhere but the beginning, a negative one - is what dropped the last
-  * track of a file that wrote neither ChapterTimeEnd nor a Segment Duration.
+  * A chapter still open after CloseOpenEndedChapters() is one nothing could measure: the file
+  * wrote neither ChapterTimeEnd nor a Segment Duration and the caller could not tell how long it
+  * is either. Nothing says it is a song and nothing says it is an artefact, and dropping it is
+  * what lost the last track of such a file - so it is kept.
   */
   if (end <= 0.0)
     return true;

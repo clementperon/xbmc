@@ -1,4 +1,5 @@
-set(SOURCES TestMatroskaTagMapping.cpp
+set(SOURCES TestMatroskaTagChapterRanges.cpp
+            TestMatroskaTagMapping.cpp
             TestMatroskaTagReaderFFmpeg.cpp
             TestMusicInfoTagLoaderMatroska.cpp
             TestTagLoaderTagLib.cpp)
