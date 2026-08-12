@@ -14,20 +14,13 @@
 #include "MusicInfoTag.h"
 #include "ServiceBroker.h"
 #include "URL.h"
-#include "filesystem/File.h"
+#include "filesystem/FFmpegVfsContext.h"
 #include "music/MusicEmbeddedCoverLoaderFFmpeg.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/EmbeddedArt.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
-
-extern "C"
-{
-#include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/mem.h>
-}
 
 #include <algorithm>
 #include <array>
@@ -45,39 +38,6 @@ extern "C"
 
 using namespace MUSIC_INFO;
 using namespace XFILE;
-
-namespace
-{
-constexpr size_t FFMPEG_BUFFER_SIZE = 32768;
-
-int VfsRead(void* h, uint8_t* buf, int size)
-{
-  return static_cast<CFile*>(h)->Read(buf, size);
-}
-
-int64_t VfsSeek(void* h, int64_t pos, int whence)
-{
-  auto* file = static_cast<CFile*>(h);
-  return whence == AVSEEK_SIZE ? file->GetLength() : file->Seek(pos, whence & ~AVSEEK_FORCE);
-}
-
-//! Closes the demuxer context and its IO with the scope, however Load() returns.
-struct CloseContext
-{
-  AVFormatContext* fctx;
-  AVIOContext* ioctx;
-  ~CloseContext()
-  {
-    if (fctx)
-      avformat_close_input(&fctx);
-    if (ioctx)
-    {
-      av_free(ioctx->buffer);
-      av_free(ioctx);
-    }
-  }
-};
-} // unnamed namespace
 
 /*!
 * Used by Matroska files with no chapters (most common) or with a single (one song)
@@ -102,46 +62,11 @@ bool CMusicInfoTagLoaderMatroska::Load(const std::string& strFileName,
   * build has, the cover art, and the codec details. Each of them would otherwise open the file
   * again, which over SMB or NFS is what the whole Matroska read is trying to keep down.
   */
-  CFile file;
-  if (!file.Open(strFileName))
+  CFFmpegVfsContext demux;
+  if (!demux.Open(strFileName))
     return false;
 
-  uint8_t* buffer = static_cast<uint8_t*>(av_malloc(FFMPEG_BUFFER_SIZE));
-  if (!buffer)
-    return false;
-
-  AVIOContext* ioctx =
-      avio_alloc_context(buffer, FFMPEG_BUFFER_SIZE, 0, &file, VfsRead, nullptr, VfsSeek);
-  if (!ioctx)
-  {
-    av_free(buffer);
-    return false;
-  }
-
-  AVFormatContext* fctx = avformat_alloc_context();
-  if (!fctx)
-  {
-    av_free(ioctx->buffer);
-    av_free(ioctx);
-    return false;
-  }
-  fctx->pb = ioctx;
-  fctx->flags |= AVFMT_FLAG_CUSTOM_IO;
-
-  const AVInputFormat* iformat = nullptr;
-  av_probe_input_buffer(ioctx, &iformat, strFileName.c_str(), nullptr, 0, 0);
-  if (avformat_open_input(&fctx, strFileName.c_str(), iformat, nullptr) < 0)
-  {
-    if (fctx)
-      avformat_close_input(&fctx);
-    av_free(ioctx->buffer);
-    av_free(ioctx);
-    return false;
-  }
-  fctx->flags |= AVFMT_FLAG_NOPARSE;
-  avformat_find_stream_info(fctx, nullptr);
-
-  const CloseContext closer{fctx, ioctx};
+  AVFormatContext* const fctx = demux.FormatContext();
 
   const MatroskaAlbum album = ReadMatroskaTags(CURL(strFileName), fctx);
   if (!album.hasAlbumTags())

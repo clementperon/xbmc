@@ -7,7 +7,7 @@
  */
 
 #include "URL.h"
-#include "filesystem/File.h"
+#include "filesystem/FFmpegVfsContext.h"
 #include "music/tags/MatroskaTagReader.h"
 #include "music/tags/TagLibVersion.h"
 #include "test/TestUtils.h"
@@ -19,8 +19,6 @@
 extern "C"
 {
 #include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/mem.h>
 }
 
 /*!
@@ -35,19 +33,6 @@ using namespace MUSIC_INFO;
 
 namespace
 {
-constexpr size_t BUFFER_SIZE = 32768;
-
-int VfsRead(void* h, uint8_t* buf, int size)
-{
-  return static_cast<XFILE::CFile*>(h)->Read(buf, size);
-}
-
-int64_t VfsSeek(void* h, int64_t pos, int whence)
-{
-  auto* file = static_cast<XFILE::CFile*>(h);
-  return whence == AVSEEK_SIZE ? file->GetLength() : file->Seek(pos, whence & ~AVSEEK_FORCE);
-}
-
 //! Opens a fixture and reads it with the FFmpeg reader.
 class Fixture
 {
@@ -55,47 +40,17 @@ public:
   explicit Fixture(const std::string& name)
   {
     m_path = XBMC_REF_FILE_PATH("xbmc/filesystem/test/data/audiobook/" + name);
-    const std::string& path = m_path;
-    if (!m_file.Open(CURL(path)))
-      return;
-
-    auto* buffer = static_cast<uint8_t*>(av_malloc(BUFFER_SIZE));
-    m_ioctx = avio_alloc_context(buffer, BUFFER_SIZE, 0, &m_file, VfsRead, nullptr, VfsSeek);
-    m_fctx = avformat_alloc_context();
-    m_fctx->pb = m_ioctx;
-    m_fctx->flags |= AVFMT_FLAG_CUSTOM_IO;
-
-    const AVInputFormat* iformat = nullptr;
-    av_probe_input_buffer(m_ioctx, &iformat, path.c_str(), nullptr, 0, 0);
-    if (avformat_open_input(&m_fctx, path.c_str(), iformat, nullptr) < 0)
-    {
-      m_fctx = nullptr;
-      return;
-    }
-    avformat_find_stream_info(m_fctx, nullptr);
-    m_album = ReadMatroskaTagsWithFFmpeg(CURL(path), m_fctx);
-  }
-
-  ~Fixture()
-  {
-    if (m_fctx)
-      avformat_close_input(&m_fctx);
-    if (m_ioctx)
-    {
-      av_free(m_ioctx->buffer);
-      av_free(m_ioctx);
-    }
+    if (m_demux.Open(m_path))
+      m_album = ReadMatroskaTagsWithFFmpeg(CURL(m_path), m_demux.FormatContext());
   }
 
   const MatroskaAlbum& album() const { return m_album; }
-  const AVFormatContext* context() const { return m_fctx; }
+  const AVFormatContext* context() const { return m_demux.FormatContext(); }
   const std::string& path() const { return m_path; }
 
 private:
   std::string m_path;
-  XFILE::CFile m_file;
-  AVIOContext* m_ioctx = nullptr;
-  AVFormatContext* m_fctx = nullptr;
+  XFILE::CFFmpegVfsContext m_demux;
   MatroskaAlbum m_album;
 };
 } // unnamed namespace
