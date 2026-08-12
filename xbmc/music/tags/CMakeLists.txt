@@ -23,6 +23,7 @@ set(HEADERS ImusicInfoTagLoader.h
             MusicInfoTagLoaderShn.h
             MatroskaTagLibStream.h
             ReplayGain.h
+            TagLibVersion.h
             TagLibVFSStream.h
             TagLoaderTagLib.h)
 if(ENABLE_OPTICAL)
