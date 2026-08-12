@@ -231,3 +231,31 @@ TEST(TestAudioBookFileDirectory, ExpandsAnAlbumTaggedWithNoLevel)
   ASSERT_EQ(3, items.Size());
   EXPECT_EQ("Live At The Test Venue", items[0]->GetMusicInfoTag()->GetAlbum());
 }
+
+/*!
+ * Nothing stops a caller handing one instance a second URL. The demuxer context the first file was
+ * opened through used to outlive that file: only what had been parsed was re-keyed on the URL, so
+ * the second file was described by the first one's cover art and codec details - and, where FFmpeg
+ * is the reader, by its chapters and tags too. Both are refreshed together now.
+ */
+TEST(TestAudioBookFileDirectory, ReadsTheSecondFileWhenReusedAcrossURLs)
+{
+  CAudioBookFileDirectory dir;
+
+  const CURL first(XBMC_REF_FILE_PATH(std::string(DATA_PATH) + "chaptered.mka"));
+  CFileItemList firstItems;
+  ASSERT_TRUE(dir.ContainsFiles(first));
+  ASSERT_TRUE(dir.GetDirectory(first, firstItems));
+  ASSERT_EQ(3, firstItems.Size());
+  EXPECT_EQ("Opening Number", firstItems[0]->GetMusicInfoTag()->GetTitle());
+
+  // The same instance, another file, asked for straight away: a caller holding a directory it has
+  // already established contains files has no reason to ask that again.
+  const CURL second(XBMC_REF_FILE_PATH(std::string(DATA_PATH) + "precedence.mka"));
+  CFileItemList secondItems;
+  ASSERT_TRUE(dir.GetDirectory(second, secondItems));
+
+  ASSERT_EQ(3, secondItems.Size());
+  EXPECT_EQ("TAG Opening Number", secondItems[0]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ("TAG Encore", secondItems[2]->GetMusicInfoTag()->GetTitle());
+}

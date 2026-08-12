@@ -10,7 +10,6 @@
 
 #include "FileItem.h"
 #include "FileItemList.h"
-#include "IFileTypes.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
@@ -31,7 +30,6 @@
 #include "utils/log.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -39,44 +37,23 @@
 
 #include <commons/ilog.h>
 #include <libavformat/avformat.h>
-#include <libavformat/avio.h>
 #include <libavutil/dict.h>
-#include <libavutil/mem.h>
 #include <libavutil/rational.h>
 
 using namespace XFILE;
 using namespace MUSIC_INFO;
 
-static int cfile_file_read(void* h, uint8_t* buf, int size)
-{
-  CFile* pFile = static_cast<CFile*>(h);
-  return pFile->Read(buf, size);
-}
-
-static int64_t cfile_file_seek(void* h, int64_t pos, int whence)
-{
-  CFile* pFile = static_cast<CFile*>(h);
-  if (whence == AVSEEK_SIZE)
-    return pFile->GetLength();
-  else
-    return pFile->Seek(pos, whence & ~AVSEEK_FORCE);
-}
-
-CAudioBookFileDirectory::~CAudioBookFileDirectory(void)
-{
-  if (m_fctx)
-    avformat_close_input(&m_fctx);
-  if (m_ioctx)
-  {
-    av_free(m_ioctx->buffer);
-    av_free(m_ioctx);
-  }
-}
-
 bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items)
 {
-  if (!m_fctx && !ContainsFiles(url))
+  /*!
+   * Nothing promises this is the file ContainsFiles() was asked about: the same instance can be
+   * handed another URL, and both what was read and the context it was read through describe the
+   * one before it. Reopening is what ContainsFiles() does, so ask it again.
+   */
+  if ((!m_read || m_read->url != url.Get()) && !ContainsFiles(url))
     return true;
+
+  AVFormatContext* const fctx = m_demux.FormatContext();
 
   std::string title;
   std::string author;
@@ -98,7 +75,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   if (isAudioBook)
   {
     AVDictionaryEntry* tag = nullptr;
-    while ((tag = av_dict_get(m_fctx->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
+    while ((tag = av_dict_get(fctx->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
     {
       if (StringUtils::CompareNoCase(tag->key, "title") == 0)
         title = tag->value;
@@ -112,8 +89,6 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   }
   else
   {
-    if (!m_read || m_read->url != url.Get())
-      m_read = CachedRead{url.Get(), ReadMatroskaTags(url, m_fctx)};
     if (!m_read->album.hasAlbumTags())
       return true;
     /*!
@@ -138,12 +113,12 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   * FFmpeg rather than TagLib: TagLib reads whole Matroska attachments eagerly, which is slow for
   * large attachments over SMB/NFS. Still unfixed as of TagLib 2.3.1 (it was expected there).
   */
-  CMusicEmbeddedCoverLoaderFFmpeg::GetEmbeddedCover(m_fctx, albumtag);
+  CMusicEmbeddedCoverLoaderFFmpeg::GetEmbeddedCover(fctx, albumtag);
 
   // now get the AudioCodec -------------------------------------
   bool haveFFmpegInfo = false;
   musicCodecInfo codec_info;
-  haveFFmpegInfo = CMusicCodecInfoFFmpeg::GetMusicCodecInfo(m_fctx, codec_info);
+  haveFFmpegInfo = CMusicCodecInfoFFmpeg::GetMusicCodecInfo(fctx, codec_info);
   if (haveFFmpegInfo) // use data from FFmpeg (taglib 2.3 does not support some codecs)
   {
     albumtag.SetBitRate(codec_info.bitRate);
@@ -165,7 +140,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
    * editions, or once either of them has dropped a chapter too short to be a track.
    */
   const size_t chapterCount =
-      isAudioBook ? (m_fctx->chapters ? m_fctx->nb_chapters : 0) : m_read->album.chapters.size();
+      isAudioBook ? (fctx->chapters ? fctx->nb_chapters : 0) : m_read->album.chapters.size();
   int trackNumber = 0;
   bool chapter_error = false;
   for (size_t i = 0; i < chapterCount; ++i)
@@ -174,7 +149,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
     double end = 0.0;
     if (isAudioBook)
     {
-      const AVChapter* chapter = m_fctx->chapters[i];
+      const AVChapter* chapter = fctx->chapters[i];
       if (!chapter || chapter->start < 0) // null or negative start time
         continue;
       start = chapter->start * av_q2d(chapter->time_base);
@@ -210,7 +185,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
       std::string chapauthor;
       std::string chapalbum;
 
-      while ((tag = av_dict_get(m_fctx->chapters[i]->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
+      while ((tag = av_dict_get(fctx->chapters[i]->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
       {
         if (StringUtils::CompareNoCase(tag->key, "title") == 0)
           chaptitle = tag->value;
@@ -272,58 +247,21 @@ bool CAudioBookFileDirectory::Exists(const CURL& url)
 
 bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
 {
-  m_file = std::make_unique<CFile>();
-  if (!m_file->Open(url))
+  /*!
+   * Whatever was open described some other file until this succeeds, so drop it first rather than
+   * leave a caller that reuses this instance holding the last file's context beside this file's
+   * tags.
+   */
+  m_read.reset();
+  if (!m_demux.Open(url.Get()))
     return false;
 
-  uint8_t* buffer = static_cast<uint8_t*>(av_malloc(32768));
-  if (!buffer)
-    return false;
-
-  m_ioctx =
-      avio_alloc_context(buffer, 32768, 0, m_file.get(), cfile_file_read, nullptr, cfile_file_seek);
-  if (!m_ioctx)
-  {
-    av_free(buffer);
-    return false;
-  }
-
-  m_fctx = avformat_alloc_context();
-  if (!m_fctx)
-  {
-    av_free(m_ioctx->buffer);
-    av_free(m_ioctx);
-    m_ioctx = nullptr;
-    return false;
-  }
-  m_fctx->pb = m_ioctx;
-  m_fctx->flags |= AVFMT_FLAG_CUSTOM_IO;
-
-  if (m_file->IoControl(IOControl::SEEK_POSSIBLE, nullptr) == 0)
-    m_ioctx->seekable = 0;
-
-  m_ioctx->max_packet_size = 32768;
-
-  const AVInputFormat* iformat = nullptr;
-  av_probe_input_buffer(m_ioctx, &iformat, url.Get().c_str(), nullptr, 0, 0);
-
-  if (avformat_open_input(&m_fctx, url.Get().c_str(), iformat, nullptr) < 0)
-  {
-    if (m_fctx)
-      avformat_close_input(&m_fctx);
-    av_free(m_ioctx->buffer);
-    av_free(m_ioctx);
-    m_ioctx = nullptr;
-    return false;
-  }
-  m_fctx->flags |= AVFMT_FLAG_NOPARSE;
-  int err = avformat_find_stream_info(m_fctx, NULL);
-  if (err < 0)
-    CLog::Log(LOGERROR, "Can't detect codec info in file {}", url.GetRedacted());
+  // From here on the context is this URL's, which is what m_read records for GetDirectory().
+  m_read = CachedRead{url.Get(), {}};
 
   // m4b has no reader but FFmpeg, so its chapters are the only count there is.
   if (url.IsFileType("m4b"))
-    return m_fctx->nb_chapters > 1;
+    return m_demux.FormatContext()->nb_chapters > 1;
 
   /*!
    * Ask the reader that will build the tracks how many there are, rather than FFmpeg on its
@@ -331,7 +269,7 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
    * turned away here is never offered to the reader that would have found an album in it. Holding
    * the result is what keeps that from costing a second parse in GetDirectory().
    */
-  m_read = CachedRead{url.Get(), ReadMatroskaTags(url, m_fctx)};
+  m_read->album = ReadMatroskaTags(url, m_demux.FormatContext());
 
   const auto tracks = std::count_if(m_read->album.chapters.begin(), m_read->album.chapters.end(),
                                     [](const ChapterTags& c) { return IsTrack(c.start, c.end); });
