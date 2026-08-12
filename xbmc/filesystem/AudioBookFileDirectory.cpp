@@ -216,10 +216,19 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
                                    separators, musicsep, *item->GetMusicInfoTag());
     }
 
+    /*!
+     * A chapter the file gave no end and nothing else could close either. What is left of the
+     * file after it starts is the track, so close it with the length FFmpeg reported: leaving the
+     * end offset at zero would play correctly but read as an unexpanded file elsewhere.
+     */
+    if (end <= start && haveFFmpegInfo && codec_info.duration > start)
+      end = codec_info.duration;
+
     item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(start));
     item->SetEndOffset(CUtil::ConvertSecsToMilliSecs(end));
-    item->GetMusicInfoTag()->SetDuration(
-        CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
+    if (item->GetEndOffset() > item->GetStartOffset())
+      item->GetMusicInfoTag()->SetDuration(
+          CUtil::ConvertMilliSecsToSecsInt(item->GetEndOffset() - item->GetStartOffset()));
 
     // Position in the album, for a track whose own tags did not number it.
     if (item->GetMusicInfoTag()->GetTrackNumber() <= 0)

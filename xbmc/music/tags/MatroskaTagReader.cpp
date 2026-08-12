@@ -148,7 +148,16 @@ MatroskaAlbum ReadWithFFmpegImpl(const AVFormatContext* fctx)
     ChapterTags& entry = album.chapters.emplace_back();
     CollectTags(chapter->metadata, entry.tags);
     entry.start = chapter->start * av_q2d(chapter->time_base);
-    entry.end = chapter->end * av_q2d(chapter->time_base);
+
+    /*!
+    * An end that does not come after the start is no end the demuxer could work out - a file that
+    * declared neither a ChapterTimeEnd nor a Segment Duration leaves it unset, and unset scaled
+    * out of AV_NOPTS_VALUE is a large negative number rather than a zero. Zero is what a chapter
+    * nothing could close carries, which is what IsTrack() and CAudioBookFileDirectory read: they
+    * serve whichever reader this build has, so a reader owes them the one spelling.
+    */
+    const double end = chapter->end * av_q2d(chapter->time_base);
+    entry.end = end >= entry.start ? end : 0.0;
   }
 
   return album;
@@ -316,6 +325,12 @@ SelectedEdition CollectChapters(TagLib::Matroska::File& file, MatroskaAlbum& alb
 /*!
 * Give an end to any chapter that declares none, which is out of spec but written anyway: the next
 * chapter's start, or the file duration for the last one.
+*
+* An end that does not come after the start is no end: the Segment's Duration is itself optional,
+* so a file written without either says nothing about where its last chapter stops. Leaving that
+* one unset says it runs to the end of the file, which is what IsTrack() and everything downstream
+* read an unset end as - writing the zero in would make it a chapter of negative length instead,
+* and negative length is what marks an artefact to be dropped.
 */
 void FillMissingEndTimes(MatroskaAlbum& album, double fileDuration)
 {
@@ -323,8 +338,9 @@ void FillMissingEndTimes(MatroskaAlbum& album, double fileDuration)
   {
     if (album.chapters[i].end > 0.0)
       continue;
-    album.chapters[i].end =
-        (i + 1 < album.chapters.size()) ? album.chapters[i + 1].start : fileDuration;
+    const double end = (i + 1 < album.chapters.size()) ? album.chapters[i + 1].start : fileDuration;
+    if (end > album.chapters[i].start)
+      album.chapters[i].end = end;
   }
 }
 
@@ -494,6 +510,15 @@ constexpr long long MinimumTrackMilliseconds = 1000;
 
 bool MUSIC_INFO::IsTrack(double start, double end)
 {
+  /*!
+  * A chapter with no end runs to the end of the file: nothing said how long it is, and nothing
+  * said it was too short to be a song either. Reading the unset end as a length of zero - or, for
+  * a chapter that starts anywhere but the beginning, a negative one - is what dropped the last
+  * track of a file that wrote neither ChapterTimeEnd nor a Segment Duration.
+  */
+  if (end <= 0.0)
+    return true;
+
   /*!
   * Rounded to milliseconds, which is as fine as a chapter is ever written. Both readers scale
   * nanosecond ticks into seconds before subtracting, and the difference of two such doubles lands

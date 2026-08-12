@@ -233,6 +233,33 @@ TEST(TestAudioBookFileDirectory, ExpandsAnAlbumTaggedWithNoLevel)
 }
 
 /*!
+ * The Segment's Duration is as optional as ChapterTimeEnd, and a file that wrote neither says
+ * nothing about where its last chapter stops. That is not a chapter of no length: reading it as
+ * one made the last real track of the album vanish from the listing, tags and all. A chapter
+ * nothing could close runs to the end of the file, and is the last track.
+ */
+TEST(TestAudioBookFileDirectory, KeepsTheLastTrackOfAFileThatDeclaresNoLength)
+{
+  CFileItemList items;
+  Expand("noduration.mka", items);
+
+  ASSERT_EQ(3, items.Size());
+  EXPECT_EQ("Opening Number", items[0]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ("Someone's Song", items[1]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ("Encore", items[2]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ(3, items[2]->GetMusicInfoTag()->GetTrackNumber());
+
+  // The starts are the one thing the file did declare, so they stay exact.
+  EXPECT_EQ(0, items[0]->GetStartOffset());
+  EXPECT_EQ(3000, items[1]->GetStartOffset());
+  EXPECT_EQ(6000, items[2]->GetStartOffset());
+
+  // The chapters the next one closes keep their real ends; only the last is left to be worked out.
+  EXPECT_EQ(3000, items[0]->GetEndOffset());
+  EXPECT_EQ(6000, items[1]->GetEndOffset());
+}
+
+/*!
  * Nothing stops a caller handing one instance a second URL. The demuxer context the first file was
  * opened through used to outlive that file: only what had been parsed was re-keyed on the URL, so
  * the second file was described by the first one's cover art and codec details - and, where FFmpeg

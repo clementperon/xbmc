@@ -124,7 +124,7 @@ def simple_tag(name, value):
 
 def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_tags=(),
           omit_end_times=False, segment_title="Live At The Test Venue",
-          omit_chapter_uids=False, album_target_level=TARGET_ALBUM):
+          omit_chapter_uids=False, album_target_level=TARGET_ALBUM, omit_duration=False):
     """chapters: (uid, start_ms, end_ms, display name). *_tags: (name, value) pairs."""
     duration = max((end for _uid, _start, end, _name in chapters), default=9000)
 
@@ -136,7 +136,10 @@ def build(chapters, album_tags, chapter_tags, other_edition=None, other_edition_
     )
     info = el(
         INFO,
-        uint(TIMESTAMP_SCALE, TIMESCALE) + flt(DURATION, float(duration))
+        uint(TIMESTAMP_SCALE, TIMESCALE)
+        # Duration is optional too, and a file written without it leaves a last chapter that
+        # declares no end with nothing at all to say where it stops.
+        + (b"" if omit_duration else flt(DURATION, float(duration)))
         + txt(MUXING_APP, "Kodi test generator") + txt(WRITING_APP, "Kodi test generator")
         # The Segment title names the file. Optional, and taggers that write only album
         # level tags leave it out.
@@ -292,6 +295,10 @@ FIXTURES = {
     # Chapters with no ChapterTimeEnd, which the spec allows. Each reader has to work the end out
     # for itself, and they have to reach the same answer.
     "noendtimes.mka": lambda: build(THREE, ALBUM, per_track, omit_end_times=True),
+    # The same, and no Segment Duration either - both are optional. Nothing in the file says where
+    # the last chapter stops, and a chapter of unknown length is still the last track.
+    "noduration.mka": lambda: build(THREE, ALBUM, per_track, omit_end_times=True,
+                                    omit_duration=True),
     # A second edition whose chapters carry their own tags. None of it describes a track this
     # file produces, so none of it may reach the selected edition's tracks or the album.
     "twoeditions.mka": lambda: build(

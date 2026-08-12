@@ -22,6 +22,7 @@ struct ChapterTags
 {
   std::map<std::string, std::string> tags;
   double start = 0.0; //!< seconds
+  //! Seconds, or 0 for a chapter nothing could close, which runs to the end of the file.
   double end = 0.0;
 };
 
@@ -59,6 +60,9 @@ struct MatroskaAlbum
  * Files carrying a chapter of a fraction of a second happen. Neither reader drops them, so that
  * both describe a file the same way, which leaves the call to whoever turns chapters into songs -
  * and there are two of those, which is why it is asked here rather than in either.
+ *
+ * An end of 0 is a chapter nothing could close rather than one of no length, and is a track: see
+ * ChapterTags::end.
  */
 bool IsTrack(double start, double end);
 
