@@ -2369,18 +2369,36 @@ bool CMusicDatabase::DeleteArtistDiscography(int idArtist)
 
 bool CMusicDatabase::GetArtistDiscography(int idArtist, CFileItemList& items)
 {
+  if (nullptr == m_pDB)
+    return false;
+  if (nullptr == m_pDS)
+    return false;
+
+  /* Combine entries from discography and album tables
+     Can not use CREATE TEMPORARY TABLE as MySQL does not support updates of table using
+     correlated subqueries to a temp table. An updatable join to temp table would work in MySQL
+     but SQLite not support updatable joins.
+
+     Being ordinary tables they outlive this call, so every exit path must drop them. They are
+     also dropped before creation, in case an earlier failure left them behind.
+  */
+  const auto dropTempTables = [this]()
+  {
+    try
+    {
+      m_pDS->exec("DROP TABLE IF EXISTS tempDisco");
+      m_pDS->exec("DROP TABLE IF EXISTS tempAlbum");
+    }
+    catch (...)
+    {
+      CLog::LogF(LOGERROR, "failed to drop temporary tables");
+    }
+  };
+
   try
   {
-    if (nullptr == m_pDB)
-      return false;
-    if (nullptr == m_pDS)
-      return false;
+    dropTempTables();
 
-    /* Combine entries from discography and album tables
-       Can not use CREATE TEMPORARY TABLE as MySQL does not support updates of table using
-       correlated subqueries to a temp table. An updatable join to temp table would work in MySQL
-       but SQLite not support updatable joins.
-    */
     m_pDS->exec("CREATE TABLE tempDisco "
                 "(strAlbum TEXT, strYear VARCHAR(4), mbid TEXT, idAlbum INTEGER)");
     m_pDS->exec("CREATE TABLE tempAlbum "
@@ -2445,11 +2463,15 @@ bool CMusicDatabase::GetArtistDiscography(int idArtist, CFileItemList& items)
              "ORDER BY strYear, strAlbum, idAlbum";
 
     if (!m_pDS->query(strSQL))
+    {
+      dropTempTables();
       return false;
+    }
     int iRowsFound = m_pDS->num_rows();
     if (iRowsFound == 0)
     {
       m_pDS->close();
+      dropTempTables();
       return true;
     }
 
@@ -2471,15 +2493,13 @@ bool CMusicDatabase::GetArtistDiscography(int idArtist, CFileItemList& items)
 
     // cleanup
     m_pDS->close();
-    m_pDS->exec("DROP TABLE tempDisco");
-    m_pDS->exec("DROP TABLE tempAlbum");
+    dropTempTables();
 
     return true;
   }
   catch (...)
   {
-    m_pDS->exec("DROP TABLE tempDisco");
-    m_pDS->exec("DROP TABLE tempAlbum");
+    dropTempTables();
     CLog::LogF(LOGERROR, "failed");
   }
   return false;
