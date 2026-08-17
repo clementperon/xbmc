@@ -310,6 +310,16 @@ FIXTURES = {
         # overwrite the contamination and hide it.
         other_edition_tags=[("TITLE", "FOREIGN TITLE"), ("COMPOSER", "Foreign Composer")],
     ),
+    # Two editions sharing a ChapterUID, which the spec permits: an ordered cut reusing a chapter
+    # of the transfer. A UID both carry names a chapter this file does play, so the tags naming it
+    # belong to that chapter rather than to the edition left behind. The display names differ from
+    # the tagged ones so that a track falling back to its display name is visible.
+    "sharedchapteruid.mka": lambda: build(
+        [(uid, s, e, "DISPLAY " + n) for uid, s, e, n in THREE],
+        ALBUM,
+        lambda uid, index, name: [("TITLE", "TAG " + name.removeprefix("DISPLAY "))],
+        other_edition=[(1001, 0, 3000, "Shared chapter")],
+    ),
     # ChapterUID 1, which the spec allows and taggers that number from one produce. A file whose
     # first chapter is UID 1 must still have its tags reach that chapter rather than the album.
     "lowchapteruid.mka": lambda: build(

@@ -339,6 +339,17 @@ SelectedEdition CollectChapters(TagLib::Matroska::File& file, MatroskaAlbum& alb
     entry.end = static_cast<double>(chapter.timeEnd()) / 1000000000.0;
   }
 
+  /*!
+  * A UID the selected edition carries as well names a chapter this file does play. Editions
+  * sharing chapter UIDs is legal - an ordered cut reusing the transfer's chapters is the usual
+  * reason - so what is left behind is only what the selected edition does not have. Reducing the
+  * set here rather than at the lookup keeps the drop in CollectSimpleTags() ahead of the single
+  * chapter fallback, which would otherwise hand a foreign edition's tag to the only chapter there
+  * is.
+  */
+  for (const auto& entry : selected.chapterIndex)
+    selected.unselectedChapterUids.erase(entry.first);
+
   return selected;
 }
 

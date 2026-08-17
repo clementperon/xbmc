@@ -157,6 +157,24 @@ TEST(TestAudioBookFileDirectory, IgnoresTagsFromAnEditionItDidNotSelect)
 
 #ifdef HAS_TAGLIB_MATROSKA
 /*!
+ * Two editions may name a chapter with the same ChapterUID - an ordered cut reusing a chapter of
+ * the transfer. A UID both carry names a chapter this file does play, so the edition left behind
+ * must not take its tags away with it: every track keeps the title its own tags gave it rather than
+ * falling back to its ChapterDisplay name.
+ */
+TEST(TestAudioBookFileDirectory, KeepsTagsOfAChapterTwoEditionsShare)
+{
+  CFileItemList items;
+  ASSERT_NO_FATAL_FAILURE(Expand("sharedchapteruid.mka", items));
+
+  ASSERT_EQ(3, items.Size());
+  // The first chapter is the shared one; the other two never left the selected edition.
+  EXPECT_EQ("TAG Opening Number", items[0]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ("TAG Someone's Song", items[1]->GetMusicInfoTag()->GetTitle());
+  EXPECT_EQ("TAG Encore", items[2]->GetMusicInfoTag()->GetTitle());
+}
+
+/*!
  * The Matroska spec writes one SimpleTag per value, so three composers are three tags. Keeping only
  * the last is the fidelity FFmpeg's demuxer cannot offer and TagLib can.
  */

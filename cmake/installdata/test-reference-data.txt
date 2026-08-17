@@ -21,6 +21,7 @@ xbmc/filesystem/test/data/audiobook/onetrackplusartefact.mka
 xbmc/filesystem/test/data/audiobook/partnumber.mka
 xbmc/filesystem/test/data/audiobook/precedence.mka
 xbmc/filesystem/test/data/audiobook/repeated.mka
+xbmc/filesystem/test/data/audiobook/sharedchapteruid.mka
 xbmc/filesystem/test/data/audiobook/singlefile-notitle.mka
 xbmc/filesystem/test/data/audiobook/singlefile.mka
 xbmc/filesystem/test/data/audiobook/twoeditions.mka
