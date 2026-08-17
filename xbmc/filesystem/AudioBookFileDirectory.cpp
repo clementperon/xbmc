@@ -119,7 +119,10 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
   // now get the AudioCodec -------------------------------------
   bool haveFFmpegInfo = false;
   musicCodecInfo codec_info;
-  haveFFmpegInfo = CMusicCodecInfoFFmpeg::GetMusicCodecInfo(fctx, codec_info);
+  // Only where the streams were read: without that the fields below are zeroes rather than
+  // measurements, and writing them into the tag states a sample rate the file never gave.
+  haveFFmpegInfo =
+      m_demux.HasStreamInfo() && CMusicCodecInfoFFmpeg::GetMusicCodecInfo(fctx, codec_info);
   if (haveFFmpegInfo) // use data from FFmpeg (taglib 2.3 does not support some codecs)
   {
     albumtag.SetBitRate(codec_info.bitRate);
@@ -155,6 +158,16 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
         continue;
       start = chapter->start * av_q2d(chapter->time_base);
       end = chapter->end * av_q2d(chapter->time_base);
+      /*!
+       * m4b has no reader but FFmpeg, so nothing has closed its chapters on the way here. Where
+       * the demuxer could measure the file, compute_chapters_end() closed them inside
+       * avformat_find_stream_info(); where it could not, a chapter arrives open or ending before
+       * it starts. Close it against the file's duration, which is what CloseOpenEndedChapters()
+       * does for the reader paths - an end that is no end would otherwise pass IsTrack() and give
+       * the track the whole book to play. One nothing can measure stays open, as it does there.
+       */
+      if (end <= start)
+        end = m_demux.Duration() > start ? m_demux.Duration() : 0.0;
     }
     else
     {
