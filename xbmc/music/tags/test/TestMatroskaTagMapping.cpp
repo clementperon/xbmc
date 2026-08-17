@@ -158,6 +158,37 @@ TEST(TestMatroskaTagMapping, KeepsTheAlbumArtistTheFileStatedOverAnAlbumLevelArt
   EXPECT_EQ("Miles Davis", Parse("ARTIST", "Miles Davis", album).GetAlbumArtistString());
 }
 
+/*!
+ * The separator list holds "/", and in an artist a slash is as likely inside a name as between
+ * two. One album level ARTIST names the album artist and the song artist, so both have to read it
+ * the same way - splitting just one of them on the list made AC/DC two album artists and one song
+ * artist out of a single tag.
+ */
+TEST(TestMatroskaTagMapping, SplitsAnAlbumLevelArtistOnTheMultiValueDelimiterOnly)
+{
+  constexpr auto album = MatroskaTagMapping::TagLevel::Album;
+  const auto advanced = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+  const std::string restore = advanced->m_musicItemSeparator;
+  advanced->m_musicItemSeparator = MusicSep;
+
+  CMusicInfoTag oneName;
+  MatroskaTagMapping::MapTag("ARTIST", "AC/DC", album, Separators, MusicSep, oneName);
+
+  // Repeats the reader joined are still two artists, so the delimiter itself is still read.
+  const std::string repeated =
+      std::string("AC/DC") + MatroskaTagMapping::MultiValueSeparator + "Free";
+  CMusicInfoTag twoNames;
+  MatroskaTagMapping::MapTag("ARTIST", repeated, album, Separators, MusicSep, twoNames);
+
+  advanced->m_musicItemSeparator = restore;
+
+  EXPECT_EQ((std::vector<std::string>{"AC/DC"}), oneName.GetAlbumArtist());
+  EXPECT_EQ(oneName.GetAlbumArtist(), oneName.GetArtist());
+
+  EXPECT_EQ((std::vector<std::string>{"AC/DC", "Free"}), twoNames.GetAlbumArtist());
+  EXPECT_EQ(twoNames.GetAlbumArtist(), twoNames.GetArtist());
+}
+
 TEST(TestMatroskaTagMapping, MapsRolesToContributors)
 {
   EXPECT_TRUE(HasRole(Parse("COMPOSER", "Bill Evans"), "Composer", "Bill Evans"));

@@ -85,23 +85,27 @@ void MUSIC_INFO::MatroskaTagMapping::MapTag(const std::string& key,
     if (key == "ARTIST")
     {
       /*!
-      * An album level ARTIST names the album's artist, but only for an album that did not name one
-      * itself. A caller walks a std::map, so ARTIST is always applied after ALBUM ARTIST,
-      * ALBUMARTIST and ALBUM_ARTIST - taking it unconditionally would replace what the file
-      * stated, and a compilation carrying ALBUM ARTIST=Various Artists beside ARTIST=Miles Davis
-      * would be filed under Miles Davis. Deferring here decides it by what the file said rather
-      * than by the order the names happen to arrive in.
+      * One ARTIST names both fields, so it is read once and read the way the track level branch
+      * reads it: split on the delimiter a reader joined repeats with and no more. The separator
+      * list holds "/", and in an artist a slash is as likely inside a name as between two - AC/DC
+      * is one artist of the album as much as it is one artist of the song.
+      */
+      const std::string artists = StringUtils::Join(
+          StringUtils::Split(value, MatroskaTagMapping::MultiValueSeparator), musicsep);
+
+      /*!
+      * It names the album's artist, but only for an album that did not name one itself. A caller
+      * walks a std::map, so ARTIST is always applied after ALBUM ARTIST, ALBUMARTIST and
+      * ALBUM_ARTIST - taking it unconditionally would replace what the file stated, and a
+      * compilation carrying ALBUM ARTIST=Various Artists beside ARTIST=Miles Davis would be filed
+      * under Miles Davis. Deferring here decides it by what the file said rather than by the order
+      * the names happen to arrive in.
       */
       if (tag.GetAlbumArtist().empty())
-        tag.SetAlbumArtist(StringUtils::Join(SplitValues(value, separators), musicsep));
-      /*!
-      * The album's artist is the song's until the song says otherwise, and it has to be handed
-      * over the way the track level branch hands it over: SetArtist() splits on the user's
-      * separator, so several artists have to arrive joined with that one and not with the
-      * delimiter a reader happened to join repeats with.
-      */
-      tag.SetArtist(StringUtils::Join(
-          StringUtils::Split(value, MatroskaTagMapping::MultiValueSeparator), musicsep));
+        tag.SetAlbumArtist(artists);
+
+      // The album's artist is the song's until the song says otherwise.
+      tag.SetArtist(artists);
       return;
     }
   }
