@@ -118,7 +118,8 @@ bool CMusicCodecInfoFFmpeg::GetMusicCodecInfo(const std::string& strFileName,
                                               musicCodecInfo& codec_info)
 {
   CFFmpegVfsContext demux;
-  if (!demux.Open(strFileName))
+  // Nothing but codec info is wanted here, and there is none to be had without the streams.
+  if (!demux.Open(strFileName) || !demux.HasStreamInfo())
     return false;
 
   return GetMusicCodecInfo(demux.FormatContext(), codec_info);

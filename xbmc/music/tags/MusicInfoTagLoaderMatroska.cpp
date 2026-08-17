@@ -94,8 +94,10 @@ bool CMusicInfoTagLoaderMatroska::Load(const std::string& strFileName,
   CMusicEmbeddedCoverLoaderFFmpeg::GetEmbeddedCover(fctx, tag, art);
 
   // Get Codec data using FFmpeg (taglib not accurate for all codecs yet - v2.3)
+  // Only where the streams were read: without that the fields below are zeroes rather than
+  // measurements, and TagLib has already given the tag what the header says.
   musicCodecInfo codec_info;
-  if (CMusicCodecInfoFFmpeg::GetMusicCodecInfo(fctx, codec_info))
+  if (demux.HasStreamInfo() && CMusicCodecInfoFFmpeg::GetMusicCodecInfo(fctx, codec_info))
   {
     tag.SetBitRate(codec_info.bitRate);
     tag.SetSampleRate(codec_info.sampleRate);

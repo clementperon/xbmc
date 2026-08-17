@@ -52,6 +52,17 @@ public:
   bool IsOpen() const { return m_fctx != nullptr; }
 
   /*!
+   * \brief Whether the demuxer could read the streams' properties.
+   * \return False where avformat_find_stream_info() failed, which leaves sample rate, channel
+   *         count and stream duration unset rather than measured.
+   *
+   * Open() succeeds either way, because the tags, the chapters and the attachments come from the
+   * header and are there regardless. Anything read off the streams has to ask this first, or it
+   * reports what was never measured as if it had been.
+   */
+  bool HasStreamInfo() const { return m_haveStreamInfo; }
+
+  /*!
    * \brief What the demuxer makes of the file's length.
    * \return Seconds, or 0 where nothing is open or the demuxer could not tell - which is a real
    *         answer for a container that declares none and holds too little to measure.
@@ -66,5 +77,6 @@ private:
   std::unique_ptr<CFile> m_file;
   AVIOContext* m_ioctx{nullptr};
   AVFormatContext* m_fctx{nullptr};
+  bool m_haveStreamInfo{false};
 };
 } // namespace XFILE

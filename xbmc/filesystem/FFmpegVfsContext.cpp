@@ -63,6 +63,7 @@ void CFFmpegVfsContext::Close()
     m_ioctx = nullptr;
   }
   m_file.reset();
+  m_haveStreamInfo = false;
 }
 
 double CFFmpegVfsContext::Duration() const
@@ -127,7 +128,14 @@ bool CFFmpegVfsContext::Open(const std::string& path)
 
   // Nothing here decodes: the headers, the chapters and the attachments are all that is wanted.
   m_fctx->flags |= AVFMT_FLAG_NOPARSE;
-  if (avformat_find_stream_info(m_fctx, nullptr) < 0)
+  /*!
+   * A failure here does not fail the open: the tags, the chapters and the attachments come from
+   * the header and are there either way, and a caller after those is entitled to them. It is only
+   * what is read off the streams that has none of it, so the outcome is recorded for
+   * HasStreamInfo() to hand to whoever asks for that.
+   */
+  m_haveStreamInfo = avformat_find_stream_info(m_fctx, nullptr) >= 0;
+  if (!m_haveStreamInfo)
     CLog::Log(LOGERROR, "CFFmpegVfsContext: can't detect codec info in file {}",
               CURL::GetRedacted(path));
 
