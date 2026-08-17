@@ -124,6 +124,40 @@ TEST(TestMatroskaTagMapping, AcceptsEverySpellingOfTheAlbumArtistKeys)
   EXPECT_EQ("Miles Davis / John Coltrane", joined);
 }
 
+/*!
+ * An album level ARTIST names the album only when the album named no artist of its own. A caller
+ * applies the names in the order a std::map walks them, which puts ARTIST after every ALBUM ARTIST
+ * spelling, so taking it whatever the file said would file a compilation under one of its
+ * performers.
+ */
+TEST(TestMatroskaTagMapping, KeepsTheAlbumArtistTheFileStatedOverAnAlbumLevelArtist)
+{
+  constexpr auto album = MatroskaTagMapping::TagLevel::Album;
+
+  for (const char* stated : {"ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST", "ALBUMARTISTS",
+                             "ALBUM_ARTISTS", "ALBUM ARTISTS"})
+  {
+    // The order the map walk produces: the stated album artist is applied first.
+    CMusicInfoTag statedFirst;
+    MatroskaTagMapping::MapTag(stated, "Various Artists", album, Separators, MusicSep, statedFirst);
+    MatroskaTagMapping::MapTag("ARTIST", "Miles Davis", album, Separators, MusicSep, statedFirst);
+    EXPECT_EQ("Various Artists", statedFirst.GetAlbumArtistString()) << stated;
+
+    // and the other way about, so the field is decided by the file rather than by the walk.
+    CMusicInfoTag artistFirst;
+    MatroskaTagMapping::MapTag("ARTIST", "Miles Davis", album, Separators, MusicSep, artistFirst);
+    MatroskaTagMapping::MapTag(stated, "Various Artists", album, Separators, MusicSep, artistFirst);
+    EXPECT_EQ("Various Artists", artistFirst.GetAlbumArtistString()) << stated;
+
+    // The song still takes the album's ARTIST; it is only the album artist that is left alone.
+    EXPECT_EQ("Miles Davis", statedFirst.GetArtistString()) << stated;
+    EXPECT_EQ("Miles Davis", artistFirst.GetArtistString()) << stated;
+  }
+
+  // With nothing else naming it, an album level ARTIST is still what names the album artist.
+  EXPECT_EQ("Miles Davis", Parse("ARTIST", "Miles Davis", album).GetAlbumArtistString());
+}
+
 TEST(TestMatroskaTagMapping, MapsRolesToContributors)
 {
   EXPECT_TRUE(HasRole(Parse("COMPOSER", "Bill Evans"), "Composer", "Bill Evans"));

@@ -84,7 +84,16 @@ void MUSIC_INFO::MatroskaTagMapping::MapTag(const std::string& key,
     }
     if (key == "ARTIST")
     {
-      tag.SetAlbumArtist(StringUtils::Join(SplitValues(value, separators), musicsep));
+      /*!
+      * An album level ARTIST names the album's artist, but only for an album that did not name one
+      * itself. A caller walks a std::map, so ARTIST is always applied after ALBUM ARTIST,
+      * ALBUMARTIST and ALBUM_ARTIST - taking it unconditionally would replace what the file
+      * stated, and a compilation carrying ALBUM ARTIST=Various Artists beside ARTIST=Miles Davis
+      * would be filed under Miles Davis. Deferring here decides it by what the file said rather
+      * than by the order the names happen to arrive in.
+      */
+      if (tag.GetAlbumArtist().empty())
+        tag.SetAlbumArtist(StringUtils::Join(SplitValues(value, separators), musicsep));
       /*!
       * The album's artist is the song's until the song says otherwise, and it has to be handed
       * over the way the track level branch hands it over: SetArtist() splits on the user's
