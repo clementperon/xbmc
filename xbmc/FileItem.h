@@ -25,6 +25,7 @@
 #include "utils/XTimeUtils.h"
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -567,6 +568,19 @@ private:
    */
   void FillMusicInfoTag(const std::shared_ptr<const PVR::CPVREpgInfoTag>& tag);
 
+  /*!
+   \brief Return \p url, parsing \p path into it on first use.
+
+   The URL getters are logically const but physically fill their cache, so two plain readers of
+   the same item are really two writers. The caller must hold \ref m_urlMutex.
+   \sa GetURL, GetDynURL
+   */
+  const CURL& GetCachedURL(std::optional<CURL>& url, const std::string& path) const;
+
+  /*! \brief Drop both parsed URLs, so that the next getter re-parses them. */
+  void InvalidateCachedURLs();
+
+  mutable std::mutex m_urlMutex; ///< guards the paths below and the URLs parsed from them
   mutable std::optional<CURL> m_urlPath;
   mutable std::optional<CURL> m_urlDynPath;
   std::string m_strPath;            ///< complete path to item
