@@ -162,7 +162,11 @@ void ResizeWorkerGLContext(int width, int height)
 }
 
 // Zero-copy frame handoff to the main thread.  Emscripten's main-thread
-// onmessage handler dispatches cmd:'callHandler' to Module[handler](...args).
+// onmessage handler dispatches CMD_CALL_HANDLER to Module[handler](...args).
+// The id is numeric (CMD_CALL_HANDLER in emscripten's src/lib/libpthread.js);
+// it was the string 'callHandler' before Emscripten 6.  We post by hand rather
+// than through emscripten's auto-proxied handler stub because that stub cannot
+// pass a transfer list, and the ImageBitmap has to move without a copy.
 void PostFrameBitmap()
 {
   EM_ASM({
@@ -173,7 +177,7 @@ void PostFrameBitmap()
         return;
       const bm = off.transferToImageBitmap();
       const msg = {};
-      msg.cmd = 'callHandler';
+      msg.cmd = 9; // CMD_CALL_HANDLER
       msg.handler = 'onKodiFrame';
       msg.args = [ bm ];
       postMessage(msg, [ bm ]);
