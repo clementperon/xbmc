@@ -363,7 +363,7 @@ These flags are required for the design described above and are set in
 |---|---|
 | `-sUSE_PTHREADS=1`, `-sPTHREAD_POOL_SIZE=16` | Kodi is multi-threaded. |
 | `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.4). |
-| `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2`, `-sFULL_ES3=1` | Kodi's GLES renderer targets GLES 3 on other platforms. |
+| `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2` | Kodi's GLES renderer targets GLES 3 on other platforms. |
 | `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread setup of `ImageBitmapRenderingContext` and `Module.onKodiFrame` before the Emscripten runtime boots. |
 
 These flags are deliberately **not** set:
@@ -374,6 +374,7 @@ These flags are deliberately **not** set:
 | `-sOFFSCREENCANVASES_TO_PTHREAD=#canvas` | Same as 4.1. |
 | `-sOFFSCREEN_FRAMEBUFFER=1` | Same as 4.2. |
 | `-sASYNCIFY=1` | Same as 4.5. |
+| `-sFULL_ES3=1` | Only needed for client-side vertex arrays. Every GLES path compiled for wasm uploads through real GPU buffers (`CGUITextureGLES`, `CGUIFontTTFGLES`, `COverlayRendererGLES`, `CLinuxRendererGLES` all bind a VBO and pass byte offsets). The remaining client-array users — gbm windowing, Android MediaCodec, DRM-PRIME — are not built for this target. |
 
 ---
 
