@@ -112,7 +112,7 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │   PresentRenderImpl(rendered):                                   │
 │     1. glFlush()                                                 │
 │     2. const bm = offCanvas.transferToImageBitmap()              │
-│     3. postMessage({cmd:'callHandler',                           │
+│     3. postMessage({cmd:CMD_CALL_HANDLER,                        │
 │                     handler:'onKodiFrame',                       │
 │                     args:[bm]}, [bm])                            │
 │     4. emscripten_futex_wait(&vsyncCounter, last, 100ms)         │
@@ -157,13 +157,17 @@ cycle, `PresentRenderImpl` does four things:
    OffscreenCanvas's drawing buffer is reset to transparent black by
    this call (standard WebGL "`preserveDrawingBuffer: false`" rules);
    that's fine because Kodi redraws every pass.
-3. **`postMessage({cmd: 'callHandler', handler: 'onKodiFrame',
+3. **`postMessage({cmd: CMD_CALL_HANDLER, handler: 'onKodiFrame',
    args: [bitmap]}, [bitmap])`.** Transfers the bitmap to the main
    thread. Emscripten's libpthread main-thread `onmessage` handler
-   recognises `cmd === 'callHandler'` as a documented dispatch point
-   and invokes `Module['onKodiFrame'](bitmap)`. The bitmap is a
-   transferable object, so ownership moves from the worker to the
-   main thread with no copy.
+   dispatches `CMD_CALL_HANDLER` to `Module['onKodiFrame'](bitmap)`.
+   The id is numeric (`CMD_CALL_HANDLER`, currently `9`, defined in
+   emscripten's `src/lib/libpthread.js`); it was the string
+   `'callHandler'` before Emscripten 6. We post the message by hand
+   rather than through emscripten's auto-proxied handler stub because
+   that stub cannot pass a transfer list. The bitmap is a transferable
+   object, so ownership moves from the worker to the main thread with
+   no copy.
 4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, 100 ms)`.** If
    the vsync counter hasn't advanced since the previous frame, the
    render thread blocks until the next `requestAnimationFrame` fires.
@@ -388,7 +392,7 @@ Relevant Emscripten source, for reference:
 
 | Concern | File |
 |---|---|
-| pthread main-thread `onmessage` (handles `callHandler`) | `src/lib/libpthread.js` |
+| pthread main-thread `onmessage` (handles `CMD_CALL_HANDLER`) | `src/lib/libpthread.js` |
 | `crt1_proxy_main` — spawns the pthread that runs `main()` | `system/lib/libc/crt1_proxy_main.c` |
 | `emscripten_webgl_commit_frame` — no-op on modern browsers | `src/lib/libhtml5_webgl.js` |
 
