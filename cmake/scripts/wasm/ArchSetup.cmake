@@ -40,7 +40,7 @@ option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in br
 # documented in docs/wasm/RENDERING.md §5.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   add_link_options(
-    "SHELL:-sUSE_PTHREADS=1"
+    "-pthread"
     "SHELL:-sPTHREAD_POOL_SIZE=4"
     "SHELL:-sAUDIO_WORKLET"
     "SHELL:-sWASM_WORKERS"
@@ -51,6 +51,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sPROXY_TO_PTHREAD"
     "SHELL:-sMIN_WEBGL_VERSION=2"
     "SHELL:-sMAX_WEBGL_VERSION=2"
+    "SHELL:-sFULL_ES3=0"
     "SHELL:-lidbfs.js"
     "SHELL:-lembind"
     # kodi_pre.js uses Module.ccall('kodi_wasm_dispatch_paste', ...) for clipboard paste.
