@@ -117,7 +117,7 @@ mergeInto(LibraryManager.library, {
     inflight: function(state) {
       const decoder = state.decoder;
       const queueSize = decoder && decoder.state === 'configured' ? decoder.decodeQueueSize : 0;
-      return queueSize + state.pendingCopies;
+      return queueSize + state.pendingCopies + (state.flushing ? 1 : 0);
     },
 
     publishState: function(state) {
@@ -280,6 +280,7 @@ mergeInto(LibraryManager.library, {
       frames: [],
       bufferPool: [],
       pendingCopies: 0,
+      flushing: false,
       generation: 0,
       droppedFrames: 0,
       highWaterMark: 0,
@@ -435,6 +436,7 @@ mergeInto(LibraryManager.library, {
       state.generation += 1;
       state.frames.length = 0;
       state.pendingCopies = 0;
+      state.flushing = false;
       state.droppedFrames = 0;
       state.highWaterMark = 0;
       state.failed = false;
@@ -449,6 +451,38 @@ mergeInto(LibraryManager.library, {
       WebCodecsBridge.publishState(state);
       return 0;
     }
+  },
+
+  // ---------------------------------------------------------------------------
+  webcodecs_flush_decoder__deps: ['$WebCodecsBridge'],
+  webcodecs_flush_decoder__proxy: 'sync',
+  webcodecs_flush_decoder__sig: 'ii',
+  webcodecs_flush_decoder: function(handle) {
+    const B = WebCodecsBridge;
+    const state = B.getState(handle);
+    if (!state || state.failed || !state.decoder || state.decoder.state !== 'configured')
+      return 0;
+    if (state.flushing)
+      return 1;
+
+    const generation = state.generation;
+    state.flushing = true;
+    state.decoder.flush().then(() => {
+      if (state.generation !== generation) return;
+      state.flushing = false;
+      B.publishState(state);
+    }).catch((e) => {
+      // reset() rejects a pending flush with AbortError; that is not a failure.
+      if (state.generation !== generation) return;
+      state.flushing = false;
+      if (!e || e.name !== 'AbortError') {
+        state.failed = true;
+        state.errorMessage = 'flush failed: ' + String(e);
+      }
+      B.publishState(state);
+    });
+    B.publishState(state);
+    return 1;
   },
 
   // ---------------------------------------------------------------------------
