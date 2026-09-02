@@ -49,7 +49,7 @@ constexpr int DEFAULT_ALIGNMENT = 64;
 constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
 constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
 constexpr double FRAME_WAIT_MS = 20.0;
-constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(500);
+constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(1000);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
 
@@ -606,7 +606,9 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   if (draining && !m_drainSubmitted)
   {
     m_drainSubmitted = true;
-    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested");
+    m_waitingForKeyFrame = true;
+    webcodecs_flush_decoder(m_decoderHandle);
+    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested, flushing");
   }
   else if (!draining)
     m_drainSubmitted = false;
