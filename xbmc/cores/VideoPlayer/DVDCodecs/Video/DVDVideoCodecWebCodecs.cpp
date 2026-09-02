@@ -50,6 +50,7 @@ constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
 constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
 constexpr double FRAME_WAIT_MS = 20.0;
 constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(1000);
+constexpr auto COPY_TIMEOUT = std::chrono::milliseconds(500);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
 
@@ -369,6 +370,7 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
 
 void CDVDVideoCodecWebCodecs::Dispose()
 {
+  ReleaseCopyBuffer();
   if (m_decoderHandle != INVALID_DECODER_HANDLE)
   {
     webcodecs_destroy_decoder(m_decoderHandle);
@@ -470,6 +472,7 @@ void CDVDVideoCodecWebCodecs::Reset()
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
     return;
 
+  ReleaseCopyBuffer();
   webcodecs_reset_decoder(m_decoderHandle);
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
@@ -531,6 +534,30 @@ void CDVDVideoCodecWebCodecs::WaitForDrain()
       return;
     WaitForDecoderSignal(seen, FRAME_WAIT_MS);
   }
+}
+
+bool CDVDVideoCodecWebCodecs::WaitForCopy()
+{
+  const auto deadline = std::chrono::steady_clock::now() + COPY_TIMEOUT;
+  while (true)
+  {
+    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
+    const int32_t result = SharedLoad(m_shared.copyResult);
+    if (result != 0)
+      return result > 0;
+    if (std::chrono::steady_clock::now() >= deadline)
+      return false;
+    WaitForDecoderSignal(seen, FRAME_WAIT_MS);
+  }
+}
+
+void CDVDVideoCodecWebCodecs::ReleaseCopyBuffer()
+{
+  if (!m_copyBuffer)
+    return;
+  WaitForCopy();
+  m_copyBuffer->Release();
+  m_copyBuffer = nullptr;
 }
 
 CVideoBuffer* CDVDVideoCodecWebCodecs::AcquirePictureBuffer(AVPixelFormat pixelFormat,
@@ -665,7 +692,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   WebCodecsFrameInfo info{};
   const int copyStatus =
       webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), payloadSize, &info);
-  if (copyStatus <= 0)
+  if (copyStatus != 1)
   {
     videoBuffer->Release();
     if (copyStatus == 0)
@@ -673,12 +700,31 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
 
     const std::string error = ReadDecoderError(m_decoderHandle);
     CLog::Log(LOGERROR,
-              "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed (status={}, "
+              "CDVDVideoCodecWebCodecs::GetPicture - cannot start frame copy (status={}, "
               "payloadSize={} vs published {}): {}",
               copyStatus, info.payloadSize, payloadSize,
               error.empty() ? "<no js error>" : error);
     return VC_ERROR;
   }
+
+  m_copyBuffer = videoBuffer;
+  if (!WaitForCopy())
+  {
+    if (SharedLoad(m_shared.copyResult) == 0)
+    {
+      CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - frame copy did not complete "
+                          "within {} ms",
+                COPY_TIMEOUT.count());
+      return VC_ERROR;
+    }
+
+    ReleaseCopyBuffer();
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed: {}",
+              error.empty() ? "<no js error>" : error);
+    return VC_ERROR;
+  }
+  m_copyBuffer = nullptr;
 
   const AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
   if (framePixelFormat == AV_PIX_FMT_NONE)
