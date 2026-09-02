@@ -52,6 +52,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sMIN_WEBGL_VERSION=2"
     "SHELL:-sMAX_WEBGL_VERSION=2"
     "SHELL:-sFULL_ES3=0"
+    # CPython's call trampoline installs its wasm-gc adaptor with addFunction().
+    "SHELL:-sALLOW_TABLE_GROWTH"
     "SHELL:-lidbfs.js"
     "SHELL:-lembind"
     # kodi_pre.js uses Module.ccall('kodi_wasm_dispatch_paste', ...) for clipboard paste.
