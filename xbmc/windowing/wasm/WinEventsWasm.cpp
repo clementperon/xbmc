@@ -9,11 +9,13 @@
 #include "application/AppInboundProtocol.h"
 #include "guilib/GUIWindowManager.h"
 #include "input/keyboard/XBMC_keyboard.h"
+#include "utils/CharsetConverter.h"
 
 #include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -126,10 +128,14 @@ XBMCKey TranslatePrintableKey(const char c)
 
 uint16_t TranslateUnicode(const EmscriptenKeyboardEvent* e)
 {
-  if (e->key[0] == '\0' || e->key[1] != '\0')
+  // KeyboardEvent.key holds either one printable character or a named key such as
+  // "Enter", so a single code point is what distinguishes text from the rest.
+  // Anything above the BMP has no room in the uint16_t keysym.
+  const std::u32string codePoints = CCharsetConverter::utf8ToUtf32(e->key);
+  if (codePoints.size() != 1 || codePoints[0] > UINT16_MAX)
     return 0;
 
-  return static_cast<uint8_t>(e->key[0]);
+  return static_cast<uint16_t>(codePoints[0]);
 }
 
 XBMCKey TranslateDomKey(const EmscriptenKeyboardEvent* e)
