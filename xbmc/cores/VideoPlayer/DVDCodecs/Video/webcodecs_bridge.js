@@ -26,12 +26,10 @@ mergeInto(LibraryManager.library, {
   $WebCodecsBridge: {
     MICROSECONDS_PER_SECOND: 1000000.0,
     FRAME_QUEUE_HIGH_WATER: 24,
-    BUFFER_POOL_MAX: 32,
-    // Cap decoder-side work. Queued frames are deliberately excluded so
-    // VideoPlayer can continue draining output after a successful AddData().
-    // Beyond this, push_packet reports BUSY so VideoPlayer re-queues the demux
-    // packet instead of the decoder silently buffering up frames we would
-    // then have to drop.
+    // Cap on decoder frames alive at once: queued for decode, held open
+    // awaiting copy, or being copied. Beyond this push_packet reports BUSY so
+    // VideoPlayer re-queues the packet; hardware decoders stall when too many
+    // output frames stay open.
     MAX_INFLIGHT: 12,
 
     // Enum values below are pulled from the C++-owned Embind registrations
@@ -73,6 +71,7 @@ mergeInto(LibraryManager.library, {
     SS_FAILED: 4,
     SS_NEXT_PAYLOAD_SIZE: 5,
     SS_NEXT_PIXFMT: 6,
+    SS_COPY_RESULT: 7,
 
     // Registry is lazily created on first decoder creation; this library file
     // is merged into both the main thread and every pthread module, but only
@@ -117,100 +116,89 @@ mergeInto(LibraryManager.library, {
     inflight: function(state) {
       const decoder = state.decoder;
       const queueSize = decoder && decoder.state === 'configured' ? decoder.decodeQueueSize : 0;
-      return queueSize + state.pendingCopies + (state.flushing ? 1 : 0);
+      return queueSize + (state.copying ? 1 : 0) + (state.flushing ? 1 : 0);
     },
 
     publishState: function(state) {
+      if (!state.sharedPtr)
+        return;
       const base = state.sharedPtr >> 2;
       const inflight = this.inflight(state);
       const next = state.frames.length > 0 ? state.frames[0] : null;
       Atomics.store(HEAP32, base + this.SS_QUEUED_FRAMES, state.frames.length);
       Atomics.store(HEAP32, base + this.SS_INFLIGHT, inflight);
-      Atomics.store(HEAP32, base + this.SS_BUSY, inflight >= this.MAX_INFLIGHT ? 1 : 0);
+      Atomics.store(HEAP32, base + this.SS_BUSY,
+                    inflight + state.frames.length >= this.MAX_INFLIGHT ? 1 : 0);
       Atomics.store(HEAP32, base + this.SS_FAILED, state.failed ? 1 : 0);
-      Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payload.byteLength : 0);
+      Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payloadSize : 0);
       Atomics.store(HEAP32, base + this.SS_NEXT_PIXFMT, next ? next.pixelFormat : this.PIXFMT_UNKNOWN);
+      Atomics.store(HEAP32, base + this.SS_COPY_RESULT, state.copyResult);
       Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
 
-    // Reuse previously-released payload buffers so the hot path does not
-    // allocate 1-3 MB per decoded frame (that rate of GC is what causes the
-    // visible stutters we observed before pooling).
-    acquirePayloadBuffer: function(state, size) {
-      const pool = state.bufferPool;
-      for (let i = 0; i < pool.length; ++i) {
-        if (pool[i].byteLength >= size)
-          return pool.splice(i, 1)[0].subarray(0, size);
-      }
-      return new Uint8Array(size);
-    },
-
-    releasePayloadBuffer: function(state, payload) {
-      if (!payload || state.bufferPool.length >= this.BUFFER_POOL_MAX)
-        return;
-      state.bufferPool.push(new Uint8Array(payload.buffer));
-    },
-
-    // Copy a VideoFrame in its native planar layout into a single Uint8Array
-    // sourced from the pool. Returns strides/offsets and the pixel-format id.
-    // Hardware decoders usually output NV12; forcing I420 via copyTo throws
-    // NotSupportedError on Chrome.
-    copyFrameNative: async function(state, frame, width, height, visibleRect) {
-      const frameFormat = frame.format || 'I420';
-      const copyOptions = {};
-      if (visibleRect)
-        copyOptions.rect = visibleRect;
+    // Plane layout for the formats we accept, with tightly packed strides.
+    describeFrame: function(frame, width, height) {
+      const format = frame.format || 'I420';
       const yStride = width;
       const uvHeight = (height + 1) >> 1;
       const ySize = yStride * height;
 
-      if (frameFormat === 'NV12') {
-        const uvStride = yStride;
-        const uvSize = uvStride * uvHeight;
-        const payload = this.acquirePayloadBuffer(state, ySize + uvSize);
-        await frame.copyTo(payload, {
-          ...copyOptions,
-          layout: [
-            { offset: 0, stride: yStride },
-            { offset: ySize, stride: uvStride },
-          ],
-        });
+      if (format === 'NV12') {
+        const uvSize = yStride * uvHeight;
         return {
-          payload,
           pixelFormat: this.PIXFMT_NV12,
-          yStride,
-          uStride: uvStride,
-          vStride: 0,
-          uOffset: ySize,
-          vOffset: 0,
+          payloadSize: ySize + uvSize,
+          yStride, uStride: yStride, vStride: 0,
+          uOffset: ySize, vOffset: 0,
+          layout: [{ offset: 0, stride: yStride }, { offset: ySize, stride: yStride }],
         };
       }
 
-      if (frameFormat === 'I420' || frameFormat === 'I420A') {
+      if (format === 'I420') {
         const uvStride = (width + 1) >> 1;
         const uvSize = uvStride * uvHeight;
-        const payload = this.acquirePayloadBuffer(state, ySize + uvSize * 2);
-        await frame.copyTo(payload, {
-          ...copyOptions,
+        return {
+          pixelFormat: this.PIXFMT_YUV420P,
+          payloadSize: ySize + uvSize * 2,
+          yStride, uStride: uvStride, vStride: uvStride,
+          uOffset: ySize, vOffset: ySize + uvSize,
           layout: [
             { offset: 0, stride: yStride },
             { offset: ySize, stride: uvStride },
             { offset: ySize + uvSize, stride: uvStride },
           ],
-        });
-        return {
-          payload,
-          pixelFormat: this.PIXFMT_YUV420P,
-          yStride,
-          uStride: uvStride,
-          vStride: uvStride,
-          uOffset: ySize,
-          vOffset: ySize + uvSize,
         };
       }
 
-      throw new Error('unsupported frame format: ' + frameFormat);
+      return null;
+    },
+
+    // Copies straight into wasm memory: under pthreads the heap is a
+    // SharedArrayBuffer and existing views stay valid across growth. Browsers
+    // whose copyTo() still rejects shared views fall back to a scratch buffer
+    // plus one memcpy.
+    copyFrame: async function(state, entry, dstPtr) {
+      const options = { layout: entry.layout };
+      if (entry.visibleRect)
+        options.rect = entry.visibleRect;
+
+      if (state.directCopy) {
+        try {
+          await entry.frame.copyTo(HEAPU8.subarray(dstPtr, dstPtr + entry.payloadSize), options);
+          return;
+        } catch (e) {
+          if (!(e instanceof TypeError))
+            throw e;
+          state.directCopy = false;
+        }
+      }
+
+      if (!state.scratch || state.scratch.byteLength < entry.payloadSize)
+        state.scratch = new Uint8Array(entry.payloadSize);
+      const scratch = state.scratch.subarray(0, entry.payloadSize);
+      await entry.frame.copyTo(scratch, options);
+      HEAPU8.set(scratch, dstPtr);
     },
 
     // Build the configure() dictionary from the stored codec parameters.
@@ -239,7 +227,7 @@ mergeInto(LibraryManager.library, {
       HEAP32[(infoPtr + this.FI_U_OFFSET) >> 2] = frame.uOffset | 0;
       HEAP32[(infoPtr + this.FI_V_OFFSET) >> 2] = frame.vOffset | 0;
       HEAP32[(infoPtr + this.FI_KEYFRAME) >> 2] = frame.keyFrame ? 1 : 0;
-      HEAP32[(infoPtr + this.FI_PAYLOAD_SIZE) >> 2] = frame.payload.byteLength | 0;
+      HEAP32[(infoPtr + this.FI_PAYLOAD_SIZE) >> 2] = frame.payloadSize | 0;
       HEAPF64[(infoPtr + this.FI_PTS) >> 3] = frame.ptsSeconds;
       HEAPF64[(infoPtr + this.FI_DURATION) >> 3] = frame.durationSeconds;
     },
@@ -278,8 +266,10 @@ mergeInto(LibraryManager.library, {
       errorMessage: '',
       lastTimestamp: 0,
       frames: [],
-      bufferPool: [],
-      pendingCopies: 0,
+      copying: false,
+      copyResult: 0,
+      scratch: null,
+      directCopy: true,
       flushing: false,
       generation: 0,
       droppedFrames: 0,
@@ -304,55 +294,36 @@ mergeInto(LibraryManager.library, {
                                                                 : state.lastTimestamp;
       const durationMicros = Number.isFinite(frame.duration) ? Number(frame.duration) : 0;
       state.lastTimestamp = timestampMicros;
-      const generation = state.generation;
 
-      state.pendingCopies += 1;
+      const described = WebCodecsBridge.describeFrame(frame, width, height);
+      if (!described) {
+        state.failed = true;
+        state.errorMessage = 'unsupported frame format: ' + frame.format;
+        frame.close();
+        WebCodecsBridge.publishState(state);
+        return;
+      }
+
+      // Safety valve: push_packet reports BUSY long before this is reached.
+      if (state.frames.length >= WebCodecsBridge.FRAME_QUEUE_HIGH_WATER) {
+        state.droppedFrames += 1;
+        frame.close();
+        WebCodecsBridge.publishState(state);
+        return;
+      }
+
+      state.frames.push(Object.assign({
+        frame,
+        visibleRect,
+        width,
+        height,
+        ptsSeconds: timestampMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
+        durationSeconds: durationMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
+        keyFrame: frame.type === 'key',
+      }, described));
+      if (state.frames.length > state.highWaterMark)
+        state.highWaterMark = state.frames.length;
       WebCodecsBridge.publishState(state);
-      (async () => {
-        let copied = null;
-        try {
-          // Safety valve: drop if the queue is already full. In steady state
-          // push_packet returns BUSY long before we reach this point.
-          if (state.frames.length >= WebCodecsBridge.FRAME_QUEUE_HIGH_WATER) {
-            state.droppedFrames += 1;
-            return;
-          }
-          copied = await WebCodecsBridge.copyFrameNative(state, frame, width, height, visibleRect);
-          if (state.generation !== generation) {
-            WebCodecsBridge.releasePayloadBuffer(state, copied.payload);
-            return;
-          }
-
-          state.frames.push({
-            payload: copied.payload,
-            pixelFormat: copied.pixelFormat,
-            width,
-            height,
-            yStride: copied.yStride,
-            uStride: copied.uStride,
-            vStride: copied.vStride,
-            uOffset: copied.uOffset,
-            vOffset: copied.vOffset,
-            ptsSeconds: timestampMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
-            durationSeconds: durationMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
-            keyFrame: frame.type === 'key',
-          });
-          if (state.frames.length > state.highWaterMark)
-            state.highWaterMark = state.frames.length;
-        } catch (e) {
-          if (state.generation === generation) {
-            state.failed = true;
-            state.errorMessage = 'frame copy failed: ' + String(e);
-          }
-        } finally {
-          frame.close();
-          if (state.generation === generation) {
-            if (state.pendingCopies > 0)
-              state.pendingCopies -= 1;
-            WebCodecsBridge.publishState(state);
-          }
-        }
-      })();
     };
 
     try {
@@ -414,13 +385,16 @@ mergeInto(LibraryManager.library, {
     const state = WebCodecsBridge.getState(handle);
     if (!state) return;
     state.generation += 1;
-    state.pendingCopies = 0;
+    for (const entry of state.frames) entry.frame.close();
     state.frames.length = 0;
     try {
       if (state.decoder) state.decoder.close();
     } catch (e) {
       console.warn('WASM WebCodecs: decoder close failed', e);
     }
+    // A copy still in flight finishes on its own; it must not publish into
+    // memory the codec may have freed by then.
+    state.sharedPtr = 0;
     WebCodecsBridge.registry.delete(handle);
   },
 
@@ -434,8 +408,8 @@ mergeInto(LibraryManager.library, {
     try {
       state.decoder.reset();
       state.generation += 1;
+      for (const entry of state.frames) entry.frame.close();
       state.frames.length = 0;
-      state.pendingCopies = 0;
       state.flushing = false;
       state.droppedFrames = 0;
       state.highWaterMark = 0;
@@ -537,21 +511,32 @@ mergeInto(LibraryManager.library, {
     const state = B.getState(handle);
     if (!state) return 0;
     if (state.failed) return -1;
-    if (state.frames.length === 0) return 0;
+    if (state.copying || state.frames.length === 0) return 0;
 
-    const frame = state.frames[0];
-    if (!frame) return 0;
-    if (frame.payload.byteLength > dstSize) {
-      B.writeFrameInfo(infoPtr, frame);
+    const entry = state.frames[0];
+    B.writeFrameInfo(infoPtr, entry);
+    if (entry.payloadSize > dstSize)
       return -2;
-    }
-
-    HEAPU8.set(frame.payload, dstPtr);
-    B.writeFrameInfo(infoPtr, frame);
 
     state.frames.shift();
-    B.releasePayloadBuffer(state, frame.payload);
+    state.copying = true;
+    state.copyResult = 0;
+    const generation = state.generation;
     B.publishState(state);
+
+    B.copyFrame(state, entry, dstPtr).then(() => {
+      state.copyResult = 1;
+    }, (e) => {
+      state.copyResult = -1;
+      if (state.generation === generation) {
+        state.failed = true;
+        state.errorMessage = 'frame copy failed: ' + String(e);
+      }
+    }).finally(() => {
+      entry.frame.close();
+      state.copying = false;
+      B.publishState(state);
+    });
     return 1;
   },
 

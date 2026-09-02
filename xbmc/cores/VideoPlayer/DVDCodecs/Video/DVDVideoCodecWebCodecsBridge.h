@@ -70,6 +70,7 @@ struct WebCodecsSharedState
   int32_t failed;
   int32_t nextPayloadSize; // of the frame webcodecs_copy_next_frame returns next
   int32_t nextPixelFormat;
+  int32_t copyResult; // 0 while a webcodecs_copy_next_frame copy runs, then 1 or -1
 };
 
 #ifdef __cplusplus
@@ -77,7 +78,7 @@ struct WebCodecsSharedState
 
 #include <cstddef>
 
-static_assert(sizeof(WebCodecsSharedState) == 28, "WebCodecsSharedState must be 28 bytes");
+static_assert(sizeof(WebCodecsSharedState) == 32, "WebCodecsSharedState must be 32 bytes");
 static_assert(offsetof(WebCodecsSharedState, signal) == 0, "signal offset");
 static_assert(offsetof(WebCodecsSharedState, queuedFrames) == 4, "queuedFrames offset");
 static_assert(offsetof(WebCodecsSharedState, inflight) == 8, "inflight offset");
@@ -85,6 +86,7 @@ static_assert(offsetof(WebCodecsSharedState, busy) == 12, "busy offset");
 static_assert(offsetof(WebCodecsSharedState, failed) == 16, "failed offset");
 static_assert(offsetof(WebCodecsSharedState, nextPayloadSize) == 20, "nextPayloadSize offset");
 static_assert(offsetof(WebCodecsSharedState, nextPixelFormat) == 24, "nextPixelFormat offset");
+static_assert(offsetof(WebCodecsSharedState, copyResult) == 28, "copyResult offset");
 
 static_assert(sizeof(WebCodecsFrameInfo) == 56, "WebCodecsFrameInfo must be 56 bytes");
 static_assert(offsetof(WebCodecsFrameInfo, pixelFormat) == 0, "pixelFormat offset");
@@ -134,9 +136,11 @@ int webcodecs_push_packet(int handle,
                           double ptsSeconds,
                           double durationSeconds);
 
-// Copies the next queued frame into [dst, dst+dstSize) and fills *info.
-// Returns 1 on success, 0 if no frame is available, -1 on decoder failure,
-// and -2 if *info was filled but dst is too small for info->payloadSize.
+// Fills *info and starts copying the next queued frame into [dst, dst+dstSize);
+// completion is reported through WebCodecsSharedState::copyResult and dst must
+// stay valid until then. Returns 1 if a copy was started, 0 if no frame is
+// available yet, -1 on decoder failure, and -2 if dst is too small for
+// info->payloadSize.
 int webcodecs_copy_next_frame(int handle,
                               uint8_t* dst,
                               int dstSize,

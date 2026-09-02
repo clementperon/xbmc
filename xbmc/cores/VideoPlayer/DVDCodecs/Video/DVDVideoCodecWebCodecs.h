@@ -40,6 +40,8 @@ private:
   static int32_t SharedLoad(const int32_t& field);
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
   void WaitForDrain();
+  bool WaitForCopy();
+  void ReleaseCopyBuffer();
   CVideoBuffer* AcquirePictureBuffer(AVPixelFormat pixelFormat, int bufferSize);
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
@@ -66,6 +68,8 @@ private:
 
   // Written by the JS bridge for the lifetime of m_decoderHandle.
   WebCodecsSharedState m_shared{};
+  // Handed to the JS bridge as copy destination; owned here until the copy settles.
+  CVideoBuffer* m_copyBuffer{nullptr};
 
   std::string m_codecString;
 };
