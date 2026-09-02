@@ -6,8 +6,10 @@
 #pragma once
 
 #include "DVDVideoCodec.h"
+#include "DVDVideoCodecWebCodecsBridge.h"
 #include "cores/VideoPlayer/DVDStreamInfo.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -35,11 +37,10 @@ private:
   bool SupportsCodec(const CDVDStreamInfo& hints) const;
   bool BuildCodecConfiguration(const CDVDStreamInfo& hints);
   void PollDecoderStats();
-  bool AcquirePictureBuffer(AVPixelFormat pixelFormat,
-                            int width,
-                            int height,
-                            int bufferSize,
-                            CVideoBuffer*& outBuffer);
+  static int32_t SharedLoad(const int32_t& field);
+  void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
+  void WaitForDrain();
+  CVideoBuffer* AcquirePictureBuffer(AVPixelFormat pixelFormat, int bufferSize);
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
                            AVPixelFormat pixelFormat,
@@ -55,16 +56,16 @@ private:
 
   int m_decoderHandle{0};
   bool m_opened{false};
-  bool m_eof{false};
   bool m_drainSubmitted{false};
-  int m_drainPollsWithoutFrames{0};
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
   int m_nalLengthSize{0};
   int m_codecControlFlags{0};
   int m_lastLoggedDroppedFrames{0};
   int m_highWaterMark{0};
-  AVPixelFormat m_bufferPixelFormat{AV_PIX_FMT_YUV420P};
+
+  // Written by the JS bridge for the lifetime of m_decoderHandle.
+  WebCodecsSharedState m_shared{};
 
   std::string m_codecString;
 };

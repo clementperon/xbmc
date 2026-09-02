@@ -13,12 +13,14 @@
 #include "utils/log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
 #include <emscripten/bind.h>
+#include <emscripten/threading.h>
 
 // Expose the bridge enums to JavaScript via Embind so the JS bridge can read
 // the canonical C++ values (Module.WebCodecsPixelFormat.NV12 etc.) instead of
@@ -45,10 +47,9 @@ namespace
 constexpr int INVALID_DECODER_HANDLE = 0;
 constexpr int DEFAULT_ALIGNMENT = 64;
 constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
-constexpr int MIN_PROBE_DIMENSION = 64;
-constexpr int STRIDE_ALIGNMENT = 2;
 constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
-constexpr int DRAIN_POLL_LIMIT = 120;
+constexpr double FRAME_WAIT_MS = 20.0;
+constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(500);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
 
@@ -349,8 +350,9 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
   const uint8_t* extraData = m_hints.extradata.GetData();
   const int extraDataSize = static_cast<int>(m_hints.extradata.GetSize());
 
+  m_shared = {};
   m_decoderHandle = webcodecs_create_decoder(m_codecString.c_str(), m_hints.width, m_hints.height,
-                                             extraData, extraDataSize, m_annexB ? 1 : 0);
+                                             extraData, extraDataSize, m_annexB ? 1 : 0, &m_shared);
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
   {
     CLog::Log(LOGDEBUG,
@@ -372,13 +374,10 @@ void CDVDVideoCodecWebCodecs::Dispose()
     m_decoderHandle = INVALID_DECODER_HANDLE;
   }
   m_opened = false;
-  m_eof = false;
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
-  m_drainPollsWithoutFrames = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
-  m_bufferPixelFormat = AV_PIX_FMT_YUV420P;
 }
 
 bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
@@ -398,10 +397,8 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
 
   m_name = "webcodecs-" + m_codecString;
   m_opened = true;
-  m_eof = false;
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
-  m_drainPollsWithoutFrames = 0;
   m_codecControlFlags = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
@@ -428,6 +425,9 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (m_waitingForKeyFrame && !isKeyFrame)
     return true;
 
+  if (SharedLoad(m_shared.busy))
+    return false;
+
   double ptsSeconds = 0.0;
   if (packet.pts != DVD_NOPTS_VALUE && std::isfinite(packet.pts))
     ptsSeconds = packet.pts / static_cast<double>(DVD_TIME_BASE);
@@ -440,13 +440,10 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
                                            isKeyFrame ? 1 : 0, ptsSeconds, durationSeconds);
 
   // Backpressure: decoder is saturated, let VideoPlayer re-queue this packet.
-  // Don't clear EOF/drain state; the packet wasn't consumed.
   if (status == WEBCODECS_PUSH_BUSY)
     return false;
 
-  m_eof = false;
   m_drainSubmitted = false;
-  m_drainPollsWithoutFrames = 0;
 
   if (status <= 0)
   {
@@ -474,10 +471,8 @@ void CDVDVideoCodecWebCodecs::Reset()
     return;
 
   webcodecs_reset_decoder(m_decoderHandle);
-  m_eof = false;
   m_waitingForKeyFrame = true;
   m_drainSubmitted = false;
-  m_drainPollsWithoutFrames = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
   CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::Reset - decoder reset after seek/flush");
@@ -511,17 +506,44 @@ void CDVDVideoCodecWebCodecs::PollDecoderStats()
   m_lastLoggedDroppedFrames = droppedFrames;
 }
 
-bool CDVDVideoCodecWebCodecs::AcquirePictureBuffer(AVPixelFormat pixelFormat,
-                                                   int width,
-                                                   int height,
-                                                   int bufferSize,
-                                                   CVideoBuffer*& outBuffer)
+int32_t CDVDVideoCodecWebCodecs::SharedLoad(const int32_t& field)
+{
+  return __atomic_load_n(&field, __ATOMIC_ACQUIRE);
+}
+
+// Callers sample `seenSignal` before checking the shared state, so a change that
+// lands in between makes the futex wait return immediately.
+void CDVDVideoCodecWebCodecs::WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs)
+{
+  emscripten_futex_wait(&m_shared.signal, seenSignal, maxWaitMs);
+}
+
+// VideoPlayerVideo stops draining at the first VC_BUFFER, so in-flight decodes
+// have to be waited for here rather than reported as "need more data".
+void CDVDVideoCodecWebCodecs::WaitForDrain()
+{
+  const auto deadline = std::chrono::steady_clock::now() + DRAIN_TIMEOUT;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
+    if (SharedLoad(m_shared.queuedFrames) > 0 || SharedLoad(m_shared.inflight) <= 0 ||
+        SharedLoad(m_shared.failed))
+      return;
+    WaitForDecoderSignal(seen, FRAME_WAIT_MS);
+  }
+}
+
+CVideoBuffer* CDVDVideoCodecWebCodecs::AcquirePictureBuffer(AVPixelFormat pixelFormat,
+                                                            int bufferSize)
 {
   m_videoBufferPool->Configure(pixelFormat, AlignUp(bufferSize, DEFAULT_ALIGNMENT));
-  outBuffer = m_videoBufferPool->Get();
-  if (!outBuffer || !outBuffer->GetMemPtr())
-    return false;
-  return true;
+  CVideoBuffer* buffer = m_videoBufferPool->Get();
+  if (buffer && !buffer->GetMemPtr())
+  {
+    buffer->Release();
+    return nullptr;
+  }
+  return buffer;
 }
 
 void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
@@ -580,108 +602,84 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   if (!m_opened || m_decoderHandle == INVALID_DECODER_HANDLE)
     return VC_ERROR;
 
-  if (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN)
+  const bool draining = (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN) != 0;
+  if (draining && !m_drainSubmitted)
   {
-    if (!m_drainSubmitted)
-    {
-      webcodecs_drain_decoder(m_decoderHandle);
-      m_drainSubmitted = true;
-      m_drainPollsWithoutFrames = 0;
-      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested");
-    }
+    m_drainSubmitted = true;
+    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested");
   }
-  else if (m_drainSubmitted)
-  {
-    // Input resumed after a stillframe/drain - clear the EOF state.
+  else if (!draining)
     m_drainSubmitted = false;
-    m_drainPollsWithoutFrames = 0;
-    m_eof = false;
+
+  if (draining)
+    WaitForDrain();
+  else
+  {
+    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
+    if (SharedLoad(m_shared.queuedFrames) == 0 && SharedLoad(m_shared.busy))
+      WaitForDecoderSignal(seen, FRAME_WAIT_MS);
   }
 
-  CVideoBuffer* videoBuffer = nullptr;
-  // YUV420P and NV12 both need width*height*3/2 bytes.
-  const int probeWidth = std::max(m_hints.width, MIN_PROBE_DIMENSION);
-  const int probeHeight = std::max(m_hints.height, MIN_PROBE_DIMENSION);
-  const int probeStride = AlignUp(probeWidth, STRIDE_ALIGNMENT);
-  const int probeBufferSize = probeStride * probeHeight * 3 / 2;
-
-  if (!AcquirePictureBuffer(m_bufferPixelFormat, probeWidth, probeHeight, probeBufferSize,
-                            videoBuffer))
+  if (SharedLoad(m_shared.failed))
   {
-    return VC_NOBUFFER;
-  }
-
-  WebCodecsFrameInfo info{};
-  int copyStatus =
-      webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), probeBufferSize, &info);
-  if (m_drainSubmitted)
-    PollDecoderStats();
-
-  if (copyStatus == -2)
-  {
-    videoBuffer->Release();
-    const AVPixelFormat requiredPixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
-    if (requiredPixelFormat == AV_PIX_FMT_NONE || info.payloadSize <= 0)
-    {
-      CLog::Log(LOGERROR,
-                "CDVDVideoCodecWebCodecs::GetPicture - invalid frame metadata for larger "
-                "WebCodecs frame (pixelFormat={}, payloadSize={})",
-                info.pixelFormat, info.payloadSize);
-      return VC_ERROR;
-    }
-
-    if (!AcquirePictureBuffer(requiredPixelFormat, info.width, info.height, info.payloadSize,
-                              videoBuffer))
-    {
-      return VC_NOBUFFER;
-    }
-
-    copyStatus =
-        webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), info.payloadSize, &info);
-    if (copyStatus <= 0)
-    {
-      videoBuffer->Release();
-      return copyStatus == 0 ? VC_BUFFER : VC_ERROR;
-    }
-  }
-
-  if (copyStatus == 0)
-  {
-    videoBuffer->Release();
-    if (m_drainSubmitted)
-    {
-      const int pendingWork = webcodecs_drain_decoder(m_decoderHandle);
-      if (pendingWork <= 0)
-      {
-        m_eof = true;
-        CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
-        return VC_EOF;
-      }
-
-      if (++m_drainPollsWithoutFrames >= DRAIN_POLL_LIMIT)
-      {
-        m_eof = true;
-        CLog::Log(LOGWARNING,
-                  "CDVDVideoCodecWebCodecs::GetPicture - drain timed out with {} pending "
-                  "WebCodecs operations",
-                  pendingWork);
-        return VC_EOF;
-      }
-    }
-    return VC_BUFFER;
-  }
-
-  if (copyStatus < 0)
-  {
-    videoBuffer->Release();
     const std::string error = ReadDecoderError(m_decoderHandle);
     CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - decoder entered failed state: {}",
               error.empty() ? "<no js error>" : error);
     return VC_ERROR;
   }
 
-  const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
-  if (pixelFormat == AV_PIX_FMT_NONE)
+  if (SharedLoad(m_shared.queuedFrames) == 0)
+  {
+    if (!draining)
+      return VC_BUFFER;
+
+    PollDecoderStats();
+    const int32_t inflight = SharedLoad(m_shared.inflight);
+    if (inflight > 0)
+      CLog::Log(LOGWARNING,
+                "CDVDVideoCodecWebCodecs::GetPicture - drain timed out with {} pending "
+                "WebCodecs operations",
+                inflight);
+    else
+      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
+    return VC_EOF;
+  }
+
+  const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(SharedLoad(m_shared.nextPixelFormat));
+  const int payloadSize = SharedLoad(m_shared.nextPayloadSize);
+  if (pixelFormat == AV_PIX_FMT_NONE || payloadSize <= 0)
+  {
+    CLog::Log(LOGERROR,
+              "CDVDVideoCodecWebCodecs::GetPicture - invalid queued frame metadata "
+              "(pixelFormat={}, payloadSize={})",
+              SharedLoad(m_shared.nextPixelFormat), payloadSize);
+    return VC_ERROR;
+  }
+
+  CVideoBuffer* videoBuffer = AcquirePictureBuffer(pixelFormat, payloadSize);
+  if (!videoBuffer)
+    return VC_NOBUFFER;
+
+  WebCodecsFrameInfo info{};
+  const int copyStatus =
+      webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), payloadSize, &info);
+  if (copyStatus <= 0)
+  {
+    videoBuffer->Release();
+    if (copyStatus == 0)
+      return VC_BUFFER;
+
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGERROR,
+              "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed (status={}, "
+              "payloadSize={} vs published {}): {}",
+              copyStatus, info.payloadSize, payloadSize,
+              error.empty() ? "<no js error>" : error);
+    return VC_ERROR;
+  }
+
+  const AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+  if (framePixelFormat == AV_PIX_FMT_NONE)
   {
     videoBuffer->Release();
     CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
@@ -689,15 +687,12 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     return VC_ERROR;
   }
 
-  m_bufferPixelFormat = pixelFormat;
   const int strides[YuvImage::MAX_PLANES] = {info.yStride, info.uStride, info.vStride};
   const int planeOffsets[YuvImage::MAX_PLANES] = {0, info.uOffset, info.vOffset};
-  videoBuffer->SetPixelFormat(pixelFormat);
+  videoBuffer->SetPixelFormat(framePixelFormat);
   videoBuffer->SetDimensions(info.width, info.height, strides, planeOffsets);
 
-  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info.width, info.height,
+  FillPictureMetadata(pVideoPicture, videoBuffer, framePixelFormat, info.width, info.height,
                       info.keyFrame != 0, info.ptsSeconds, info.durationSeconds);
-  m_eof = false;
-  m_drainPollsWithoutFrames = 0;
   return VC_PICTURE;
 }

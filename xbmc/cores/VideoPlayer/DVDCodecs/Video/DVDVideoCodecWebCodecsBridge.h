@@ -9,9 +9,9 @@
 // drives WebCodecs. All functions declared here are implemented in
 // webcodecs_bridge.js and linked via --js-library.
 //
-// The JS library automatically proxies every call to the main browser thread
-// (WebCodecs objects are DOM-thread only) via Emscripten's __proxy: 'sync'
-// attribute, so callers may invoke these functions from any pthread.
+// The VideoDecoder lives on the browser main thread, so the JS library proxies
+// every call there via Emscripten's __proxy: 'sync' attribute; callers may
+// invoke these functions from any pthread.
 
 #include <cstdint>
 
@@ -58,10 +58,33 @@ struct WebCodecsFrameInfo
   double durationSeconds;
 };
 
+// Decoder state mirrored into wasm memory by the JS side with Atomics so the
+// codec can poll it without a main-thread round trip. `signal` is incremented
+// and Atomics.notify'd on every change, so callers can futex-wait on it.
+struct WebCodecsSharedState
+{
+  int32_t signal;
+  int32_t queuedFrames;
+  int32_t inflight; // decodeQueueSize + frame copies still in progress
+  int32_t busy; // webcodecs_push_packet would return WEBCODECS_PUSH_BUSY
+  int32_t failed;
+  int32_t nextPayloadSize; // of the frame webcodecs_copy_next_frame returns next
+  int32_t nextPixelFormat;
+};
+
 #ifdef __cplusplus
 } // extern "C"
 
 #include <cstddef>
+
+static_assert(sizeof(WebCodecsSharedState) == 28, "WebCodecsSharedState must be 28 bytes");
+static_assert(offsetof(WebCodecsSharedState, signal) == 0, "signal offset");
+static_assert(offsetof(WebCodecsSharedState, queuedFrames) == 4, "queuedFrames offset");
+static_assert(offsetof(WebCodecsSharedState, inflight) == 8, "inflight offset");
+static_assert(offsetof(WebCodecsSharedState, busy) == 12, "busy offset");
+static_assert(offsetof(WebCodecsSharedState, failed) == 16, "failed offset");
+static_assert(offsetof(WebCodecsSharedState, nextPayloadSize) == 20, "nextPayloadSize offset");
+static_assert(offsetof(WebCodecsSharedState, nextPixelFormat) == 24, "nextPixelFormat offset");
 
 static_assert(sizeof(WebCodecsFrameInfo) == 56, "WebCodecsFrameInfo must be 56 bytes");
 static_assert(offsetof(WebCodecsFrameInfo, pixelFormat) == 0, "pixelFormat offset");
@@ -81,13 +104,15 @@ extern "C"
 {
 #endif
 
-// Returns a positive decoder handle on success, 0 on failure.
+// Returns a positive decoder handle on success, 0 on failure. `shared` must stay
+// valid until webcodecs_destroy_decoder.
 int webcodecs_create_decoder(const char* codec,
                              int codedWidth,
                              int codedHeight,
                              const uint8_t* description,
                              int descriptionSize,
-                             int annexB);
+                             int annexB,
+                             struct WebCodecsSharedState* shared);
 
 // Closes and unregisters the decoder. Handle becomes invalid.
 void webcodecs_destroy_decoder(int handle);
@@ -102,12 +127,6 @@ int webcodecs_push_packet(int handle,
                           int keyFrame,
                           double ptsSeconds,
                           double durationSeconds);
-
-// Reports how many frames are still pending in the output queue.
-// (We deliberately do NOT call VideoDecoder.flush(): flush forces a new
-//  keyframe, which breaks pause/resume where DVD_CODEC_CTRL_DRAIN is raised
-//  transiently, not only at real EOF.)
-int webcodecs_drain_decoder(int handle);
 
 // Copies the next queued frame into [dst, dst+dstSize) and fills *info.
 // Returns 1 on success, 0 if no frame is available, -1 on decoder failure,
