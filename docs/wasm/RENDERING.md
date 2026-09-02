@@ -4,10 +4,12 @@ This document describes how Kodi renders its GUI to a web page when built
 for the `wasm32-unknown-emscripten` target. It also records the other
 designs that were considered, and why we didn't pick them.
 
-**Scope.** GUI presentation only (the path from an OpenGL ES 2/3 draw
-call inside Kodi to a pixel on the user's screen). Audio output, video
-decoding, and input plumbing are described elsewhere; this document only
-refers to them when they influence the rendering design.
+**Scope.** Sections 1-8 cover GUI presentation (the path from an OpenGL
+ES 2/3 draw call inside Kodi to a pixel on the user's screen). Section 9
+covers how decoded video reaches the screen today and the video-plane
+design it should move to. Audio output lives in
+`xbmc/platform/wasm/WasmAudioWorkletManager.cpp` and is not documented
+here; input is covered only where it touches rendering.
 
 ---
 
@@ -115,7 +117,7 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │     3. postMessage({cmd:CMD_CALL_HANDLER,                        │
 │                     handler:'onKodiFrame',                       │
 │                     args:[bm]}, [bm])                            │
-│     4. emscripten_futex_wait(&vsyncCounter, last, 100ms)         │
+│     4. emscripten_futex_wait(&vsyncCounter, last, 100ms / 8ms)   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -168,18 +170,28 @@ cycle, `PresentRenderImpl` does four things:
    that stub cannot pass a transfer list. The bitmap is a transferable
    object, so ownership moves from the worker to the main thread with
    no copy.
-4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, 100 ms)`.** If
-   the vsync counter hasn't advanced since the previous frame, the
-   render thread blocks until the next `requestAnimationFrame` fires.
-   The 100 ms timeout protects forward progress when rAF is throttled
-   (backgrounded tab, "Reduce animation" setting) so Kodi keeps
-   running at a slower rate instead of deadlocking.
+4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, timeout)`.** The
+   wait happens *before* the flush and transfer. If the vsync counter
+   hasn't advanced since the previous frame, the render thread blocks
+   until the next `requestAnimationFrame` fires. If the wait times out
+   without a tick, the frame is **not** posted (there is no compositor
+   frame to pair it with) and `PresentRenderImpl` returns, so Kodi keeps
+   running when rAF is throttled (backgrounded tab, "Reduce animation")
+   instead of deadlocking. The timeout is 100 ms, lowered to 8 ms when
+   the page runs in a Tizen TV runtime, where rAF has been observed to
+   stop ticking while modal UI is up.
+
+The rAF pump also measures the display refresh rate (EMA of the tick
+interval, clamped to 20-240 Hz) into `globalThis.__kodiRefreshRate`.
 
 On the main thread, `Module.onKodiFrame(bitmap)` stores the bitmap as
 "pending" and schedules a single `requestAnimationFrame` callback that
 calls `bitmapCtx.transferFromImageBitmap(bitmap)`. If a new bitmap
 arrives before the rAF fires, the older one is `close()`d and replaced:
-we never display a stale frame.
+we never display a stale frame. Where `bitmaprenderer` is unavailable
+the canvas falls back to a 2D context and `drawImage`, which costs a
+copy. The first presented frame fires `Module.onKodiFirstFramePresented`
+so the HTML shell can hide its loading indicator.
 
 ### 2.4 Input
 
@@ -361,10 +373,16 @@ These flags are required for the design described above and are set in
 
 | Flag | Why |
 |---|---|
-| `-sUSE_PTHREADS=1`, `-sPTHREAD_POOL_SIZE=16` | Kodi is multi-threaded. |
+| `-pthread`, `-sPTHREAD_POOL_SIZE=4` | Kodi is multi-threaded. The pool only pre-spawns Workers; threads created past it are started by the main thread on demand. |
 | `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.4). |
 | `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2` | Kodi's GLES renderer targets GLES 3 on other platforms. |
-| `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread setup of `ImageBitmapRenderingContext` and `Module.onKodiFrame` before the Emscripten runtime boots. |
+| `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread setup of `ImageBitmapRenderingContext` and `Module.onKodiFrame` before the Emscripten runtime boots (also hosts the clipboard-paste and HTTP-proxy shims). |
+
+Flags set for other subsystems, listed so nobody removes them while
+touching rendering: `-sAUDIO_WORKLET` + `-sWASM_WORKERS` (audio sink),
+`-lembind` + `--js-library .../webcodecs_bridge.js` (video decoding,
+§9), `-sEXPORTED_RUNTIME_METHODS=ccall,cwrap` (paste), `-lidbfs.js`
+(persistent userdata), `-sALLOW_TABLE_GROWTH` (CPython).
 
 These flags are deliberately **not** set:
 
@@ -386,6 +404,8 @@ These flags are deliberately **not** set:
 | Main-thread presentation glue (bitmaprenderer, `Module.onKodiFrame`) | `xbmc/platform/wasm/kodi_pre.js` |
 | OffscreenCanvas + WebGL2 creation, `PresentRenderImpl`, vsync pump | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
 | Input events (keyboard / mouse / resize) | `xbmc/windowing/wasm/WinEventsWasm.cpp` |
+| WebCodecs video decoder + JS bridge (§9) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp`, `webcodecs_bridge.js`, `DVDVideoCodecWebCodecsBridge.h` |
+| Audio sink + AudioWorklet ring | `xbmc/cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.cpp`, `xbmc/platform/wasm/WasmAudioWorkletManager.cpp` |
 | WASM `main()` + `WasmRunIteration` | `xbmc/platform/wasm/ApplicationWasm.cpp`, `xbmc/application/Application.cpp` |
 | Link flags | `cmake/scripts/wasm/ArchSetup.cmake` |
 
@@ -439,13 +459,149 @@ Relevant Emscripten source, for reference:
   canvas's CSS size stays at 100vw/100vh and the bitmaprenderer
   will display the higher-resolution bitmap scaled to the CSS box.
 
-- **Hardware video.** `VideoFrame` objects from WebCodecs can be
-  uploaded zero-copy via `gl.texImage2D(target, level, format,
-  videoFrame)` on Chromium; this is compatible with the current
-  pipeline because the GL context lives on the render pthread.
+- **Video.** See §9.
 
 - **Tear-free presentation.** Currently a frame is committed every
   time Kodi issues a present; if we wanted stricter pacing we could
   have `PresentRenderImpl` skip the `postMessage` when no dirty
   regions changed and let the main thread keep displaying the
   previous bitmap.
+
+---
+
+## 9. Video: current path and the video-plane design
+
+### 9.1 Target constraints
+
+The primary target is Samsung Tizen TVs, where the browser process is
+typically confined to one or two CPU cores. Every design choice below is
+judged by one number: how many times a decoded frame's pixels cross the
+CPU. A 1080p YUV frame is ~3 MB; at 60 fps each CPU pass over it costs
+~180 MB/s of memory bandwidth plus the cycles to drive it, and 4K is
+four times that.
+
+### 9.2 Current path (texture upload)
+
+`CDVDVideoCodecWebCodecs` drives a `VideoDecoder` that lives on the
+browser main thread through an Emscripten `--js-library`
+(`webcodecs_bridge.js`); every bridge call is `__proxy: 'sync'`. State
+the codec needs to poll — queued frames, in-flight work, backpressure,
+failure, the next frame's size — is mirrored by the JS side into a
+`WebCodecsSharedState` struct in wasm memory with `Atomics`, and a
+`signal` word is bumped and `Atomics.notify`'d on every change so the
+VideoPlayer thread can `emscripten_futex_wait` instead of polling
+through the proxy. Decoded `VideoFrame`s stay open in a JS queue until
+the codec asks for one; `copyTo()` then writes straight into the
+`CVideoBuffer`'s memory (the wasm heap is a `SharedArrayBuffer` under
+pthreads). The frame reaches the screen through `CLinuxRendererGLES` as
+a sysmem YUV420P/NV12 picture: `glTexImage2D` on the render pthread and
+the YUV→RGB shader.
+
+Per frame that is two CPU passes — the `copyTo` readback (GPU→CPU for a
+hardware decoder, memcpy for a software one) and the WebGL texture
+upload — plus one GPU pass for colour conversion. It is the cheapest a
+sysmem pipeline can be, and it is still the wrong pipeline for a
+two-core TV at 1080p60.
+
+Drain semantics follow the other Kodi codecs: `DVD_CODEC_CTRL_DRAIN`
+triggers `VideoDecoder.flush()`, which releases the reorder buffer, and
+the codec then skips delta packets until the next keyframe.
+
+### 9.3 Design: video plane under the GUI
+
+The design Kodi already uses on comparable hardware is a **video
+plane**: the decoder never hands pixels to Kodi, the renderer only
+positions and times an opaque frame handle, and the platform compositor
+stacks the video under a GUI drawn with a transparent hole. This is
+`CRendererMediaCodecSurface` on Android and the DRM-PRIME plane renderer
+on GBM. In the browser it maps onto:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Browser main thread                                              │
+│   VideoDecoder ──► Map<id, VideoFrame>   (frames never leave)    │
+│   <canvas id="video">   ◄── present(id, rect): draw / transfer   │
+│   <canvas id="canvas">  ◄── GUI ImageBitmap (existing path, §2)  │
+│         GUI canvas is alpha-enabled; video area cleared to 0     │
+└──────────────────────────────────────────────────────────────────┘
+          ▲ shared state (Atomics) + postMessage           │ ids
+          │                                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ Kodi threads                                                     │
+│   VideoPlayerVideo: GetPicture() → CVideoBufferWebCodecs{id,pts} │
+│   RenderManager / render pthread: Render() → present(id, rect)   │
+│   CVideoBuffer release → release(id) → VideoFrame.close()        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Codec.** Unchanged in structure. `GetPicture` returns a
+`CVideoBufferWebCodecs` carrying only an id, pts and dimensions; the JS
+side keeps the `VideoFrame` in a map keyed by id. No `copyTo`, no
+`WebCodecsFrameInfo` payload.
+
+**Renderer.** A new `CRendererWebCodecsPlane` registered for that
+buffer type. `Configure` records geometry; `RenderUpdate` computes the
+destination rect exactly as the GLES renderer does today (aspect,
+zoom, stereo, view mode) and sends `present(id, rect)`; `ManageRenderArea`
+and `RenderCapture` behave like the MediaCodec surface renderer (capture
+unsupported or via `drawImage` on request). It draws nothing into the GL
+context. The GUI canvas must be created with `alpha: true` and the video
+window cleared to transparent, which is what the Android and GBM
+windowing code already does for their planes.
+
+**Presentation.** The main thread keeps one pending `(id, rect)` per
+video canvas and applies it in the same rAF callback that presents the
+GUI bitmap (§2.3), so the two planes update in the same compositor
+frame. Presenting is `bitmaprenderer.transferFromImageBitmap(await
+createImageBitmap(frame))` or, where a `VideoFrame` can be drawn
+directly, `2d.drawImage(frame, rect)`. Both are compositor operations:
+no CPU pass over the pixels. Timing stays with `CRenderManager`; the
+plane only shows what it was last told to show.
+
+**Buffer lifetime.** Hardware decoders have a fixed output pool and
+stall when too many frames are held open, so `VideoFrame.close()` must
+follow `CVideoBuffer::Release()` promptly. The render buffer queue
+(3-4 pictures) plus the codec's in-flight cap is well inside typical
+pool sizes; the existing `busy` backpressure already counts open
+frames.
+
+**Protocol.** Two new bridge calls, `webcodecs_present(handle, id,
+x, y, w, h)` and `webcodecs_release(handle, id)`, both cheap and
+`__proxy: 'async'` — nothing needs to wait for them. The rest of the
+`WebCodecsSharedState` protocol carries over unchanged.
+
+**Resize / HiDPI.** The video canvas is sized with the GUI canvas
+(§2.5). Because the plane is composited, rendering the GUI at CSS size
+while the video shows at native decode resolution is free, which is the
+right split on a TV.
+
+### 9.4 Backends
+
+The renderer/codec split above is deliberately backend-neutral:
+
+- **WebCodecs + canvas** — any Chromium or Firefox with WebCodecs.
+- **Tizen Elementary Media Stream Source (EMSS)** — Samsung's
+  WASM-specific media API feeds compressed packets straight to the TV's
+  hardware decoder and video plane (audio too). Same shape: the codec
+  appends packets, the renderer positions a plane. On Samsung TVs this
+  is expected to be the efficient path and avoids depending on whether
+  the TV's browser exposes hardware-accelerated WebCodecs at all.
+
+Which backend is built first depends on what the target TV actually
+offers, so the first step is to probe `VideoDecoder.isConfigSupported`
+with `hardwareAcceleration: 'prefer-hardware'` and EMSS availability on
+real hardware.
+
+### 9.5 Alternatives considered
+
+- **`gl.texImage2D(target, …, videoFrame)` on the render pthread.**
+  Zero-copy on paper, but a `VideoFrame` is a JS object that can only
+  reach the render pthread by `postMessage`, and that pthread never
+  returns to its Worker event loop (it blocks in `Atomics.wait`, §1.5),
+  so the message is never delivered. It would need the GL context on a
+  thread that yields — i.e. the video-plane design anyway.
+- **A dedicated decode Worker owning the `VideoDecoder`.** Removes work
+  from the main thread but removes no CPU work; on a two-core TV it is
+  a scheduling shuffle plus one more thread. Not pursued.
+- **Software YUV→RGB in wasm + `putImageData`.** Adds a CPU pass rather
+  than removing one.
