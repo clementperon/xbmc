@@ -21,7 +21,6 @@ public:
   static CWasmAudioWorkletManager& Instance();
 
   bool Initialize(unsigned int channels, unsigned int requestedSampleRate);
-  void ResetBuffer();
   void Shutdown();
 
   unsigned int WritePlanar(const float* const* planes,
@@ -38,6 +37,7 @@ public:
   unsigned int GetSampleRate() const;
   unsigned int GetQuantumSize() const;
   unsigned int GetChannels() const;
+  unsigned int GetMaxOutputChannels() const;
   bool IsReady() const;
 
   // Returns and resets the number of underrun frames.
@@ -55,6 +55,8 @@ private:
   void InstallResumeHooks() const;
   void ClearResumeHooks() const;
   void EnsureBufferAllocated();
+  void ResetBuffer();
+  void WaitForWorkletIdle();
   int QuantumSleepMs() const;
   void RefreshPipelineLatency();
 
@@ -86,7 +88,8 @@ private:
   std::atomic<unsigned int> m_sampleRate{48000};
   std::atomic<unsigned int> m_quantumSize{128};
 
-  mutable std::mutex m_bufferMutex;
+  // SPSC ring: the sink thread writes m_writeFrame and (re)allocates, only after
+  // WaitForWorkletIdle(); the worklet thread writes m_readFrame.
   std::vector<float> m_ringBuffer;
   unsigned int m_bufferCapacityFrames{0};
   unsigned int m_bufferChannels{0};
