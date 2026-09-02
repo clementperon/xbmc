@@ -473,7 +473,7 @@ mergeInto(LibraryManager.library, {
     if (B.inflight(state) >= B.MAX_INFLIGHT)
       return B.PUSH_BUSY;
 
-    const tsMicros = Math.max(0, Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND));
+    const tsMicros = Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND);
     const durMicros = Math.max(0, Math.round(durationSeconds * B.MICROSECONDS_PER_SECOND));
     const payload = HEAPU8.slice(dataPtr, dataPtr + dataSize);
 
