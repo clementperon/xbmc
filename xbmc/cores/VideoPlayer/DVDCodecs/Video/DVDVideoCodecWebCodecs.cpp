@@ -210,21 +210,22 @@ bool VP9SampleIsKeyFrame(const uint8_t* data, int size)
   return readBit() == VP9_FRAME_TYPE_KEY;
 }
 
-bool PacketIsKeyFrame(const CDVDStreamInfo& hints,
-                      const uint8_t* data,
-                      int size,
-                      int nalLengthSize)
+// WebCodecs needs 'key' to mean "decodable on its own". The demuxer flag is not
+// that: FFmpeg sets AV_PKT_FLAG_KEY on non-IDR I-frames (open GOP), whose
+// leading pictures reference frames the decoder never saw. Parse the bitstream
+// where we can and only trust the demuxer for codecs we don't parse.
+bool PacketIsKeyFrame(const CDVDStreamInfo& hints, const DemuxPacket& packet, int nalLengthSize)
 {
   switch (hints.codec)
   {
     case AV_CODEC_ID_H264:
-      return H264SampleContainsIDR(data, size, nalLengthSize);
+      return H264SampleContainsIDR(packet.pData, packet.iSize, nalLengthSize);
     case AV_CODEC_ID_VP8:
-      return VP8SampleIsKeyFrame(data, size);
+      return VP8SampleIsKeyFrame(packet.pData, packet.iSize);
     case AV_CODEC_ID_VP9:
-      return VP9SampleIsKeyFrame(data, size);
+      return VP9SampleIsKeyFrame(packet.pData, packet.iSize);
     default:
-      return true;
+      return packet.m_keyFrame;
   }
 }
 
@@ -418,8 +419,7 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (packet.iSize <= 0 || packet.pData == nullptr)
     return true;
 
-  const bool isKeyFrame =
-      packet.m_keyFrame || PacketIsKeyFrame(m_hints, packet.pData, packet.iSize, m_nalLengthSize);
+  const bool isKeyFrame = PacketIsKeyFrame(m_hints, packet, m_nalLengthSize);
 
   // Feeding a delta before the first IDR would permanently fail the decoder.
   if (m_waitingForKeyFrame && !isKeyFrame)
