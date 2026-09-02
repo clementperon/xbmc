@@ -123,6 +123,53 @@ void DestroyAudioContextOnMain(int audioContext)
   emscripten_destroy_audio_context(audioContext);
 }
 
+int QueryMaxOutputChannelsOnMain(int audioContext)
+{
+  return EM_ASM_INT(
+      {
+        let ctx = $0 ? emscriptenGetAudioObject($0) : null;
+        const temporary = !ctx;
+        try
+        {
+          if (!ctx)
+            ctx = new AudioContext();
+          return ctx.destination.maxChannelCount | 0;
+        }
+        catch (e)
+        {
+          return 0;
+        }
+        finally
+        {
+          if (temporary && ctx)
+            ctx.close().catch(() => {});
+        }
+      },
+      audioContext);
+}
+
+// AudioDestinationNode.channelCount defaults to 2 regardless of the hardware, which
+// would fold a 5.1 node to stereo.
+void SetDestinationChannelCountOnMain(int audioContext, int channels)
+{
+  EM_ASM(
+      {
+        const ctx = emscriptenGetAudioObject($0);
+        if (!ctx)
+          return;
+        const dest = ctx.destination;
+        try
+        {
+          dest.channelCount = Math.min($1, dest.maxChannelCount);
+        }
+        catch (e)
+        {
+          console.warn("WASM AudioWorklet: cannot set destination channelCount", e);
+        }
+      },
+      audioContext, channels);
+}
+
 void DestroyAudioNodeOnMain(int audioNode)
 {
   emscripten_destroy_web_audio_node(audioNode);
@@ -226,9 +273,7 @@ void CWasmAudioWorkletManager::ResetBuffer()
 
 void CWasmAudioWorkletManager::Shutdown()
 {
-  m_ready.store(false, std::memory_order_release);
-  for (unsigned int i = 0; i < 100 && m_activeCallbacks.load(std::memory_order_acquire) > 0; ++i)
-    emscripten_thread_sleep(1);
+  WaitForWorkletIdle();
 
   if (m_workletNode != 0)
   {
@@ -246,17 +291,14 @@ void CWasmAudioWorkletManager::Shutdown()
 
   m_workletThreadCreated.store(false, std::memory_order_release);
   m_processorCreated.store(false, std::memory_order_release);
-  {
-    std::unique_lock lock(m_bufferMutex);
-    m_bufferCapacityFrames = 0;
-    m_bufferChannels = 0;
-    m_bufferSampleRate = 0;
-    m_bufferQuantumSize = 0;
-    m_prebufferFrames = 0;
-    m_prebufferComplete.store(false, std::memory_order_release);
-    m_ringBuffer.clear();
-    m_ringBuffer.shrink_to_fit();
-  }
+  m_bufferCapacityFrames = 0;
+  m_bufferChannels = 0;
+  m_bufferSampleRate = 0;
+  m_bufferQuantumSize = 0;
+  m_prebufferFrames = 0;
+  m_prebufferComplete.store(false, std::memory_order_release);
+  m_ringBuffer.clear();
+  m_ringBuffer.shrink_to_fit();
   m_readFrame.store(0, std::memory_order_release);
   m_writeFrame.store(0, std::memory_order_release);
   m_pipelineLatencyUs.store(0, std::memory_order_relaxed);
@@ -319,7 +361,6 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
     if (!IsReady())
       return writtenFrames;
 
-    std::unique_lock lock(m_bufferMutex);
     const unsigned int capacityFrames = m_bufferCapacityFrames;
     if (capacityFrames == 0 || m_ringBuffer.empty())
       return writtenFrames;
@@ -329,7 +370,6 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
     const uint64_t usedFrames = writeFrame - readFrame;
     if (usedFrames >= capacityFrames)
     {
-      lock.unlock();
       stalledMs += static_cast<unsigned int>(quantumMs);
       if (stalledMs >= WORKLET_STALL_LIMIT_MS)
         return writtenFrames;
@@ -481,6 +521,22 @@ unsigned int CWasmAudioWorkletManager::GetChannels() const
   return m_channels.load(std::memory_order_relaxed);
 }
 
+unsigned int CWasmAudioWorkletManager::GetMaxOutputChannels() const
+{
+  const int channels = emscripten_sync_run_in_main_runtime_thread(
+      EM_FUNC_SIG_II, QueryMaxOutputChannelsOnMain, m_audioContext);
+  return channels > 0 ? static_cast<unsigned int>(channels) : 2U;
+}
+
+// seq_cst pairs with ProcessAudio(), which increments m_activeCallbacks before loading
+// m_ready: either the worklet sees the flag or we see the callback and wait for it.
+void CWasmAudioWorkletManager::WaitForWorkletIdle()
+{
+  m_ready.store(false, std::memory_order_seq_cst);
+  for (unsigned int i = 0; i < 100 && m_activeCallbacks.load(std::memory_order_seq_cst) > 0; ++i)
+    emscripten_thread_sleep(1);
+}
+
 bool CWasmAudioWorkletManager::IsReady() const
 {
   return m_ready.load(std::memory_order_acquire);
@@ -599,6 +655,8 @@ bool CWasmAudioWorkletManager::ConfigureNode(unsigned int channels)
     return false;
   }
 
+  emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VII, SetDestinationChannelCountOnMain,
+                                             m_audioContext, static_cast<int>(channels));
   emscripten_sync_run_in_main_runtime_thread(EM_FUNC_SIG_VIIII, ConnectAudioNodeOnMain,
                                              m_workletNode, m_audioContext, 0, 0);
   RefreshPipelineLatency();
@@ -677,7 +735,7 @@ void CWasmAudioWorkletManager::EnsureBufferAllocated()
       m_bufferSampleRate == sampleRate && m_bufferQuantumSize == quantumSize)
     return;
 
-  std::unique_lock lock(m_bufferMutex);
+  WaitForWorkletIdle();
   m_bufferCapacityFrames = capacityFrames;
   m_bufferChannels = channels;
   m_bufferSampleRate = sampleRate;
@@ -740,9 +798,9 @@ bool CWasmAudioWorkletManager::ProcessAudio(
   if (!self)
     return false;
 
-  self->m_activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+  self->m_activeCallbacks.fetch_add(1, std::memory_order_seq_cst);
   const bool result = self->ProcessAudioImpl(numOutputs, outputs);
-  self->m_activeCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+  self->m_activeCallbacks.fetch_sub(1, std::memory_order_seq_cst);
   return result;
 }
 
@@ -791,19 +849,8 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
     std::fill(outputData, outputData + totalSamples, 0.0f);
   };
 
-  if (!IsReady())
+  if (!m_ready.load(std::memory_order_seq_cst))
   {
-    zeroOutput();
-// #region agent log: temporary debug instrumentation, remove when done.
-    countSilence();
-// #endregion
-    return true;
-  }
-
-  std::unique_lock lock(m_bufferMutex, std::try_to_lock);
-  if (!lock.owns_lock())
-  {
-    m_underrunFrames.fetch_add(static_cast<uint64_t>(samplesPerChannel), std::memory_order_relaxed);
     zeroOutput();
 // #region agent log: temporary debug instrumentation, remove when done.
     countSilence();

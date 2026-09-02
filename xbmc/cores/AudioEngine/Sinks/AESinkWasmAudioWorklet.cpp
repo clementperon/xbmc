@@ -6,8 +6,8 @@
 #include "AESinkWasmAudioWorklet.h"
 
 #include "cores/AudioEngine/AESinkFactory.h"
+#include "cores/AudioEngine/Utils/AEChannelInfo.h"
 #include "cores/AudioEngine/Utils/AEDeviceInfo.h"
-#include "cores/AudioEngine/Utils/AEUtil.h"
 #include "platform/wasm/WasmAudioWorkletManager.h"
 #include "utils/log.h"
 #include "utils/TimeUtils.h"
@@ -15,6 +15,20 @@
 #include <algorithm>
 
 using KODI::PLATFORM::WASM::CWasmAudioWorkletManager;
+
+namespace
+{
+// Web Audio only defines speaker mixing for 1, 2, 4 and 6 channels; other counts are
+// mixed as "discrete", dropping every channel the destination lacks.
+AEStdChLayout ResolveSinkLayout(unsigned int requestedChannels, unsigned int maxOutputChannels)
+{
+  if (requestedChannels > 6 && maxOutputChannels >= 8)
+    return AE_CH_LAYOUT_7_1;
+  if (requestedChannels > 2 && maxOutputChannels >= 6)
+    return AE_CH_LAYOUT_5_1;
+  return AE_CH_LAYOUT_2_0;
+}
+} // namespace
 
 void CAESinkWasmAudioWorklet::Register()
 {
@@ -50,7 +64,9 @@ void CAESinkWasmAudioWorklet::EnumerateDevicesEx(AEDeviceInfoList& list, bool)
   info.m_displayName = "Browser Audio";
   info.m_displayNameExtra = "Wasm Audio Worklet";
   info.m_deviceType = AE_DEVTYPE_PCM;
-  info.m_channels = AE_CH_LAYOUT_7_1;
+  info.m_channels = ResolveSinkLayout(
+      CWasmAudioWorkletManager::kMaxChannels,
+      CWasmAudioWorkletManager::Instance().GetMaxOutputChannels());
   info.m_sampleRates = {44100, 48000};
   info.m_dataFormats = {AE_FMT_FLOATP};
   info.m_wantsIECPassthrough = false;
@@ -66,12 +82,11 @@ bool CAESinkWasmAudioWorklet::Initialize(AEAudioFormat& format, std::string& dev
     return false;
   }
 
-  unsigned int channels = format.m_channelLayout.Count();
-  if (channels == 0)
-  {
-    channels = 2;
-    format.m_channelLayout = CAEUtil::GuessChLayout(channels);
-  }
+  const unsigned int maxOutputChannels =
+      CWasmAudioWorkletManager::Instance().GetMaxOutputChannels();
+  format.m_channelLayout =
+      CAEChannelInfo(ResolveSinkLayout(format.m_channelLayout.Count(), maxOutputChannels));
+  const unsigned int channels = format.m_channelLayout.Count();
 
   if (!CWasmAudioWorkletManager::Instance().Initialize(channels, format.m_sampleRate))
     return false;
