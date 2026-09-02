@@ -1,11 +1,13 @@
 ![Kodi Logo](resources/banner_slim.png)
 
 # WebAssembly (WASM) build guide
-**This guide is a work in progress.** It currently documents only how to build Kodi's **tools and dependencies** for the `wasm32-unknown-emscripten` target. Building the Kodi application itself and binary add-ons for WASM is not yet supported and will be documented once the respective bring-up work lands.
+**This guide is a work in progress.** Kodi builds, runs in a browser and packages as a Tizen web app for Samsung TVs, but the port is still being brought up — see **[Known Incomplete Areas](#known-incomplete-areas)**.
 
-The guide is meant to cross-compile Kodi's dependencies for WebAssembly using **[Kodi's unified depends build system](../tools/depends/README.md)**. Please read it in full before you proceed to familiarize yourself with the build procedure.
+The guide covers cross-compiling Kodi's dependencies and the application itself for the `wasm32-unknown-emscripten` target using **[Kodi's unified depends build system](../tools/depends/README.md)**, running the result in a browser, and packaging it for a Samsung TV. Please read it in full before you proceed to familiarize yourself with the build procedure.
 
-This guide has been tested only on **macOS** with **Emscripten SDK 5.0.6**. Other host operating systems and other Emscripten versions may work but are currently unverified.
+Installing the Tizen SDK, pairing a TV and creating the Samsung signing certificates are one-time steps documented separately in **[README.Tizen.md](README.Tizen.md)**. Binary add-ons are out of scope; they are not built for WASM.
+
+This guide has been tested only on **macOS** with **Emscripten SDK 6.0.9**. Other host operating systems and other Emscripten versions may work but are currently unverified.
 
 ## Table of Contents
 1. **[Document conventions](#1-document-conventions)**
@@ -15,6 +17,13 @@ This guide has been tested only on **macOS** with **Emscripten SDK 5.0.6**. Othe
 3. **[Get the source code](#3-get-the-source-code)**
 4. **[Build tools and dependencies](#4-build-tools-and-dependencies)**
   4.1. **[Advanced Configure Options](#41-advanced-configure-options)**
+5. **[Build Kodi](#5-build-kodi)**
+6. **[Run in a browser](#6-run-in-a-browser)**
+7. **[Package and install on a Samsung TV](#7-package-and-install-on-a-samsung-tv)**
+  7.1. **[Stage the Tizen web app](#71-stage-the-tizen-web-app)**
+  7.2. **[Build the WGT package](#72-build-the-wgt-package)**
+  7.3. **[Install on the TV](#73-install-on-the-tv)**
+  7.4. **[Launch, debug and remove](#74-launch-debug-and-remove)**
 
 ## 1. Document conventions
 This guide assumes you are using `terminal`, also known as `console`, `command-line` or simply `cli`. Commands need to be run at the terminal, one at a time and in the provided order.
@@ -57,7 +66,7 @@ Several different strategies are used to draw your attention to certain pieces o
 ## 2. Prerequisites
 * **macOS** with **Xcode Command Line Tools** installed.
 * **[Homebrew](https://brew.sh/)** (or **[MacPorts](https://www.macports.org/)**) to install the host build tools: **[Git](https://git-scm.com/)**, **[CMake](https://cmake.org/)** (3.20 or newer), **[Python 3](https://www.python.org/)**, `autoconf`, `automake`, `libtool`, `pkg-config`, `gperf` and GNU `make`.
-* The **[Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)** at version **5.0.6** (installable via Homebrew — see **[2.1. Install the Emscripten SDK](#21-install-the-emscripten-sdk)**).
+* The **[Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)** at version **6.0.9** (installable via Homebrew — see **[2.1. Install the Emscripten SDK](#21-install-the-emscripten-sdk)**).
 
 Install Xcode Command Line Tools and the remaining host tools:
 ```
@@ -71,14 +80,14 @@ brew install emscripten
 ```
 
 > [!WARNING]
-> Kodi's WASM bring-up has only been tested against Emscripten **5.0.6**. Other versions may work but are unverified; if you hit an unexpected build failure, please try 5.0.6 before reporting it. You can check the version shipped by Homebrew with `brew info emscripten`.
+> Kodi's WASM bring-up has only been tested against Emscripten **6.0.9**. Other versions may work but are unverified; if you hit an unexpected build failure, please try 6.0.9 before reporting it. You can check the version shipped by Homebrew with `brew info emscripten`.
 
-**Alternatively**, install **emsdk 5.0.6** manually if you need to pin an exact version or use a different host OS:
+**Alternatively**, install **emsdk 6.0.9** manually if you need to pin an exact version or use a different host OS:
 ```
 git clone https://github.com/emscripten-core/emsdk.git $HOME/emsdk
 cd $HOME/emsdk
-./emsdk install 5.0.6
-./emsdk activate 5.0.6
+./emsdk install 6.0.9
+./emsdk activate 6.0.9
 ```
 
 ### 2.2. Activate the Emscripten environment
@@ -129,6 +138,7 @@ Configure build:
 ./configure \
   --host=wasm32-unknown-emscripten \
   --with-platform=wasm \
+  --prefix=$HOME/kodi-wasm-depends \
   --disable-debug
 ```
 
@@ -224,6 +234,117 @@ For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten 
 
 **[back to top](#table-of-contents)** | **[back to section top](#4-build-tools-and-dependencies)**
 
+## 5. Build Kodi
+Generate the build files. CMake and the toolchain file both come from the depends build, so nothing extra has to be installed:
+```
+make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi/build-wasm
+```
+
+> [!TIP]
+> `BUILD_DIR` can be omitted, in which case the project is generated in `$HOME/kodi/build`. Adjust the paths below accordingly. Extra CMake arguments can be passed with `CMAKE_EXTRA_ARGUMENTS`.
+
+> [!WARNING]
+> If you intend to package for a TV, export `TIZEN_SDK` **before** this step. The Tizen packaging targets are only created when CMake finds the `tz` CLI while configuring — see **[7. Package and install on a Samsung TV](#7-package-and-install-on-a-samsung-tv)**.
+
+Build:
+```
+make -C $HOME/kodi/build-wasm -j$(getconf _NPROCESSORS_ONLN)
+```
+
+The build produces three files in the build directory:
+
+| File | Contents |
+|---|---|
+| `kodi.js` | Emscripten loader and JS glue |
+| `kodi.wasm` | Compiled Kodi |
+| `kodi.data` | Virtual filesystem image: `addons`, `media`, `system` and `userdata` mounted at `/kodi`, plus the Python standard library |
+
+**[back to top](#table-of-contents)**
+
+## 6. Run in a browser
+Kodi's WASM build uses threads, so it needs `SharedArrayBuffer`, which browsers only expose to cross-origin isolated pages. `tools/wasm/serve.py` is a small static server that sends the required COOP/COEP headers, and proxies http(s) sources that do not send CORS headers of their own at `/proxy?u=<url-encoded>`:
+```
+cd $HOME/kodi/build-wasm
+cp ../tools/wasm/kodi.html .
+python3 ../tools/wasm/serve.py
+```
+
+Open the address the server prints, `http://127.0.0.1:8080/kodi.html`. Pass a port or a `host:port` to serve elsewhere:
+```
+python3 ../tools/wasm/serve.py 0.0.0.0:8080
+```
+
+> [!NOTE]
+> WebGL 2 is required. Audio only starts after a first user interaction (keyboard, mouse or touch), which is the browser's autoplay policy rather than a Kodi limitation.
+
+**[back to top](#table-of-contents)**
+
+## 7. Package and install on a Samsung TV
+The Tizen web app wrapper is built from templates in `tools/wasm/tizen/`, described in **[its own README](../tools/wasm/tizen/README.md)**.
+
+This section assumes **[README.Tizen.md](README.Tizen.md)** has been followed: the SDK is installed, the TV is paired (`sdb devices` lists it), and a Samsung signing profile is active.
+
+`tz` is located through these environment variables, in order, before falling back to `PATH`:
+
+- `TIZEN_CLI_PATH`
+- `TIZEN_TOOLS_PATH`
+- `TIZEN_SDK`
+- `TIZEN_SDK_ROOT`
+
+> [!WARNING]
+> The lookup happens at configure time. If CMake was configured without `tz` in reach it prints `WASM: tz CLI not found` and the `package_tizen_wgt` and `install_tizen_wgt` targets do not exist. Export the variable and re-run the generation step from **[5. Build Kodi](#5-build-kodi)**.
+
+### 7.1. Stage the Tizen web app
+```
+make -C $HOME/kodi/build-wasm package_tizen
+```
+
+This assembles a complete Tizen web project in `$HOME/kodi/build-wasm/tizen_packaging/Kodi/`: the template files, `index.html` (a copy of the shared browser shell `tools/wasm/kodi.html`), `splash.jpg`, and the three build artifacts. The directory can also be opened directly in Tizen Studio.
+
+Staging needs no SDK — only the two steps below do.
+
+### 7.2. Build the WGT package
+```
+make -C $HOME/kodi/build-wasm package_tizen_wgt
+```
+
+The signed package is written to:
+```text
+$HOME/kodi/build-wasm/tizen_packaging/Kodi/Debug/Kodi.wgt
+```
+
+Signing uses whichever `tz` profile is currently active — `tizen_web_project.yaml` deliberately leaves `signing_profile` empty. Check it with `tz security-profiles list`.
+
+### 7.3. Install on the TV
+```
+make -C $HOME/kodi/build-wasm install_tizen_wgt
+```
+
+With more than one device connected, name the target at configure time with either:
+
+| CMake variable | Environment fallback | `tz install` argument |
+|---|---|---|
+| `WASM_TIZEN_INSTALL_SERIAL` | `TIZEN_TARGET_SERIAL` | `--serial` |
+| `WASM_TIZEN_INSTALL_TARGET` | `TIZEN_TARGET_NAME` | `--target` |
+
+The serial wins when both are set. Because the values are read while configuring, change them with `cmake -D...` on the existing build directory rather than exporting into the build shell.
+
+### 7.4. Launch, debug and remove
+Launching and removing go through `tz` directly, and the two take the package ID in different forms:
+```
+tz run -p kodiplayer              # package ID alone
+tz uninstall -p kodiplayer.Kodi   # package ID and the yaml output_name
+```
+
+Neither accepts the `<tizen:application>` ID from `config.xml`. The IDs come from `tools/wasm/tizen/config.xml` (`<tizen:application package="...">`) and the `output_name` in `tizen_web_project.yaml`.
+
+Retail TVs expose no application log over `sdb`. To get console output from the WASM runtime, launch in debug mode, which runs the app under the Web Inspector:
+```
+tz run -d -p kodiplayer
+```
+
+**[back to top](#table-of-contents)** | **[back to section top](#7-package-and-install-on-a-samsung-tv)**
+
 ## Audio Worklet Notes
 
 - The wasm build now links with `-sAUDIO_WORKLET` and `-sWASM_WORKERS`.
@@ -233,67 +354,9 @@ For WASM, the toolchain (`emcc`/`em++`) is picked up from the active Emscripten 
 
 ## Known Incomplete Areas
 
-- `tools/depends make` does not complete end-to-end yet for the WASM flow.
-- Main Kodi CMake configure currently blocks on missing dependencies from the depends prefix (for example `FriBidi`) until depends build fully succeeds.
 - Some dependency recipes still need WASM validation/tuning in `tools/depends/target/*`.
-
-## Tizen Packaging Staging
-
-Tizen packaging templates are stored in:
-
-```text
-tools/wasm/tizen/
-```
-
-When configuring Kodi with the WASM platform, CMake adds a `package_tizen`
-target that stages Tizen-ready files under:
-
-```text
-<build-dir>/tizen_packaging/Kodi/
-```
-
-Use:
-
-```bash
-cmake --build <build-dir> --target package_tizen
-```
-
-Then package/sign/install the staged app with Tizen CLI (or Tizen Studio).
-
-If `tz` is available, you can package directly from CMake:
-
-```bash
-cmake --build <build-dir> --target package_tizen_wgt
-```
-
-`tz` is resolved from these environment variables first:
-
-- `TIZEN_CLI_PATH`
-- `TIZEN_TOOLS_PATH`
-- `TIZEN_SDK`
-- `TIZEN_SDK_ROOT`
-
-The package is written to `<build-dir>/tizen_packaging/Kodi/Debug/Kodi.wgt`.
-
-Packaging signs with the active `tz` signing profile. Retail Samsung TVs only
-accept a package signed with a Samsung distributor certificate bound to the
-target's DUID, which needs the Samsung Certificate Extension installed in the
-Tizen Studio Package Manager. See `tools/wasm/tizen/README.md` for the profile
-setup.
-
-You can also install from CMake:
-
-```bash
-cmake --build <build-dir> --target install_tizen_wgt
-```
-
-The device must already be paired (`sdb connect <tv-ip>`). When more than one
-device is connected, select one at configure time with either:
-
-- `WASM_TIZEN_INSTALL_SERIAL` (or env `TIZEN_TARGET_SERIAL`)
-- `WASM_TIZEN_INSTALL_TARGET` (or env `TIZEN_TARGET_NAME`)
-
-The serial takes precedence when both are set.
+- Binary add-ons are not built for the WASM target.
+- Video decoding through WebCodecs is experimental — see below.
 
 ## Experimental WebCodecs Video Decode Path
 
