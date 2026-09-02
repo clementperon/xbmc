@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="http://yourdomain/KodiTizen" version="0.2.1" viewmodes="maximized">
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://kodi.tv/Kodi" version="0.2.1" viewmodes="maximized">
    <name>Kodi for Tizen</name>
    <content src="index.html"></content>
    <access origin="*" subdomains="true"></access>
    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"></feature>
    <tizen:setting screen-orientation="landscape" context-menu="enable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"></tizen:setting>
-   <tizen:application id="G4ddmbrlaC.KodiTizen" package="G4ddmbrlaC" required_version="2.3"></tizen:application>
+   <tizen:application id="kodiplayer.Kodi" package="kodiplayer" required_version="2.3"></tizen:application>
    <tizen:privilege name="http://tizen.org/privilege/application.launch"></tizen:privilege>
    <tizen:privilege name="http://tizen.org/privilege/internet"></tizen:privilege>
    <tizen:metadata key="http://samsung.com/tv/metadata/prelaunch.support" value="true"></tizen:metadata>

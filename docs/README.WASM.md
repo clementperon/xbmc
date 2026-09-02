@@ -249,7 +249,7 @@ When configuring Kodi with the WASM platform, CMake adds a `package_tizen`
 target that stages Tizen-ready files under:
 
 ```text
-<build-dir>/packaging/tizen/
+<build-dir>/tizen_packaging/Kodi/
 ```
 
 Use:
@@ -273,16 +273,27 @@ cmake --build <build-dir> --target package_tizen_wgt
 - `TIZEN_SDK`
 - `TIZEN_SDK_ROOT`
 
+The package is written to `<build-dir>/tizen_packaging/Kodi/Debug/Kodi.wgt`.
+
+Packaging signs with the active `tz` signing profile. Retail Samsung TVs only
+accept a package signed with a Samsung distributor certificate bound to the
+target's DUID, which needs the Samsung Certificate Extension installed in the
+Tizen Studio Package Manager. See `tools/wasm/tizen/README.md` for the profile
+setup.
+
 You can also install from CMake:
 
 ```bash
 cmake --build <build-dir> --target install_tizen_wgt
 ```
 
-Set one of these before configuring (or as CMake cache vars):
+The device must already be paired (`sdb connect <tv-ip>`). When more than one
+device is connected, select one at configure time with either:
 
-- `TIZEN_TARGET_NAME` (or `WASM_TIZEN_INSTALL_TARGET`)
-- `TIZEN_TARGET_SERIAL` (or `WASM_TIZEN_INSTALL_SERIAL`)
+- `WASM_TIZEN_INSTALL_SERIAL` (or env `TIZEN_TARGET_SERIAL`)
+- `WASM_TIZEN_INSTALL_TARGET` (or env `TIZEN_TARGET_NAME`)
+
+The serial takes precedence when both are set.
 
 ## Experimental WebCodecs Video Decode Path
 

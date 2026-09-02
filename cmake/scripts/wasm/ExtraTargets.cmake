@@ -37,7 +37,6 @@ set(WASM_TIZEN_API_VERSION "10.0")
 set(WASM_TIZEN_PROJECT_YAML "${WASM_TIZEN_STAGE_DIR}/tizen_web_project.yaml")
 set(WASM_TIZEN_WGT_PATH "${WASM_TIZEN_STAGE_DIR}/${WASM_TIZEN_BUILD_TYPE}/${WASM_TIZEN_OUTPUT_NAME}.wgt")
 
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/packaging")
 configure_file(
   "${WASM_TIZEN_TEMPLATE_DIR}/tizen_web_project.yaml.in"
   "${WASM_TIZEN_PROJECT_YAML}"
@@ -98,9 +97,26 @@ if(WASM_TIZEN_TZ_EXECUTABLE)
   )
   set_target_properties(package_tizen_wgt PROPERTIES FOLDER "Build Utilities")
 
+  # tz install targets the only connected device unless one is named. Cache
+  # variables win over the environment so a configure-time choice is sticky.
+  if(NOT WASM_TIZEN_INSTALL_TARGET AND DEFINED ENV{TIZEN_TARGET_NAME})
+    set(WASM_TIZEN_INSTALL_TARGET "$ENV{TIZEN_TARGET_NAME}")
+  endif()
+  if(NOT WASM_TIZEN_INSTALL_SERIAL AND DEFINED ENV{TIZEN_TARGET_SERIAL})
+    set(WASM_TIZEN_INSTALL_SERIAL "$ENV{TIZEN_TARGET_SERIAL}")
+  endif()
+
+  set(WASM_TIZEN_INSTALL_DEVICE_ARGS "")
+  if(WASM_TIZEN_INSTALL_SERIAL)
+    list(APPEND WASM_TIZEN_INSTALL_DEVICE_ARGS --serial "${WASM_TIZEN_INSTALL_SERIAL}")
+  elseif(WASM_TIZEN_INSTALL_TARGET)
+    list(APPEND WASM_TIZEN_INSTALL_DEVICE_ARGS --target "${WASM_TIZEN_INSTALL_TARGET}")
+  endif()
+
   add_custom_target(install_tizen_wgt
     COMMAND "${WASM_TIZEN_TZ_EXECUTABLE}" install
             --package-path "${WASM_TIZEN_WGT_PATH}"
+            ${WASM_TIZEN_INSTALL_DEVICE_ARGS}
     DEPENDS package_tizen_wgt
     COMMENT "Installing Tizen WGT"
     VERBATIM
