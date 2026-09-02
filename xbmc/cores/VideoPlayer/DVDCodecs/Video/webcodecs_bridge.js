@@ -9,8 +9,9 @@
 // cmake/scripts/wasm/ArchSetup.cmake).
 //
 // Every exported function has __proxy:'sync' so calls from any pthread are
-// automatically marshalled to the main browser thread -- WebCodecs objects
-// (VideoDecoder, VideoFrame, EncodedVideoChunk) are only usable there.
+// automatically marshalled to the main browser thread, where the VideoDecoder
+// lives. Decoder state the C++ side polls is mirrored into WebCodecsSharedState
+// with Atomics instead (see publishState) so polling needs no round trip.
 //
 // Function signatures must match the C prototypes; mismatched __sig will
 // silently corrupt arguments on threaded builds.
@@ -64,6 +65,15 @@ mergeInto(LibraryManager.library, {
     FI_PTS: 40,
     FI_DURATION: 48,
 
+    // Int32 indices inside struct WebCodecsSharedState (offsets / 4).
+    SS_SIGNAL: 0,
+    SS_QUEUED_FRAMES: 1,
+    SS_INFLIGHT: 2,
+    SS_BUSY: 3,
+    SS_FAILED: 4,
+    SS_NEXT_PAYLOAD_SIZE: 5,
+    SS_NEXT_PIXFMT: 6,
+
     // Registry is lazily created on first decoder creation; this library file
     // is merged into both the main thread and every pthread module, but only
     // the main thread ever touches the maps (__proxy:'sync' on every entry).
@@ -102,6 +112,26 @@ mergeInto(LibraryManager.library, {
 
     getState: function(handle) {
       return this.registry ? this.registry.get(handle) : null;
+    },
+
+    inflight: function(state) {
+      const decoder = state.decoder;
+      const queueSize = decoder && decoder.state === 'configured' ? decoder.decodeQueueSize : 0;
+      return queueSize + state.pendingCopies;
+    },
+
+    publishState: function(state) {
+      const base = state.sharedPtr >> 2;
+      const inflight = this.inflight(state);
+      const next = state.frames.length > 0 ? state.frames[0] : null;
+      Atomics.store(HEAP32, base + this.SS_QUEUED_FRAMES, state.frames.length);
+      Atomics.store(HEAP32, base + this.SS_INFLIGHT, inflight);
+      Atomics.store(HEAP32, base + this.SS_BUSY, inflight >= this.MAX_INFLIGHT ? 1 : 0);
+      Atomics.store(HEAP32, base + this.SS_FAILED, state.failed ? 1 : 0);
+      Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payload.byteLength : 0);
+      Atomics.store(HEAP32, base + this.SS_NEXT_PIXFMT, next ? next.pixelFormat : this.PIXFMT_UNKNOWN);
+      Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
+      Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
 
     // Reuse previously-released payload buffers so the hot path does not
@@ -217,12 +247,12 @@ mergeInto(LibraryManager.library, {
 
   // ---------------------------------------------------------------------------
   // webcodecs_create_decoder: build + configure a VideoDecoder.
-  // sig: i (ret) | string*, i, i, u8*, i, i
+  // sig: i (ret) | string*, i, i, u8*, i, i, WebCodecsSharedState*
   // ---------------------------------------------------------------------------
   webcodecs_create_decoder__deps: ['$WebCodecsBridge'],
   webcodecs_create_decoder__proxy: 'sync',
-  webcodecs_create_decoder__sig: 'iiiiiii',
-  webcodecs_create_decoder: function(codecPtr, width, height, extraPtr, extraSize, annexB) {
+  webcodecs_create_decoder__sig: 'iiiiiiii',
+  webcodecs_create_decoder: function(codecPtr, width, height, extraPtr, extraSize, annexB, sharedPtr) {
     if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined') {
       console.warn('WASM WebCodecs: VideoDecoder / EncodedVideoChunk not available');
       return 0;
@@ -242,6 +272,7 @@ mergeInto(LibraryManager.library, {
     const state = {
       id,
       codec,
+      sharedPtr,
       annexB: !!annexB,
       failed: false,
       errorMessage: '',
@@ -261,6 +292,7 @@ mergeInto(LibraryManager.library, {
       state.failed = true;
       state.errorMessage = 'VideoDecoder error: ' + (error && error.message ? error.message : error);
       console.warn('WASM WebCodecs:', state.errorMessage);
+      WebCodecsBridge.publishState(state);
     };
 
     const outputCallback = (frame) => {
@@ -274,6 +306,7 @@ mergeInto(LibraryManager.library, {
       const generation = state.generation;
 
       state.pendingCopies += 1;
+      WebCodecsBridge.publishState(state);
       (async () => {
         let copied = null;
         try {
@@ -312,8 +345,11 @@ mergeInto(LibraryManager.library, {
           }
         } finally {
           frame.close();
-          if (state.generation === generation && state.pendingCopies > 0)
-            state.pendingCopies -= 1;
+          if (state.generation === generation) {
+            if (state.pendingCopies > 0)
+              state.pendingCopies -= 1;
+            WebCodecsBridge.publishState(state);
+          }
         }
       })();
     };
@@ -323,6 +359,7 @@ mergeInto(LibraryManager.library, {
         state.description = HEAPU8.slice(extraPtr, extraPtr + extraSize);
 
       state.decoder = new VideoDecoder({ output: outputCallback, error: errorCallback });
+      state.decoder.addEventListener('dequeue', () => WebCodecsBridge.publishState(state));
 
       const config = WebCodecsBridge.buildConfig(state, width, height);
 
@@ -335,10 +372,12 @@ mergeInto(LibraryManager.library, {
             state.failed = true;
             state.errorMessage = 'isConfigSupported rejected config for ' + codec;
             console.warn('WASM WebCodecs: isConfigSupported rejected', codec, support);
+            WebCodecsBridge.publishState(state);
           }
         }).catch((error) => {
           state.failed = true;
           state.errorMessage = 'isConfigSupported threw: ' + String(error);
+          WebCodecsBridge.publishState(state);
         });
       } catch (probeError) {
         console.warn('WASM WebCodecs: isConfigSupported threw synchronously', probeError);
@@ -347,6 +386,7 @@ mergeInto(LibraryManager.library, {
       state.decoder.configure(config);
       state.configured = true;
       registry.set(id, state);
+      WebCodecsBridge.publishState(state);
 
       console.info('WASM WebCodecs: configured VideoDecoder', {
         codec, annexB: !!annexB, descriptionBytes: extraSize, width, height,
@@ -401,10 +441,12 @@ mergeInto(LibraryManager.library, {
       state.errorMessage = '';
       // reset() returns the decoder to 'unconfigured'; we must configure again.
       state.decoder.configure(WebCodecsBridge.buildConfig(state, 0, 0));
+      WebCodecsBridge.publishState(state);
       return 1;
     } catch (e) {
       state.failed = true;
       state.errorMessage = 'reset failed: ' + String(e);
+      WebCodecsBridge.publishState(state);
       return 0;
     }
   },
@@ -428,7 +470,7 @@ mergeInto(LibraryManager.library, {
     if (dataSize <= 0)
       return B.PUSH_EMPTY;
 
-    if (state.decoder.decodeQueueSize + state.pendingCopies >= B.MAX_INFLIGHT)
+    if (B.inflight(state) >= B.MAX_INFLIGHT)
       return B.PUSH_BUSY;
 
     const tsMicros = Math.max(0, Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND));
@@ -442,22 +484,14 @@ mergeInto(LibraryManager.library, {
         duration: durMicros > 0 ? durMicros : undefined,
         data: payload,
       }));
+      B.publishState(state);
       return B.PUSH_QUEUED;
     } catch (e) {
       state.failed = true;
       state.errorMessage = 'decode threw: ' + String(e);
+      B.publishState(state);
       return B.PUSH_DECODE_THREW;
     }
-  },
-
-  // ---------------------------------------------------------------------------
-  webcodecs_drain_decoder__deps: ['$WebCodecsBridge'],
-  webcodecs_drain_decoder__proxy: 'sync',
-  webcodecs_drain_decoder__sig: 'ii',
-  webcodecs_drain_decoder: function(handle) {
-    const state = WebCodecsBridge.getState(handle);
-    if (!state || !state.decoder) return 0;
-    return (state.frames.length + state.decoder.decodeQueueSize + state.pendingCopies) | 0;
   },
 
   // ---------------------------------------------------------------------------
@@ -483,6 +517,7 @@ mergeInto(LibraryManager.library, {
 
     state.frames.shift();
     B.releasePayloadBuffer(state, frame.payload);
+    B.publishState(state);
     return 1;
   },
 
