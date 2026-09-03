@@ -19,6 +19,9 @@
 
 #include "filesystem/CurlFile.h"
 
+#include "ServiceBroker.h"
+#include "dialogs/GUIDialogKaiToast.h"
+
 #include "URL.h"
 #include "utils/Base64.h"
 #include "utils/CharsetConverter.h"
@@ -69,6 +72,7 @@ EM_JS(int, kodi_curl_wasm_request,
   store.rawHeaders = "";
   store.body = null;
   store.contentLength = -1;
+  store.error = "";
 
   try {
     var xhr = new XMLHttpRequest();
@@ -101,8 +105,11 @@ EM_JS(int, kodi_curl_wasm_request,
     store.contentLength = clen ? Number(clen) : -1;
     if (includeBody && xhr.response)
       store.body = new Uint8Array(xhr.response);
+    if (store.status === 0)
+      store.error = "no response (blocked by the browser: CORS, mixed content or network)";
     return store.status;
   } catch (e) {
+    store.error = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
     console.warn("[kodi][curl-wasm] request failed:", method, url, e);
     return 0;
   }
@@ -126,7 +133,7 @@ EM_JS(double, kodi_curl_wasm_content_length, (), {
   return typeof s.contentLength === "number" ? s.contentLength : -1;
 });
 
-// fieldId: 0=rawHeaders 1=responseURL 2=statusText
+// fieldId: 0=rawHeaders 1=responseURL 2=statusText 3=error
 EM_JS(int, kodi_curl_wasm_copy_string,
       (int fieldId, char* outPtr, int outSize), {
   var s = Module.kodiCurlFileStore || {};
@@ -135,6 +142,7 @@ EM_JS(int, kodi_curl_wasm_copy_string,
   if      (fieldId === 0) v = s.rawHeaders || "";
   else if (fieldId === 1) v = s.responseURL || "";
   else if (fieldId === 2) v = s.statusText || "";
+  else if (fieldId === 3) v = s.error || "";
   var bytes = lengthBytesUTF8(v) | 0;
   stringToUTF8(v, outPtr, outSize);
   return bytes;
@@ -144,7 +152,8 @@ EM_JS(int, kodi_curl_wasm_string_size, (int fieldId), {
   var s = Module.kodiCurlFileStore || {};
   var v = fieldId === 0 ? (s.rawHeaders || "")
         : fieldId === 1 ? (s.responseURL || "")
-        : fieldId === 2 ? (s.statusText || "") : "";
+        : fieldId === 2 ? (s.statusText || "")
+        : fieldId === 3 ? (s.error || "") : "";
   return lengthBytesUTF8(v) | 0;
 });
 // clang-format on
@@ -391,6 +400,13 @@ bool CCurlFile::Open(const CURL& url)
 
   if (m_httpresponse <= 0)
   {
+    const std::string error = FetchString(3);
+    CLog::Log(LOGERROR, "CCurlFile::{} - {} <{}> failed: {}", __FUNCTION__, method,
+              url.GetRedacted(), error);
+    // The TV has no console to read this from; with debug logging on, show it.
+    if (CServiceBroker::GetLogging().IsLogLevelLogged(LOGDEBUG))
+      CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, "HTTP " + method + " failed",
+                                            url.GetHostName() + ": " + error, 8000);
     m_inError = true;
     return false;
   }
