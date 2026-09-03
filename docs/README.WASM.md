@@ -370,6 +370,20 @@ If the launch reports `with debug 0` (`tz`) or answers `closed` (`sdb`), the TV 
 - As with normal browser autoplay policy, audio context resume requires a user interaction (keyboard, mouse, touch) before playback starts.
 - `-sSINGLE_FILE` is not compatible with Emscripten's standard Audio Worklet path.
 
+## Samsung TV information
+
+On a Samsung TV the wasm build reads the Samsung product APIs (`webapis.network`, `webapis.productinfo`), which `tools/wasm/kodi.html` loads from `$WEBAPIS/webapis/webapis.js` only when it detects the Tizen runtime. Their privileges, `network.public` and `productinfo`, are declared in `tools/wasm/tizen/config.xml`; both are public-level, so the Public distributor certificate from **[README.Tizen.md](README.Tizen.md)** is sufficient.
+
+With them, **Settings > System information** shows:
+
+- **Network**: link state, MAC address, IP address, subnet mask, gateway and both DNS servers of the active connection. The hostname reported to other devices (for example in the default device name) is the TV name from the network API.
+- **Summary**: the operating system as `Tizen <platform version>`.
+- **Hardware**: the TV model and firmware version.
+
+The connection type (Ethernet or Wi-Fi with SSID, signal level and band), the IP mode (DHCP or static) and whether the gateway is reachable are written to `kodi.log` whenever they change. The Samsung API does not report the link speed or the supported audio and video codecs.
+
+In an ordinary browser none of these APIs exist; the network page then shows loopback placeholders and the connection state follows `navigator.onLine`.
+
 ## Known Incomplete Areas
 
 - Some dependency recipes still need WASM validation/tuning in `tools/depends/target/*`.
