@@ -14,6 +14,7 @@
 #include <string>
 
 class CVideoBufferPoolSysMem;
+struct SwsContext;
 
 class CDVDVideoCodecWebCodecs : public CDVDVideoCodec
 {
@@ -42,7 +43,10 @@ private:
   void WaitForDrain();
   bool WaitForCopy();
   void ReleaseCopyBuffer();
-  CVideoBuffer* AcquirePictureBuffer(AVPixelFormat pixelFormat, int bufferSize);
+  CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
+                                     AVPixelFormat pixelFormat,
+                                     int bufferSize);
+  CVideoBuffer* ConvertToYuv420p(CVideoBuffer* rgbBuffer, WebCodecsFrameInfo& info);
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
                            AVPixelFormat pixelFormat,
@@ -55,6 +59,10 @@ private:
   std::string m_name{"webcodecs"};
   CDVDStreamInfo m_hints;
   std::shared_ptr<CVideoBufferPoolSysMem> m_videoBufferPool;
+  // Landing zone for packed RGB frames before ConvertToYuv420p().
+  std::shared_ptr<CVideoBufferPoolSysMem> m_rgbBufferPool;
+  SwsContext* m_swsContext{nullptr};
+  bool m_loggedRgbConversion{false};
 
   int m_decoderHandle{0};
   bool m_opened{false};

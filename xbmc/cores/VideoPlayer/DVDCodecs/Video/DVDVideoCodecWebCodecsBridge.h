@@ -26,6 +26,11 @@ enum WebCodecsPixelFormat
   WEBCODECS_PIXFMT_UNKNOWN = 0,
   WEBCODECS_PIXFMT_YUV420P = 1,
   WEBCODECS_PIXFMT_NV12 = 2,
+  // Packed 32-bit RGB, one plane; the codec converts these to YUV420P.
+  WEBCODECS_PIXFMT_RGBA = 3,
+  WEBCODECS_PIXFMT_RGBX = 4,
+  WEBCODECS_PIXFMT_BGRA = 5,
+  WEBCODECS_PIXFMT_BGRX = 6,
 };
 
 // Status codes returned by webcodecs_push_packet.
