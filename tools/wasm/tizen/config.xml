@@ -2,6 +2,7 @@
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://kodi.tv/Kodi" version="0.2.1" viewmodes="maximized">
    <name>Kodi for Tizen</name>
    <content src="index.html"></content>
+   <icon src="icon.png"></icon>
    <access origin="*" subdomains="true"></access>
    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"></feature>
    <tizen:setting screen-orientation="landscape" context-menu="enable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"></tizen:setting>

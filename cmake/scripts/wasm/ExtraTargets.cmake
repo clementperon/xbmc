@@ -48,6 +48,7 @@ add_custom_target(package_tizen
           "${WASM_TIZEN_TEMPLATE_DIR}/.project"
           "${WASM_TIZEN_TEMPLATE_DIR}/.tproject"
           "${WASM_TIZEN_TEMPLATE_DIR}/config.xml"
+          "${WASM_TIZEN_TEMPLATE_DIR}/icon.png"
           "${WASM_TIZEN_STAGE_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${WASM_TIZEN_PROJECT_YAML}"
