@@ -52,6 +52,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sMIN_WEBGL_VERSION=2"
     "SHELL:-sMAX_WEBGL_VERSION=2"
     "SHELL:-sFULL_ES3=0"
+    # The WebGL context lives on the browser main thread; GL calls from the Kodi
+    # pthread are proxied to it and presented with emscripten_webgl_commit_frame().
+    "SHELL:-sOFFSCREEN_FRAMEBUFFER=1"
+    "SHELL:-sGL_SUPPORT_EXPLICIT_SWAP_CONTROL=1"
     # CPython's call trampoline installs its wasm-gc adaptor with addFunction().
     "SHELL:-sALLOW_TABLE_GROWTH"
     "SHELL:-lidbfs.js"

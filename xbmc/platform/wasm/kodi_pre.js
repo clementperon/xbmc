@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 Team Kodi
 //
-// Main-thread half of Kodi's WASM rendering pipeline: attaches an
-// ImageBitmapRenderingContext to <canvas id="canvas"> and installs
-// Module.onKodiFrame so the render pthread can deliver frames via
-// postMessage({cmd:CMD_CALL_HANDLER, ...}).  See docs/wasm/RENDERING.md.
+// Main-thread setup for Kodi's WASM build: canvas focus handling, clipboard
+// paste, and forwarding of worker console diagnostics. Rendering itself goes
+// through a WebGL context Emscripten creates on <canvas id="canvas"> and
+// proxies to the Kodi pthread; see docs/wasm/RENDERING.md.
 //
 // Also installs a same-origin HTTP proxy shim (see tools/wasm/serve.py).
 // Any cross-origin http(s) XHR/fetch issued from the wasm module is
@@ -122,11 +122,36 @@
 
 (function () {
   if (typeof document === 'undefined') {
+    // Worker side. Forward diagnostic console lines to the main thread, where
+    // DevTools/extension consoles can see them (Module.onKodiWorkerLog).
+    var forward = /KODI_DBG|\[kodi\]|WASM|WebGL|GL_|lost|ERROR|error/;
+    ['log', 'warn', 'error'].forEach(function (level) {
+      var orig = console[level].bind(console);
+      console[level] = function () {
+        orig.apply(console, arguments);
+        try {
+          var text = Array.prototype.map.call(arguments, String).join(' ');
+          if (forward.test(text)) {
+            postMessage({ cmd: 9, handler: 'onKodiWorkerLog', args: [level, text.slice(0, 2000)] });
+          }
+        } catch (e) {}
+      };
+    });
     return;
   }
 
   var Module = globalThis.Module = globalThis.Module || {};
   var kodi = (Module.kodi = Module.kodi || {});
+
+  kodi.workerLog = [];
+  Module.onKodiWorkerLog = function (level, text) {
+    kodi.workerLog.push({ t: Math.round(performance.now()), level: level, text: text });
+    if (kodi.workerLog.length > 1000) {
+      kodi.workerLog.shift();
+    }
+    console.log('[worker] ' + text);
+  };
+
 
   var canvas = document.getElementById('canvas');
   if (!canvas) {
@@ -138,74 +163,9 @@
     canvas.setAttribute('tabindex', '0');
   }
 
-  var bitmapCtx = null;
-  try {
-    bitmapCtx = canvas.getContext('bitmaprenderer', { alpha: false });
-  } catch (e) {
-    console.error('[kodi] Failed to get bitmaprenderer context:', e);
-  }
-  if (!bitmapCtx) {
-    console.error(
-        '[kodi] bitmaprenderer unsupported; falling back to 2D canvas blit.');
-    bitmapCtx = canvas.getContext('2d');
-  }
+  // The WebGL context is created on this canvas by Emscripten (proxied from the
+  // Kodi pthread); nothing else may take a rendering context on it.
   kodi.canvas = canvas;
-  kodi.bitmapCtx = bitmapCtx;
-
-  // Only ever present the most recent bitmap; drop any older undisplayed one.
-  var pendingBitmap = null;
-  var pendingDrawScheduled = false;
-  var firstFramePresented = false;
-
-  function notifyFirstFramePresented() {
-    if (firstFramePresented) {
-      return;
-    }
-    firstFramePresented = true;
-    if (typeof Module.onKodiFirstFramePresented === 'function') {
-      try { Module.onKodiFirstFramePresented(); } catch (e) { console.error(e); }
-    }
-  }
-
-  function presentPending() {
-    pendingDrawScheduled = false;
-    var bm = pendingBitmap;
-    pendingBitmap = null;
-    if (!bm) {
-      return;
-    }
-    try {
-      if (typeof bitmapCtx.transferFromImageBitmap === 'function') {
-        bitmapCtx.transferFromImageBitmap(bm);
-      } else {
-        if (canvas.width !== bm.width || canvas.height !== bm.height) {
-          canvas.width = bm.width;
-          canvas.height = bm.height;
-        }
-        bitmapCtx.drawImage(bm, 0, 0);
-        bm.close();
-      }
-      notifyFirstFramePresented();
-    } catch (e) {
-      console.error('[kodi] Failed to present frame:', e);
-      try { bm.close(); } catch (_) {}
-    }
-  }
-
-  Module.onKodiFrame = function (bitmap) {
-    if (kodi.frameReceived) {
-      kodi.frameReceived();
-    }
-    if (pendingBitmap) {
-      try { pendingBitmap.close(); } catch (_) {}
-    }
-    pendingBitmap = bitmap;
-    notifyFirstFramePresented();
-    if (!pendingDrawScheduled) {
-      pendingDrawScheduled = true;
-      requestAnimationFrame(presentPending);
-    }
-  };
 
   var prevOnRuntime = Module.onRuntimeInitialized;
   Module.onRuntimeInitialized = function () {

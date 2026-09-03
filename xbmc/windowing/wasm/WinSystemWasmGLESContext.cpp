@@ -12,11 +12,14 @@
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "rendering/gles/ScreenshotSurfaceGLES.h"
 #include "settings/DisplaySettings.h"
+#include "platform/wasm/DebugLog.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WindowSystemFactory.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 #include <emscripten/em_asm.h>
@@ -24,22 +27,17 @@
 #include <emscripten/html5.h>
 #include <emscripten/threading.h>
 
-#include <GLES2/gl2.h>
+#include <emscripten/html5_webgl.h>
 
 // See docs/wasm/RENDERING.md for the rationale behind this architecture.
 
 namespace
 {
-// Shared-memory atomic incremented by the main thread's requestAnimationFrame
-// pump (InstallVsyncPump).  Presenters wait on it via emscripten_futex_wait
-// to pace to the browser compositor.
+// Incremented by the main thread's requestAnimationFrame pump; PresentRenderImpl
+// waits on it so the Kodi thread never renders faster than the display.
 volatile uint32_t g_vsyncTick = 0;
-// Frames posted to the main thread and not yet received there. The pump only
-// ticks while this is zero, so the main thread's message queue can never build
-// a backlog of undisplayed bitmaps when it falls behind the render thread.
-volatile uint32_t g_framesInFlight = 0;
 bool g_vsyncPumpInstalled = false;
-double g_vsyncWaitTimeoutMs = 100.0;
+constexpr double VSYNC_WAIT_TIMEOUT_MS = 100.0;
 
 void InstallVsyncPump()
 {
@@ -50,12 +48,9 @@ void InstallVsyncPump()
   MAIN_THREAD_EM_ASM(
       {
         const idx = $0 >> 2;
-        const inFlightIdx = $1 >> 2;
         let lastTimestamp = 0.0;
         let measuredRefreshRate = 0.0;
         globalThis.__kodiRefreshRate = 60.0;
-        Module.kodi = Module.kodi || {};
-        Module.kodi.frameReceived = () => { Atomics.sub(HEAP32, inFlightIdx, 1); };
         const tick = (timestamp) =>
         {
           if (lastTimestamp > 0.0)
@@ -73,16 +68,13 @@ void InstallVsyncPump()
             }
           }
           lastTimestamp = timestamp;
-          if (Atomics.load(HEAP32, inFlightIdx) === 0)
-          {
-            Atomics.add(HEAP32, idx, 1);
-            Atomics.notify(HEAP32, idx, 1);
-          }
+          Atomics.add(HEAP32, idx, 1);
+          Atomics.notify(HEAP32, idx, 1);
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
       },
-      &g_vsyncTick, &g_framesInFlight);
+      &g_vsyncTick);
 }
 
 bool IsTizenRuntime()
@@ -96,112 +88,36 @@ bool IsTizenRuntime()
              }) != 0;
 }
 
-// Creates a standalone OffscreenCanvas + WebGL2 context on the current
-// pthread and registers it with Emscripten's GL layer.  Returns 0 on failure.
-EMSCRIPTEN_WEBGL_CONTEXT_HANDLE CreateWorkerGLContext(int width, int height)
+// The context is created on the browser main thread and proxied to this pthread:
+// a thread that never returns to its event loop (Kodi's modal dialog loops) must
+// not own per-frame browser resources, see docs/wasm/RENDERING.md.
+EMSCRIPTEN_WEBGL_CONTEXT_HANDLE CreateProxiedGLContext()
 {
-  const EMSCRIPTEN_WEBGL_CONTEXT_HANDLE handle = EM_ASM_INT(
-      {
-        try
-        {
-          const w = $0 > 0 ? $0 : 1280;
-          const h = $1 > 0 ? $1 : 720;
-          if (typeof OffscreenCanvas === 'undefined') {
-            console.error('[kodi] OffscreenCanvas not available on worker.');
-            return 0;
-          }
-          const off = new OffscreenCanvas(w, h);
-          // Fields assigned one-per-line: the C preprocessor would split
-          // EM_ASM_INT's arguments on any top-level comma inside a literal.
-          const attrs = {};
-          attrs.alpha = false;
-          attrs.depth = true;
-          attrs.stencil = true;
-          attrs.antialias = false;
-          attrs.premultipliedAlpha = true;
-          attrs.preserveDrawingBuffer = false;
-          attrs.powerPreference = 'high-performance';
-          attrs.failIfMajorPerformanceCaveat = false;
-          const ctx = off.getContext('webgl2', attrs);
-          if (!ctx) {
-            console.error('[kodi] getContext("webgl2") returned null.');
-            return 0;
-          }
-          globalThis.__kodiOffCanvas = off;
-          globalThis.__kodiGL = ctx;
-          const ctxAttrs = {};
-          ctxAttrs.majorVersion = 2;
-          ctxAttrs.minorVersion = 0;
-          ctxAttrs.alpha = attrs.alpha;
-          ctxAttrs.depth = attrs.depth;
-          ctxAttrs.stencil = attrs.stencil;
-          ctxAttrs.antialias = attrs.antialias;
-          ctxAttrs.premultipliedAlpha = attrs.premultipliedAlpha;
-          ctxAttrs.preserveDrawingBuffer = attrs.preserveDrawingBuffer;
-          ctxAttrs.powerPreference = attrs.powerPreference;
-          ctxAttrs.failIfMajorPerformanceCaveat = attrs.failIfMajorPerformanceCaveat;
-          ctxAttrs.enableExtensionsByDefault = true;
-          ctxAttrs.explicitSwapControl = false;
-          ctxAttrs.renderViaOffscreenBackBuffer = false;
-          ctxAttrs.proxyContextToMainThread = 0;
-          return GL.registerContext(ctx, ctxAttrs);
-        }
-        catch (e)
-        {
-          console.error('[kodi] CreateWorkerGLContext failed:', e);
-          return 0;
-        }
-      },
-      width, height);
-  return handle;
+  EmscriptenWebGLContextAttributes attrs;
+  emscripten_webgl_init_context_attributes(&attrs);
+  attrs.alpha = EM_FALSE;
+  attrs.depth = EM_TRUE;
+  attrs.stencil = EM_TRUE;
+  attrs.antialias = EM_FALSE;
+  attrs.premultipliedAlpha = EM_TRUE;
+  attrs.preserveDrawingBuffer = EM_FALSE;
+  attrs.powerPreference = EM_WEBGL_POWER_PREFERENCE_HIGH_PERFORMANCE;
+  attrs.failIfMajorPerformanceCaveat = EM_FALSE;
+  attrs.majorVersion = 2;
+  attrs.minorVersion = 0;
+  attrs.enableExtensionsByDefault = EM_TRUE;
+  attrs.explicitSwapControl = EM_TRUE;
+  attrs.renderViaOffscreenBackBuffer = EM_TRUE;
+  attrs.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
+  return emscripten_webgl_create_context("#canvas", &attrs);
 }
 
-// Resizes the OffscreenCanvas's drawing buffer.
-void ResizeWorkerGLContext(int width, int height)
+void NotifyFirstFramePresented()
 {
-  EM_ASM(
-      {
-        const off = globalThis.__kodiOffCanvas;
-        if (off)
-        {
-          off.width = $0;
-          off.height = $1;
-        }
-      },
-      width, height);
-}
-
-// Zero-copy frame handoff to the main thread.  Emscripten's main-thread
-// onmessage handler dispatches CMD_CALL_HANDLER to Module[handler](...args).
-// The id is numeric (CMD_CALL_HANDLER in emscripten's src/lib/libpthread.js);
-// it was the string 'callHandler' before Emscripten 6.  We post by hand rather
-// than through emscripten's auto-proxied handler stub because that stub cannot
-// pass a transfer list, and the ImageBitmap has to move without a copy.
-void PostFrameBitmap()
-{
-  __atomic_add_fetch(&g_framesInFlight, 1, __ATOMIC_ACQ_REL);
-  const int posted = EM_ASM_INT({
-    try
-    {
-      const off = globalThis.__kodiOffCanvas;
-      if (!off)
-        return 0;
-      const bm = off.transferToImageBitmap();
-      const msg = {};
-      msg.cmd = 9; // CMD_CALL_HANDLER
-      msg.handler = 'onKodiFrame';
-      msg.args = [ bm ];
-      postMessage(msg, [ bm ]);
-      return 1;
-    }
-    catch (e)
-    {
-      console.error('[kodi] transferToImageBitmap/postMessage failed:', e);
-      return 0;
-    }
+  MAIN_THREAD_ASYNC_EM_ASM({
+    if (typeof Module.onKodiFirstFramePresented === 'function')
+      Module.onKodiFirstFramePresented();
   });
-  if (!posted)
-    __atomic_sub_fetch(&g_framesInFlight, 1, __ATOMIC_ACQ_REL);
 }
 
 void GetCanvasSize(int* width, int* height)
@@ -260,11 +176,12 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   int initW = 0;
   int initH = 0;
   GetCanvasSize(&initW, &initH);
+  emscripten_set_canvas_element_size("#canvas", initW, initH);
 
-  m_webglContext = CreateWorkerGLContext(initW, initH);
+  m_webglContext = CreateProxiedGLContext();
   if (m_webglContext <= 0)
   {
-    CLog::Log(LOGERROR, "WASM: failed to create standalone OffscreenCanvas WebGL2 context");
+    CLog::Log(LOGERROR, "WASM: failed to create proxied WebGL2 context ({})", m_webglContext);
     return false;
   }
 
@@ -279,7 +196,7 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   if (IsTizenRuntime())
     CLog::Log(LOGINFO, "WASM: Tizen runtime detected");
 
-  CLog::Log(LOGINFO, "WASM: using standalone OffscreenCanvas + transferToImageBitmap ({}x{})",
+  CLog::Log(LOGINFO, "WASM: using main-thread WebGL2 context proxied to the Kodi thread ({}x{})",
             initW, initH);
   return CWinSystemBase::InitWindowSystem();
 }
@@ -307,7 +224,7 @@ bool CWinSystemWasmGLESContext::CreateNewWindow(const std::string& name,
   UpdateDesktopResolution(res, "Browser", w, h, static_cast<float>(GetBrowserRefreshRate()), 0);
   res.bFullScreen = fullScreen;
 
-  ResizeWorkerGLContext(w, h);
+  emscripten_set_canvas_element_size("#canvas", w, h);
 
   if (emscripten_webgl_get_current_context() != m_webglContext)
     emscripten_webgl_make_context_current(m_webglContext);
@@ -337,7 +254,7 @@ void CWinSystemWasmGLESContext::UpdateResolutions()
 
 bool CWinSystemWasmGLESContext::ResizeWindow(int newWidth, int newHeight, int newLeft, int newTop)
 {
-  ResizeWorkerGLContext(newWidth, newHeight);
+  emscripten_set_canvas_element_size("#canvas", newWidth, newHeight);
   SetWindowResolution(newWidth, newHeight);
   CRenderSystemGLES::ResetRenderSystem(newWidth, newHeight);
   m_nWidth = static_cast<unsigned int>(newWidth);
@@ -392,31 +309,69 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
   if (!rendered || m_webglContext <= 0)
     return;
 
-  if (emscripten_webgl_get_current_context() != m_webglContext)
-  {
-    const EMSCRIPTEN_RESULT makeCurrent = emscripten_webgl_make_context_current(m_webglContext);
-    if (makeCurrent != EMSCRIPTEN_RESULT_SUCCESS)
-    {
-      CLog::Log(LOGWARNING, "WASM: PresentRenderImpl failed make_context_current ({})",
-                makeCurrent);
-      return;
-    }
-  }
+  // #region agent log: temporary present-path timing, remove when done.
+  static uint32_t s_frames = 0;
+  static uint32_t s_timeouts = 0;
+  static double s_waitMs = 0.0;
+  static double s_commitMs = 0.0;
+  static double s_commitMaxMs = 0.0;
+  static double s_lastReportMs = 0.0;
+  const double t0 = emscripten_get_now();
+  // #endregion
 
-  // Pace to main-thread rAF (see docs/wasm/RENDERING.md §2.3); 100 ms
-  // timeout keeps Kodi running when rAF is throttled.
+  // The timeout keeps Kodi running when rAF is throttled (hidden tab).
   const uint32_t current = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
   if (current == m_lastVsyncSeen)
-    emscripten_futex_wait(const_cast<uint32_t*>(&g_vsyncTick), current, g_vsyncWaitTimeoutMs);
+    emscripten_futex_wait(const_cast<uint32_t*>(&g_vsyncTick), current, VSYNC_WAIT_TIMEOUT_MS);
 
   const uint32_t next = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
+  // #region agent log
+  const double t1 = emscripten_get_now();
+  s_waitMs += t1 - t0;
+  // #endregion
   if (next == m_lastVsyncSeen)
+  {
+    // #region agent log
+    ++s_timeouts;
+    // #endregion
     return;
+  }
   m_lastVsyncSeen = next;
 
-  // Flush so transferToImageBitmap() below sees a fully-rendered frame.
-  glFlush();
-  PostFrameBitmap();
+  // Synchronous: blits the offscreen framebuffer to the canvas on the main
+  // thread once every queued GL call before it has executed.
+  const EMSCRIPTEN_RESULT r = emscripten_webgl_commit_frame();
+  // #region agent log
+  const double t2 = emscripten_get_now();
+  s_commitMs += t2 - t1;
+  if (t2 - t1 > s_commitMaxMs)
+    s_commitMaxMs = t2 - t1;
+  ++s_frames;
+  if (t2 - s_lastReportMs >= 1000.0)
+  {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "{\"frames\":%u,\"timeouts\":%u,\"avgWaitMs\":%.1f,\"avgCommitMs\":%.1f,"
+                  "\"maxCommitMs\":%.1f,\"tick\":%u}",
+                  s_frames, s_timeouts, s_waitMs / std::max(1u, s_frames + s_timeouts),
+                  s_commitMs / std::max(1u, s_frames), s_commitMaxMs, next);
+    KODI::PLATFORM::WASM::DEBUGLOG::Post("WinSystemWasmGLESContext.cpp:PresentRenderImpl",
+                                         "present stats", buf);
+    s_frames = s_timeouts = 0;
+    s_waitMs = s_commitMs = s_commitMaxMs = 0.0;
+    s_lastReportMs = t2;
+  }
+  // #endregion
+  if (r != EMSCRIPTEN_RESULT_SUCCESS)
+  {
+    CLog::Log(LOGWARNING, "WASM: emscripten_webgl_commit_frame failed ({})", r);
+    return;
+  }
+  if (!m_firstFramePresented)
+  {
+    m_firstFramePresented = true;
+    NotifyFirstFramePresented();
+  }
 }
 
 int CWinSystemWasmGLESContext::GetBufferAge()
