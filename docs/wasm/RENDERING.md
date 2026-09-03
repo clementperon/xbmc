@@ -62,19 +62,20 @@ These loops are synchronous: they call `Render()` themselves and do
 animation finishes. Any web architecture that relies on "return to the
 JS event loop between frames" breaks modal dialogs completely.
 
-### 1.6 WebGL on `OffscreenCanvas` does not implicitly present
+### 1.6 A Worker that never yields cannot release browser resources
 
-`OffscreenCanvas.transferControlToOffscreen()` returns an object the
-spec used to pair with an implicit "update the rendering" step that
-copied the worker's drawing buffer onto the placeholder `<canvas>` at
-JS task boundaries. Modern Chromium and Firefox do not run that step
-reliably when the worker stays busy — and they specifically do **not**
-run it while a Worker is inside a blocking loop (see 1.5). The related
-WebGL method `WebGLRenderingContext.commit()` was removed from the spec
-years ago; Emscripten's `emscripten_webgl_commit_frame()` is a no-op on
-current browsers unless `OFFSCREEN_FRAMEBUFFER` is enabled, in which
-case it performs a blit-shader copy into a framebuffer we own but does
-**not** make the result appear on screen.
+Per-frame objects a Worker creates on its own canvas (`transferToImageBitmap`
+results, the drawing buffers behind them) are reclaimed by tasks the browser
+posts back to that Worker. A pthread that sits inside a Kodi modal loop (1.5)
+never runs those tasks, so whatever it produces per frame is never freed for
+as long as the dialog is open. This is the constraint that shaped the current
+design; §4.9 records how it was found.
+
+The implicit "propagate the OffscreenCanvas to the placeholder canvas" step
+that older WebGL designs relied on is affected the same way: it only runs at
+task boundaries, which a modal loop never reaches. `emscripten_webgl_commit_frame()`
+is only meaningful with `OFFSCREEN_FRAMEBUFFER`, where it blits Emscripten's
+emulated back buffer to the canvas.
 
 ---
 
@@ -87,123 +88,109 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │ Browser main thread                                              │
 │ ──────────────────────────────────────────────────────────────── │
 │   DOM <canvas id="canvas">                                       │
-│     └─► ImageBitmapRenderingContext (set up in kodi_pre.js)      │
+│     └─► WebGL2 context, created by Emscripten on behalf of       │
+│         the Kodi pthread (proxyContextToMainThread = ALWAYS)     │
+│         renders into Emscripten's offscreen framebuffer          │
+│   Proxied GL queue: executes the gl* calls the Kodi pthread      │
+│     enqueued; emscripten_webgl_commit_frame() blits the          │
+│     offscreen framebuffer to the canvas                          │
 │   requestAnimationFrame pump                                     │
-│     └─► if framesInFlight == 0:                                  │
-│           Atomics.add(sharedVsyncCounter, 1) + Atomics.notify    │
-│   Module.onKodiFrame(bitmap)                                     │
-│     ├─► Atomics.sub(framesInFlight, 1)                           │
-│     └─► bitmapCtx.transferFromImageBitmap(bitmap)                │
-│                                                                  │
-│   Input event listeners (keyboard/mouse/resize) registered by    │
-│   Emscripten on behalf of the pthread.  Callbacks are proxied    │
-│   to the pthread via a shared memory queue.                      │
+│     └─► Atomics.add(vsyncTick, 1) + Atomics.notify               │
+│   Input event listeners registered by Emscripten for the         │
+│     pthread; callbacks proxied to it via a shared-memory queue   │
 └──────────────────────────────────────────────────────────────────┘
                         ▲                          │
-                        │  ImageBitmap (transfer)  │  vsync tick
-                        │  via worker.postMessage  │  via Atomics.notify
-                        │                          │
+          gl* calls, commit_frame (proxied)        │ vsync tick (futex)
                         │                          ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ Kodi render pthread (Emscripten Worker)                          │
 │ Started by crt1_proxy_main.c -> runs main()                      │
 │ ──────────────────────────────────────────────────────────────── │
-│   Standalone OffscreenCanvas (created via                        │
-│     `new OffscreenCanvas(w, h)`, NOT transferControlToOffscreen) │
-│     └─► WebGL2 context                                           │
-│         └─► Kodi GUI/RenderSystemGLES                            │
-│                                                                  │
+│   Kodi GUI / RenderSystemGLES issue gl* calls as usual           │
 │   PresentRenderImpl(rendered):                                   │
-│     1. glFlush()                                                 │
-│     2. const bm = offCanvas.transferToImageBitmap()              │
-│     3. framesInFlight++;                                         │
-│        postMessage({cmd:CMD_CALL_HANDLER,                        │
-│                     handler:'onKodiFrame',                       │
-│                     args:[bm]}, [bm])                            │
-│     4. emscripten_futex_wait(&vsyncCounter, last, 100ms)         │
+│     1. emscripten_futex_wait(&vsyncTick, last, 100 ms)           │
+│     2. emscripten_webgl_commit_frame()   (synchronous)           │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+The Kodi pthread owns no canvas and no per-frame browser object. Everything
+it produces is a GL command in a shared-memory queue; the thread that owns the
+context and the canvas — the browser main thread — is the one that yields
+every frame, so the browser can reclaim whatever it allocates.
 
 ### 2.2 Startup
 
 1. The page ships a `<canvas id="canvas">` with no rendering context.
-   `kodi_pre.js` runs on the main thread before Emscripten's runtime
-   boots and attaches an `ImageBitmapRenderingContext` to that canvas.
-   It also installs `Module.onKodiFrame(bitmap)`, the handler that
-   will receive frames from the render pthread, and starts the
-   `requestAnimationFrame` pump that increments the shared vsync
-   counter.
-2. `-sPROXY_TO_PTHREAD` causes Emscripten's `crt1_proxy_main.c` to
-   spawn a pthread for `main()` instead of running it on the browser's
-   main thread. This is the Kodi render thread.
-3. `CWinSystemWasmGLESContext::InitWindowSystem` runs on the render
-   pthread and, from JS, executes `new OffscreenCanvas(w, h)` and
-   `getContext('webgl2', ...)`. The resulting GL context is registered
-   with Emscripten's GL layer via `GL.registerContext` so that the
-   rest of Kodi can continue to call `gl*` functions and
-   `emscripten_webgl_*` APIs unchanged.
-4. `CWinSystemWasmGLESContext` also installs the vsync pump (once per
-   process) via `MAIN_THREAD_EM_ASM`, giving the render pthread a
-   shared `uint32_t` that ticks at display rate.
-
-The DOM canvas and the OffscreenCanvas are two independent canvases.
-Kodi renders into the OffscreenCanvas; the DOM canvas displays a
-recent frame.
+   `kodi_pre.js` runs before the Emscripten runtime boots; on the main
+   thread it makes the canvas focusable, installs the clipboard-paste
+   shim and `Module.onKodiWorkerLog` (§7); in each Worker it forwards
+   diagnostic console lines to that handler. It must not take a
+   rendering context on the canvas.
+2. `-sPROXY_TO_PTHREAD` makes `crt1_proxy_main.c` spawn a pthread for
+   `main()`. This is the Kodi render thread.
+3. `CWinSystemWasmGLESContext::InitWindowSystem` runs on that pthread. It
+   sizes the canvas with `emscripten_set_canvas_element_size("#canvas")`
+   (proxied to main), then creates the context with
+   `proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS`,
+   `explicitSwapControl = 1` and `renderViaOffscreenBackBuffer = 1`.
+   Emscripten creates the WebGL2 context on the main thread and hands the
+   pthread a token; `emscripten_webgl_make_context_current` binds that
+   token to the pthread once. It is never rebound: for a proxied context
+   `emscripten_webgl_get_current_context()` returns 0, and a per-frame
+   `make_context_current` costs a synchronous main-thread round trip
+   (during bring-up it took the frame rate from 120 to 10).
+4. `InstallVsyncPump` installs the `requestAnimationFrame` pump on the
+   main thread; it increments a shared `uint32_t` and `Atomics.notify`s
+   it every display frame, and keeps an EMA of the refresh rate in
+   `globalThis.__kodiRefreshRate`.
 
 ### 2.3 Per-frame path
 
-Inside Kodi's usual "prepare frame → `Render()` → `PresentRenderImpl()`"
-cycle, `PresentRenderImpl` does four things:
+Kodi's GLES code is unchanged. Each `gl*` call lands in Emscripten's GL
+library (`system/lib/gl/webgl1.c`, `webgl2.c`), which — because the
+calling thread does not own the context — dispatches it to the main
+thread:
 
-1. **`glFlush()`.** Guarantees the commands are in the WebGL queue
-   before we try to read back the drawing buffer.
-2. **`transferToImageBitmap()`.** Returns an `ImageBitmap` that
-   references the current drawing buffer contents. The
-   OffscreenCanvas's drawing buffer is reset to transparent black by
-   this call (standard WebGL "`preserveDrawingBuffer: false`" rules);
-   that's fine because Kodi redraws every pass.
-3. **`postMessage({cmd: CMD_CALL_HANDLER, handler: 'onKodiFrame',
-   args: [bitmap]}, [bitmap])`.** Transfers the bitmap to the main
-   thread. Emscripten's libpthread main-thread `onmessage` handler
-   dispatches `CMD_CALL_HANDLER` to `Module['onKodiFrame'](bitmap)`.
-   The id is numeric (`CMD_CALL_HANDLER`, currently `9`, defined in
-   emscripten's `src/lib/libpthread.js`); it was the string
-   `'callHandler'` before Emscripten 6. We post the message by hand
-   rather than through emscripten's auto-proxied handler stub because
-   that stub cannot pass a transfer list. The bitmap is a transferable
-   object, so ownership moves from the worker to the main thread with
-   no copy. `framesInFlight` is incremented before the post and
-   decremented by `onKodiFrame` on receipt.
-4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, timeout)`.** The
-   wait happens *before* the flush and transfer. If the vsync counter
-   hasn't advanced since the previous frame, the render thread blocks
-   until the next `requestAnimationFrame` fires. If the wait times out
-   without a tick, the frame is **not** posted (there is no compositor
-   frame to pair it with) and `PresentRenderImpl` returns, so Kodi keeps
-   running when rAF is throttled (backgrounded tab, "Reduce animation")
-   instead of deadlocking. The timeout is 100 ms.
+* Calls without a return value and without pointer arguments
+  (`glBindTexture`, `glUseProgram`, `glEnable`, `glScissor`,
+  `glDrawArrays`, `glDrawElements`, `glVertexAttribPointer`, …) are
+  **asynchronous**: enqueued and returned immediately.
+* Calls carrying a pointer to less than 256 KB of data
+  (`glUniformMatrix4fv`, `glBufferData`, `glBufferSubData`,
+  `glTexImage2D`, `glTexSubImage2D`) copy the data and are asynchronous.
+* Calls that return a value or reference memory the caller may reuse are
+  **synchronous** round trips: `glGen*`, `glDelete*`, `glGet*`,
+  `glCheckFramebufferStatus`, `glFlush`, `glFinish`, `glReadPixels`,
+  shader compile/link queries, and uploads of 256 KB or more.
 
-The pump only issues a tick while `framesInFlight` is zero, i.e. once
-the main thread has received the previous bitmap. A tick therefore
-means "the last frame was consumed, render the next one", and at most
-one frame is ever queued towards the main thread. Without this bound a
-continuously animating GUI (any dialog) outran a slow main thread:
-rAF is scheduled ahead of `postMessage` delivery, so ticks kept coming
-while undisplayed 8 MB bitmaps piled up in the message queue, and the
-UI got progressively slower until it stopped. When main is behind, the
-render thread now simply waits on the futex and leaves it the CPU.
+Kodi's per-frame GUI path is entirely in the first two groups; the
+synchronous calls happen at init (shader locations, `glGetString`), when a
+texture or buffer is first created, and for large texture uploads.
+`VerifyGLState()` (a `glGetError` per draw) is compiled out unless
+`GL_DEBUGGING` is defined. Without `-sFULL_ES2`/`-sFULL_ES3`,
+`glDrawElements` and `glVertexAttribPointer` stay asynchronous; with them
+they become synchronous, which is one more reason those flags are off.
 
-The rAF pump also measures the display refresh rate (EMA of the tick
-interval, clamped to 20-240 Hz) into `globalThis.__kodiRefreshRate`.
+`PresentRenderImpl(rendered)`:
 
-On the main thread, `Module.onKodiFrame(bitmap)` stores the bitmap as
-"pending" and schedules a single `requestAnimationFrame` callback that
-calls `bitmapCtx.transferFromImageBitmap(bitmap)`. If a new bitmap
-arrives before the rAF fires, the older one is `close()`d and replaced:
-we never display a stale frame. Where `bitmaprenderer` is unavailable
-the canvas falls back to a 2D context and `drawImage`, which costs a
-copy. The first presented frame fires `Module.onKodiFirstFramePresented`
-so the HTML shell can hide its loading indicator.
+1. Returns immediately if Kodi drew nothing (`rendered == false`).
+2. **`emscripten_futex_wait(&vsyncTick, lastSeen, 100 ms)`.** Paces the
+   loop to the display. If no tick arrives in 100 ms the frame is
+   dropped and the function returns, which is what happens while the
+   tab is hidden: the browser stops `requestAnimationFrame`, Kodi keeps
+   running at ~10 iterations/s and presents nothing.
+3. **`emscripten_webgl_commit_frame()`.** Synchronous: the main thread
+   executes every GL call still queued, then blits the offscreen
+   framebuffer to the canvas. The compositor presents the canvas like
+   any other; there is no hand-off object. The synchronous return is
+   also the backpressure: the Kodi thread cannot get more than one frame
+   ahead of main.
+4. The first successful commit calls `Module.onKodiFirstFramePresented`
+   on the main thread so the HTML shell can drop its loading overlay.
+
+Measured on an Apple-silicon Mac, Chrome 152, 120 Hz display, Estuary at
+1512×862: 120 frames/s with `commit_frame` at 0.2–0.3 ms, both on the home
+screen and inside a modal dialog's nested loop.
 
 ### 2.4 Input
 
@@ -228,39 +215,36 @@ rescaling.
 
 Browser window resize → `EmscriptenUiEvent` → posted to Kodi's
 `XBMC_VIDEORESIZE` queue → eventually calls
-`CWinSystemWasmGLESContext::ResizeWindow(newW, newH)` → sets the
-OffscreenCanvas's `width`/`height` attributes (WebGL's drawing buffer
-auto-resizes). The visible DOM canvas's drawing buffer is re-sized
-implicitly on the next frame because `transferFromImageBitmap` matches
-its canvas to the bitmap's dimensions.
+`CWinSystemWasmGLESContext::ResizeWindow(newW, newH)` →
+`emscripten_set_canvas_element_size("#canvas", w, h)`, which sets the
+canvas backing size and, under `OFFSCREEN_FRAMEBUFFER`, resizes the
+offscreen framebuffer with it.
 
 ---
 
 ## 3. Why this design
 
-The architecture is built around three properties.
+**No per-frame browser resources on a thread that cannot yield.** The
+Kodi pthread produces GL commands and nothing else. The canvas, the
+offscreen framebuffer and the WebGL context belong to the main thread,
+which returns to its event loop every frame regardless of what Kodi is
+doing, so modal dialogs (1.5) can spin for as long as they like without
+anything accumulating. This is the property the previous design lacked
+(§4.9).
 
-**Explicit presentation.** Every frame is delivered by a
-`transferToImageBitmap + postMessage` sequence that is fully specified
-by WHATWG. There is no "the browser might decide to propagate the
-drawing buffer" step anywhere in the pipeline. The visible canvas
-updates exactly once per frame Kodi renders, regardless of what the
-render thread is doing in between.
+**Kodi's nested render loops keep working unchanged.** The futex wait in
+`PresentRenderImpl` paces the nested loop to the compositor, and the
+synchronous `commit_frame` presents from inside it. No changes to shared
+Kodi code were required.
 
-**Kodi's nested render loops keep working unchanged.** The render
-thread can spin inside `CGUIDialog::Open_Internal` for as long as it
-likes. The futex wait in `PresentRenderImpl` paces the loop to the
-browser's compositor, so modal dialogs animate at 60 Hz instead of
-either (a) running at CPU speed and starving the main thread, or
-(b) not rendering at all because they never return to the JS event
-loop. No changes to shared Kodi code were required.
+**Presentation is the compositor's own.** The canvas is composited
+directly. No `ImageBitmap`, no `postMessage`, no second canvas, and the
+GUI canvas can be given an alpha channel with a context attribute — which
+the video-plane design (§9) needs.
 
-**Zero copy on the hot path.** `transferToImageBitmap` is a GPU-side
-handle transfer; `postMessage` with a transfer list moves ownership
-without structured-cloning the pixels; `transferFromImageBitmap`
-hands the bitmap straight to the compositor. On Chrome and Firefox
-this is a single GPU texture binding from render-thread to compositor;
-the CPU never reads the pixels.
+**The proxying cost is bounded and measured.** The hot path is
+asynchronous (2.3); the main thread does the WebGL work, which on a
+two-core TV is where the compositing work already happens.
 
 ---
 
@@ -279,39 +263,19 @@ loops (1.5 + 1.6). The implicit update only fires when the worker
 returns to its JS event loop; while a modal dialog is open, the
 worker is inside a C++ `while (m_active)` loop and never returns.
 Frames rendered during the modal are never propagated, so the dialog
-is invisible. Sprinkling `emscripten_sleep(0)` in the presentation
-path to force returns to the event loop requires Asyncify (see 4.5)
-and still did not reliably trigger the propagation on modern
-Chromium in our testing.
+is invisible.
 
-### 4.2 `OFFSCREEN_FRAMEBUFFER` + `emscripten_webgl_commit_frame()`
+### 4.2 `OFFSCREEN_FRAMEBUFFER` + `emscripten_webgl_commit_frame()` on the pthread
 
-**Design.** Let Emscripten render into an offscreen FBO that it
-controls, then call `emscripten_webgl_commit_frame()` every frame to
-blit-shader the FBO onto a placeholder canvas on main.
+**Design.** Keep the context on the pthread, render into Emscripten's
+offscreen FBO and commit it to a placeholder canvas.
 
-**Rejected because** the placeholder still needs (4.1) to propagate
-onto the visible canvas, so the nested-loop problem is unchanged.
-`emscripten_webgl_commit_frame` is additionally a no-op on modern
-browsers unless `OFFSCREEN_FRAMEBUFFER` is set — and even then, all
-it does is a CPU-visible blit into an FBO we then have to ship
-somewhere else. It also imposes a shader-based blit on every frame
-and a driver-level framebuffer allocation.
+**Rejected because** the placeholder still needs (4.1) to propagate onto
+the visible canvas, so the nested-loop problem is unchanged. The same
+two flags are what make the *main-thread* variant (§2) work; the
+difference is which thread owns the context.
 
-### 4.3 Run the GL context on the browser main thread
-
-**Design.** Keep the GL context on the main thread and run Kodi on a
-pthread that proxies every `gl*` call across the thread boundary
-(Emscripten's `GL_PROXY=1` mode or the default
-`proxyContextToMainThread` context attribute).
-
-**Rejected because** (a) every `gl*` call becomes a sync round-trip,
-which is catastrophic for a GUI that issues thousands of draw calls
-per frame, and (b) the render thread constantly blocks the main
-thread, which we wanted to keep free to composite and handle input.
-The WebGL-on-worker model exists precisely to avoid this.
-
-### 4.4 Run Kodi on the browser main thread
+### 4.3 Run Kodi on the browser main thread
 
 **Design.** Drop pthreads, run `main()` on the browser main thread,
 drive everything from an `emscripten_set_main_loop` callback.
@@ -323,24 +287,23 @@ the entire startup duration — no loading indicator, no input, no
 paint. And the nested render loops in modal dialogs (1.5) would
 still freeze the tab. `PROXY_TO_PTHREAD` solves both.
 
-### 4.5 Asyncify + `emscripten_sleep(0)`
+### 4.4 Asyncify + `emscripten_sleep(0)`
 
 **Design.** Compile with `-sASYNCIFY=1` and insert
-`emscripten_sleep(0)` after each commit, unwinding the C stack to
-JavaScript so the browser can process one task (notionally including
-the OffscreenCanvas → placeholder propagation in 4.1).
+`emscripten_sleep(0)` once per frame, unwinding the C stack to
+JavaScript so the pthread returns to its event loop even inside a
+modal loop. This would have let the pthread keep owning the canvas.
 
 **Rejected because** Asyncify instruments every function that could
-reach `emscripten_sleep`, saving and restoring its stack frame to
-and from linear memory on every call. The wasm size penalty is
-typically 30-80 % for a codebase this large, and the per-call cost
-is measurable in release builds. Worse, in practice the forced
-yield did not reliably cause modern Chromium to run the
-placeholder-canvas propagation step inside a `while (m_active)
-loop`, so the problem it was introduced to solve was not actually
-solved.
+be on the stack between the sleep and the JS boundary, saving and
+restoring frames to linear memory on every call. For Kodi's render
+path (virtual calls everywhere) the instrumented set is large; the
+wasm size penalty is typically 30-80 % and the per-call cost is
+measurable in release builds. JSPI, the zero-overhead successor,
+shipped in Chromium 137; the Tizen TVs this port targets run Chromium
+M120 (Tizen 9.0) and M130 (Tizen 10.0), so it is not available there.
 
-### 4.6 `readPixels` + `drawImage` every frame
+### 4.5 `readPixels` + `drawImage` every frame
 
 **Design.** After rendering, read the back buffer with `glReadPixels`,
 transfer the resulting typed array to the main thread, and
@@ -352,20 +315,15 @@ the slowest things WebGL can do (synchronises the GPU, can cost
 frame, adding enough CPU work to blow past our frame budget before
 Kodi has drawn anything.
 
-### 4.7 `WebGLRenderingContext.commit()` / explicit swap control
+### 4.6 `WebGLRenderingContext.commit()`
 
-**Design.** Use WebGL's old `commit()` method (paired with
-`explicitSwapControl: true` context attribute) to tell the browser
+**Design.** Use WebGL's old `commit()` method to tell the browser
 "this frame is done, please present".
 
 **Rejected because** `commit()` was removed from the WebGL spec and
-no modern browser implements it. `emscripten_webgl_commit_frame()`
-still exists as an Emscripten API but, as noted, it is a no-op on
-modern Chromium (see the source of
-`emscripten_webgl_do_commit_frame` in
-`emscripten/src/lib/libhtml5_webgl.js`).
+no modern browser implements it.
 
-### 4.8 `SharedArrayBuffer`-backed framebuffer
+### 4.7 `SharedArrayBuffer`-backed framebuffer
 
 **Design.** Render into a CPU-side pixel buffer backed by SAB, hand
 it to the main thread, `ImageData` + `putImageData` onto a 2D
@@ -373,22 +331,70 @@ canvas.
 
 **Rejected because** it requires either software rendering (no WebGL
 at all — not tenable for a GUI of Kodi's complexity) or a
-`readPixels` step per frame (see 4.6). Also locks us out of hardware
+`readPixels` step per frame (see 4.5). Also locks us out of hardware
 video compositing in the future.
+
+### 4.8 Making modal dialogs asynchronous
+
+**Design.** Remove the nested loop instead of working around it.
+
+**Rejected because** it is a Kodi-wide change, not a platform one:
+`dialog->Open()` is synchronous by contract at ~140 call sites plus
+~36 `ShowAndGet*` helpers, `CGUIDialogBusy::Wait`, `CGUIDialogProgress`,
+`CGUIMediaWindow` and `CGUIWindowManager::CloseWindowSync` all spin the
+render loop, and the Python and binary add-on dialog APIs are
+synchronous.
+
+### 4.9 Standalone `OffscreenCanvas` on the pthread + `transferToImageBitmap` (previous design)
+
+**Design.** The pthread creates its own `OffscreenCanvas` and WebGL2
+context (registered with `GL.registerContext`), renders into it, and
+per frame calls `transferToImageBitmap()` and `postMessage`s the bitmap
+to the main thread, which shows it with an `ImageBitmapRenderingContext`
+on the DOM canvas. Explicit presentation, zero-copy hand-off, and it
+works inside nested loops. This shipped first.
+
+**Replaced because** it leaked exactly when a modal dialog was open.
+Reproduced on an Apple-silicon Mac with Chrome 152, three runs out of
+three: with a dialog open, renderer RSS was flat for two to three
+minutes and then grew by ~12 GB in 40 s — one full frame buffer per
+frame at the display rate — after which `requestAnimationFrame` stopped
+and Chrome killed the renderer. The controls that isolated the cause:
+
+| Condition (all at 120 fps) | Renderer RSS |
+|---|---|
+| dialog open, full hand-off | flat, then +12 GB in 40 s, renderer killed |
+| **no dialog**, same 120 fps, same hand-off | flat for 3+ min |
+| dialog open, `transferToImageBitmap` skipped | flat for 5.5 min |
+| dialog open, main closes each bitmap unshown | slow creep (~0.7 MB/s) |
+
+Wasm memory stayed at 512 MB and the main-thread JS heap flat; the
+growth was renderer-side native memory behind the bitmaps. The only
+structural difference between the fatal and the healthy rows is that the
+modal loop never returns the pthread to its Worker event loop (1.6),
+while `emscripten_set_main_loop` does so every frame. On the Samsung TV
+the same freeze took seconds: its browser is a 32-bit `armv7` process
+with ~3 GB of address space, 512 MB of which is Kodi's wasm heap.
+
+Bounding frames in flight between the two threads (added along the
+way, then removed with the rest of the design) was correct but
+orthogonal; the frames were consumed, the resources behind them were
+not released.
 
 ---
 
 ## 5. Build configuration
 
-These flags are required for the design described above and are set in
-`cmake/scripts/wasm/ArchSetup.cmake`:
+Set in `cmake/scripts/wasm/ArchSetup.cmake`:
 
 | Flag | Why |
 |---|---|
 | `-pthread`, `-sPTHREAD_POOL_SIZE=4` | Kodi is multi-threaded. The pool only pre-spawns Workers; threads created past it are started by the main thread on demand. |
-| `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.4). |
+| `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.3). |
+| `-sOFFSCREEN_FRAMEBUFFER=1` | Enables proxied WebGL contexts and the emulated back buffer that `emscripten_webgl_commit_frame()` blits (§2). |
+| `-sGL_SUPPORT_EXPLICIT_SWAP_CONTROL=1` | Allows `explicitSwapControl`; without it Emscripten only commits at main-loop iterations, which a modal loop never reaches. |
 | `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2` | Kodi's GLES renderer targets GLES 3 on other platforms. |
-| `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread setup of `ImageBitmapRenderingContext` and `Module.onKodiFrame` before the Emscripten runtime boots (also hosts the clipboard-paste and HTTP-proxy shims). |
+| `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread canvas focus, clipboard paste, worker log forwarding, HTTP-proxy shim. |
 
 Flags set for other subsystems, listed so nobody removes them while
 touching rendering: `-sAUDIO_WORKLET` + `-sWASM_WORKERS` (audio sink),
@@ -400,11 +406,9 @@ These flags are deliberately **not** set:
 
 | Flag | Why it's off |
 |---|---|
-| `-sOFFSCREENCANVAS_SUPPORT=1` | Activates `crt1_proxy_main.c`'s unconditional `transferControlToOffscreen(#canvas)` on pthread startup, which fails because `kodi_pre.js` has already attached a rendering context to `#canvas`. The JS `new OffscreenCanvas(...)` constructor is a browser-native API that does not require this flag. |
-| `-sOFFSCREENCANVASES_TO_PTHREAD=#canvas` | Same as 4.1. |
-| `-sOFFSCREEN_FRAMEBUFFER=1` | Same as 4.2. |
-| `-sASYNCIFY=1` | Same as 4.5. |
-| `-sFULL_ES3=1` | Only needed for client-side vertex arrays. Every GLES path compiled for wasm uploads through real GPU buffers (`CGUITextureGLES`, `CGUIFontTTFGLES`, `COverlayRendererGLES`, `CLinuxRendererGLES` all bind a VBO and pass byte offsets). The remaining client-array users — gbm windowing, Android MediaCodec, DRM-PRIME — are not built for this target. |
+| `-sOFFSCREENCANVAS_SUPPORT=1` / `-sOFFSCREENCANVASES_TO_PTHREAD` | Would transfer `#canvas` to the pthread at startup (4.1); the canvas must stay on the main thread. |
+| `-sASYNCIFY=1` | Same as 4.4. |
+| `-sFULL_ES2=1` / `-sFULL_ES3=1` | Make `glDrawElements` and `glVertexAttribPointer` synchronous under proxying (2.3), and every GLES path built for wasm uploads through real GPU buffers anyway. |
 
 ---
 
@@ -413,53 +417,51 @@ These flags are deliberately **not** set:
 | Concern | File |
 |---|---|
 | HTML shell | `tools/wasm/kodi.html` |
-| Main-thread presentation glue (bitmaprenderer, `Module.onKodiFrame`) | `xbmc/platform/wasm/kodi_pre.js` |
-| OffscreenCanvas + WebGL2 creation, `PresentRenderImpl`, vsync pump | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
+| Main-thread glue: canvas focus, paste, worker log forwarding | `xbmc/platform/wasm/kodi_pre.js` |
+| Proxied context creation, `PresentRenderImpl`, vsync pump | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
 | Input events (keyboard / mouse / resize) | `xbmc/windowing/wasm/WinEventsWasm.cpp` |
-| WebCodecs video decoder + JS bridge (§9) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp`, `webcodecs_bridge.js`, `DVDVideoCodecWebCodecsBridge.h` |
-| Audio sink + AudioWorklet ring | `xbmc/cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.cpp`, `xbmc/platform/wasm/WasmAudioWorkletManager.cpp` |
 | WASM `main()` + `WasmRunIteration` | `xbmc/platform/wasm/ApplicationWasm.cpp`, `xbmc/application/Application.cpp` |
 | Link flags | `cmake/scripts/wasm/ArchSetup.cmake` |
+| WebCodecs video decoder + JS bridge (§9) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp`, `webcodecs_bridge.js`, `DVDVideoCodecWebCodecsBridge.h` |
+| Audio sink + AudioWorklet ring | `xbmc/cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.cpp`, `xbmc/platform/wasm/WasmAudioWorkletManager.cpp` |
 
 Relevant Emscripten source, for reference:
 
 | Concern | File |
 |---|---|
-| pthread main-thread `onmessage` (handles `CMD_CALL_HANDLER`) | `src/lib/libpthread.js` |
+| GL entry points and which are proxied sync vs. async | `system/lib/gl/webgl1.c`, `webgl2.c`, `webgl_internal.h` |
+| Proxied context creation, `make_context_current`, `commit_frame` | `src/lib/libhtml5_webgl.js` |
+| Offscreen framebuffer, canvas resize | `src/lib/libwebgl.js`, `src/lib/libhtml5.js` |
 | `crt1_proxy_main` — spawns the pthread that runs `main()` | `system/lib/libc/crt1_proxy_main.c` |
-| `emscripten_webgl_commit_frame` — no-op on modern browsers | `src/lib/libhtml5_webgl.js` |
 
 ---
 
 ## 7. Debugging
 
-- **No frames appear on the visible canvas.** From DevTools on main:
-  ```js
-  const c = document.getElementById('canvas');
-  typeof Module.onKodiFrame;       // 'function'
-  c.width + 'x' + c.height;        // non-zero after first frame
-  ```
-  `kodi_pre.js` emits `console.error` on any failed
-  `transferFromImageBitmap`. `PresentRenderImpl` (via its inline
-  `EM_ASM` wrapper) emits `console.error` on any failed
-  `transferToImageBitmap` / `postMessage`.
+- **Worker console output.** Kodi's log and the `[KODI_DBG]`
+  instrumentation are written from Workers. `kodi_pre.js` forwards lines
+  matching `KODI_DBG|[kodi]|WASM|WebGL|GL_|lost|ERROR|error` to the main
+  thread, where they appear in the console prefixed `[worker]` and are
+  kept in `Module.kodi.workerLog` (last 1000 entries). This is what makes
+  them reachable from tooling that only sees the main-thread console.
 
-- **rAF never advances the vsync counter.** Temporarily add a
-  `CLog::Log` in `PresentRenderImpl` printing the vsync counter
-  value before and after the futex wait, or read
-  `HEAPU32[vsyncCounterAddr >> 2]` from DevTools.
+- **Present stats.** Once a second `PresentRenderImpl` logs
+  `[KODI_DBG] ... present stats | {"frames","timeouts","avgWaitMs",
+  "avgCommitMs","maxCommitMs","tick"}`. Healthy: `frames` at the display
+  rate, `timeouts` 0, `avgCommitMs` well under a millisecond. `timeouts`
+  at ~10/s with `avgWaitMs` ≈ 100 means no rAF ticks — check
+  `document.visibilityState` first; a hidden tab is the normal cause.
 
-- **Modal dialogs animate choppily.** Confirm the futex wait is
-  actually returning on each rAF; if the 100 ms timeout is firing
-  every frame, the main thread is not running its rAF pump — check
-  for main-thread stalls, and that `kodi_pre.js` actually ran
-  (`typeof Module.kodi === 'object'`).
+- **Frame rate collapses to ~10 fps while the tab is visible.** Either
+  the pump is not installed (`globalThis.__kodiRefreshRate` undefined on
+  main) or something on the Kodi thread is doing a synchronous
+  main-thread round trip per frame; `emscripten_webgl_make_context_current`
+  inside the frame loop was the first offender.
 
-- **UI gets progressively slower until it stops.** A frame backlog
-  towards the main thread. `framesInFlight` must never exceed 1; if it
-  is stuck above 0, `Module.kodi.frameReceived` is not being called
-  (check `typeof Module.kodi.frameReceived` on main), which starves the
-  pump of ticks.
+- **Nothing renders.** `Module.ctx` must be set on main and Kodi's log
+  must show `WASM: using main-thread WebGL2 context proxied to the Kodi
+  thread`. A `bitmaprenderer` or `2d` context taken on `#canvas` before
+  Emscripten runs makes `getContext('webgl2')` fail.
 
 - **Mouse coordinates are wrong.** The render resolution must equal
   the canvas's CSS pixel size for coordinates to be identity. If
@@ -473,17 +475,16 @@ Relevant Emscripten source, for reference:
 ## 8. Planned improvements
 
 - **HiDPI.** Render at `cssSize * devicePixelRatio`; rescale mouse
-  input by `devicePixelRatio` in `TranslateMousePosition`. The DOM
-  canvas's CSS size stays at 100vw/100vh and the bitmaprenderer
-  will display the higher-resolution bitmap scaled to the CSS box.
+  input by `devicePixelRatio` in `TranslateMousePosition`.
+
+- **Static dialogs redraw at the display rate.** Kodi reports
+  `rendered == true` on every iteration of a modal loop even for a
+  dialog nothing is changing in, so a static Power Options dialog
+  costs a full GUI pass and a commit per vsync. Finding what marks the
+  screen dirty each iteration would cut GUI load on the TV
+  substantially.
 
 - **Video.** See §9.
-
-- **Tear-free presentation.** Currently a frame is committed every
-  time Kodi issues a present; if we wanted stricter pacing we could
-  have `PresentRenderImpl` skip the `postMessage` when no dirty
-  regions changed and let the main thread keep displaying the
-  previous bitmap.
 
 ---
 
@@ -539,7 +540,7 @@ on GBM. In the browser it maps onto:
 │ Browser main thread                                              │
 │   VideoDecoder ──► Map<id, VideoFrame>   (frames never leave)    │
 │   <canvas id="video">   ◄── present(id, rect): draw / transfer   │
-│   <canvas id="canvas">  ◄── GUI ImageBitmap (existing path, §2)  │
+│   <canvas id="canvas">  ◄── GUI WebGL canvas (existing path, §2) │
 │         GUI canvas is alpha-enabled; video area cleared to 0     │
 └──────────────────────────────────────────────────────────────────┘
           ▲ shared state (Atomics) + postMessage           │ ids
@@ -563,14 +564,14 @@ destination rect exactly as the GLES renderer does today (aspect,
 zoom, stereo, view mode) and sends `present(id, rect)`; `ManageRenderArea`
 and `RenderCapture` behave like the MediaCodec surface renderer (capture
 unsupported or via `drawImage` on request). It draws nothing into the GL
-context. The GUI canvas must be created with `alpha: true` and the video
-window cleared to transparent, which is what the Android and GBM
-windowing code already does for their planes.
+context. The GUI canvas must be created with `alpha: true` — a context
+attribute in `CreateProxiedGLContext`, since the canvas is composited
+directly (§2) — and the video window cleared to transparent, which is
+what the Android and GBM windowing code already does for their planes.
 
 **Presentation.** The main thread keeps one pending `(id, rect)` per
-video canvas and applies it in the same rAF callback that presents the
-GUI bitmap (§2.3), so the two planes update in the same compositor
-frame. Presenting is `bitmaprenderer.transferFromImageBitmap(await
+video canvas and applies it from the rAF pump (§2.2), so the video plane
+and the GUI canvas update in the same compositor frame. Presenting is `bitmaprenderer.transferFromImageBitmap(await
 createImageBitmap(frame))` or, where a `VideoFrame` can be drawn
 directly, `2d.drawImage(frame, rect)`. Both are compositor operations:
 no CPU pass over the pixels. Timing stays with `CRenderManager`; the
