@@ -193,6 +193,9 @@
   }
 
   Module.onKodiFrame = function (bitmap) {
+    if (kodi.frameReceived) {
+      kodi.frameReceived();
+    }
     if (pendingBitmap) {
       try { pendingBitmap.close(); } catch (_) {}
     }

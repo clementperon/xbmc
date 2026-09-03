@@ -89,8 +89,10 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │   DOM <canvas id="canvas">                                       │
 │     └─► ImageBitmapRenderingContext (set up in kodi_pre.js)      │
 │   requestAnimationFrame pump                                     │
-│     └─► Atomics.add(sharedVsyncCounter, 1) + Atomics.notify      │
+│     └─► if framesInFlight == 0:                                  │
+│           Atomics.add(sharedVsyncCounter, 1) + Atomics.notify    │
 │   Module.onKodiFrame(bitmap)                                     │
+│     ├─► Atomics.sub(framesInFlight, 1)                           │
 │     └─► bitmapCtx.transferFromImageBitmap(bitmap)                │
 │                                                                  │
 │   Input event listeners (keyboard/mouse/resize) registered by    │
@@ -114,10 +116,11 @@ case it performs a blit-shader copy into a framebuffer we own but does
 │   PresentRenderImpl(rendered):                                   │
 │     1. glFlush()                                                 │
 │     2. const bm = offCanvas.transferToImageBitmap()              │
-│     3. postMessage({cmd:CMD_CALL_HANDLER,                        │
+│     3. framesInFlight++;                                         │
+│        postMessage({cmd:CMD_CALL_HANDLER,                        │
 │                     handler:'onKodiFrame',                       │
 │                     args:[bm]}, [bm])                            │
-│     4. emscripten_futex_wait(&vsyncCounter, last, 100ms / 8ms)   │
+│     4. emscripten_futex_wait(&vsyncCounter, last, 100ms)         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -169,7 +172,8 @@ cycle, `PresentRenderImpl` does four things:
    rather than through emscripten's auto-proxied handler stub because
    that stub cannot pass a transfer list. The bitmap is a transferable
    object, so ownership moves from the worker to the main thread with
-   no copy.
+   no copy. `framesInFlight` is incremented before the post and
+   decremented by `onKodiFrame` on receipt.
 4. **`emscripten_futex_wait(&vsyncCounter, lastSeen, timeout)`.** The
    wait happens *before* the flush and transfer. If the vsync counter
    hasn't advanced since the previous frame, the render thread blocks
@@ -177,9 +181,17 @@ cycle, `PresentRenderImpl` does four things:
    without a tick, the frame is **not** posted (there is no compositor
    frame to pair it with) and `PresentRenderImpl` returns, so Kodi keeps
    running when rAF is throttled (backgrounded tab, "Reduce animation")
-   instead of deadlocking. The timeout is 100 ms, lowered to 8 ms when
-   the page runs in a Tizen TV runtime, where rAF has been observed to
-   stop ticking while modal UI is up.
+   instead of deadlocking. The timeout is 100 ms.
+
+The pump only issues a tick while `framesInFlight` is zero, i.e. once
+the main thread has received the previous bitmap. A tick therefore
+means "the last frame was consumed, render the next one", and at most
+one frame is ever queued towards the main thread. Without this bound a
+continuously animating GUI (any dialog) outran a slow main thread:
+rAF is scheduled ahead of `postMessage` delivery, so ticks kept coming
+while undisplayed 8 MB bitmaps piled up in the message queue, and the
+UI got progressively slower until it stopped. When main is behind, the
+render thread now simply waits on the futex and leaves it the CPU.
 
 The rAF pump also measures the display refresh rate (EMA of the tick
 interval, clamped to 20-240 Hz) into `globalThis.__kodiRefreshRate`.
@@ -442,6 +454,12 @@ Relevant Emscripten source, for reference:
   every frame, the main thread is not running its rAF pump — check
   for main-thread stalls, and that `kodi_pre.js` actually ran
   (`typeof Module.kodi === 'object'`).
+
+- **UI gets progressively slower until it stops.** A frame backlog
+  towards the main thread. `framesInFlight` must never exceed 1; if it
+  is stuck above 0, `Module.kodi.frameReceived` is not being called
+  (check `typeof Module.kodi.frameReceived` on main), which starves the
+  pump of ticks.
 
 - **Mouse coordinates are wrong.** The render resolution must equal
   the canvas's CSS pixel size for coordinates to be identity. If
