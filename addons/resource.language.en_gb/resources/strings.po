@@ -18108,6 +18108,12 @@ msgctxt "#34008"
 msgid "When you need to enter some text, Kodi virtual keyboard will show up instead of the built-in tvOS keyboard"
 msgstr ""
 
+#. Help text of setting "input.usekodikeyboard" on WebAssembly
+#: system/settings/wasm.xml
+msgctxt "#34011"
+msgid "When you need to enter some text, Kodi virtual keyboard will show up instead of the browser's or TV's built-in keyboard"
+msgstr ""
+
 #: system/settings/darwin_tvos.xml
 msgctxt "#34009"
 msgid "Siri remote pan gesture horizontal sensitivity"

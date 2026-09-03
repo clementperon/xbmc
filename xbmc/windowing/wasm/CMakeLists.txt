@@ -1,8 +1,10 @@
 set(SOURCES WinEventsWasm.cpp
-            WasmClipboard.cpp)
+            WasmClipboard.cpp
+            WasmKeyboard.cpp)
 
 set(HEADERS WinEventsWasm.h
-            WasmClipboard.h)
+            WasmClipboard.h
+            WasmKeyboard.h)
 
 if(TARGET ${APP_NAME_LC}::OpenGLES)
   list(APPEND SOURCES WinSystemWasmGLESContext.cpp)
