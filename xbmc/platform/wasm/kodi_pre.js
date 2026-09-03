@@ -173,6 +173,11 @@
     document.addEventListener(
         'paste',
         function (e) {
+          // A paste into a DOM field (the native keyboard's input) is the browser's.
+          var t = e.target;
+          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+            return;
+          }
           try {
             var text = (e.clipboardData && e.clipboardData.getData)
                 ? e.clipboardData.getData('text/plain')
