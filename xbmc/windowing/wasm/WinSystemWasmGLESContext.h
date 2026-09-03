@@ -63,4 +63,5 @@ protected:
 private:
   EMSCRIPTEN_WEBGL_CONTEXT_HANDLE m_webglContext{0};
   uint32_t m_lastVsyncSeen{0};
+  bool m_firstFramePresented{false};
 };
