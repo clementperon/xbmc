@@ -19,6 +19,8 @@
 #include <cstring>
 #include <string>
 
+#include <unordered_set>
+
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <emscripten/key_codes.h>
@@ -257,17 +259,29 @@ void TranslateMousePosition(const EmscriptenMouseEvent* e, uint16_t& x, uint16_t
   y = static_cast<uint16_t>(std::min(rawY, static_cast<int>(UINT16_MAX)));
 }
 
+// Keys pressed while the native keyboard owned input. Their release arrives
+// after the keyboard has closed and must be dropped too, or Kodi's long-press
+// handling acts on a release it never saw the press for.
+std::unordered_set<unsigned long> g_swallowedKeys;
+
 EM_BOOL OnKeyDown(int /*eventType*/, const EmscriptenKeyboardEvent* e, void* /*userData*/)
 {
-  if (!g_events || KODI::WINDOWING::WASM::CWasmKeyboard::IsActive())
+  if (!g_events)
     return EM_FALSE;
+  if (KODI::WINDOWING::WASM::CWasmKeyboard::IsActive())
+  {
+    g_swallowedKeys.insert(e->keyCode);
+    return EM_FALSE;
+  }
   g_events->MessagePush(TranslateKeyEvent(e, XBMC_KEYDOWN));
   return EM_TRUE;
 }
 
 EM_BOOL OnKeyUp(int /*eventType*/, const EmscriptenKeyboardEvent* e, void* /*userData*/)
 {
-  if (!g_events || KODI::WINDOWING::WASM::CWasmKeyboard::IsActive())
+  if (!g_events)
+    return EM_FALSE;
+  if (KODI::WINDOWING::WASM::CWasmKeyboard::IsActive() || g_swallowedKeys.erase(e->keyCode) > 0)
     return EM_FALSE;
   g_events->MessagePush(TranslateKeyEvent(e, XBMC_KEYUP));
   return EM_TRUE;
