@@ -35,9 +35,7 @@ set(APP_BINARY_SUFFIX ".js")
 option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in browser DevTools)" OFF)
 
 # Threading + memory (COOP/COEP headers required in HTML for pthreads).
-# Rendering flags (and why we don't set OFFSCREEN_FRAMEBUFFER,
-# OFFSCREENCANVASES_TO_PTHREAD, OFFSCREENCANVAS_SUPPORT, or ASYNCIFY) are
-# documented in docs/wasm/RENDERING.md §5.
+# Rendering flags are documented in docs/wasm/RENDERING.md §5.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   add_link_options(
     "-pthread"
