@@ -10,6 +10,7 @@ This file only describes what is in this directory and how it is staged.
 
 ## Files
 
+- `icon.png`: application icon shown in the TV's Apps panel; 512x423 24-bit RGB PNG as Samsung requires, rendered from `tools/Linux/packaging/media/iconScalable.svg`.
 - `config.xml`: Tizen widget metadata. Holds the application and package IDs
   (`kodiplayer.Kodi` / `kodiplayer`), the `tv-samsung` profile and the widget
   version.
