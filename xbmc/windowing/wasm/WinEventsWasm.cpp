@@ -5,6 +5,8 @@
 
 #include "WinEventsWasm.h"
 
+#include "WasmKeyboard.h"
+
 #include "ServiceBroker.h"
 #include "application/AppInboundProtocol.h"
 #include "guilib/GUIWindowManager.h"
@@ -257,7 +259,7 @@ void TranslateMousePosition(const EmscriptenMouseEvent* e, uint16_t& x, uint16_t
 
 EM_BOOL OnKeyDown(int /*eventType*/, const EmscriptenKeyboardEvent* e, void* /*userData*/)
 {
-  if (!g_events)
+  if (!g_events || KODI::WINDOWING::WASM::CWasmKeyboard::IsActive())
     return EM_FALSE;
   g_events->MessagePush(TranslateKeyEvent(e, XBMC_KEYDOWN));
   return EM_TRUE;
@@ -265,7 +267,7 @@ EM_BOOL OnKeyDown(int /*eventType*/, const EmscriptenKeyboardEvent* e, void* /*u
 
 EM_BOOL OnKeyUp(int /*eventType*/, const EmscriptenKeyboardEvent* e, void* /*userData*/)
 {
-  if (!g_events)
+  if (!g_events || KODI::WINDOWING::WASM::CWasmKeyboard::IsActive())
     return EM_FALSE;
   g_events->MessagePush(TranslateKeyEvent(e, XBMC_KEYUP));
   return EM_TRUE;
