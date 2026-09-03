@@ -39,6 +39,10 @@ mergeInto(LibraryManager.library, {
     PIXFMT_UNKNOWN: 0,
     PIXFMT_YUV420P: 0,
     PIXFMT_NV12: 0,
+    PIXFMT_RGBA: 0,
+    PIXFMT_RGBX: 0,
+    PIXFMT_BGRA: 0,
+    PIXFMT_BGRX: 0,
     PUSH_QUEUED: 0,
     PUSH_EMPTY: 0,
     PUSH_HANDLE_NOT_FOUND: 0,
@@ -99,6 +103,10 @@ mergeInto(LibraryManager.library, {
       this.PIXFMT_UNKNOWN = pf.UNKNOWN.value;
       this.PIXFMT_YUV420P = pf.YUV420P.value;
       this.PIXFMT_NV12 = pf.NV12.value;
+      this.PIXFMT_RGBA = pf.RGBA.value;
+      this.PIXFMT_RGBX = pf.RGBX.value;
+      this.PIXFMT_BGRA = pf.BGRA.value;
+      this.PIXFMT_BGRX = pf.BGRX.value;
       this.PUSH_QUEUED = ps.QUEUED.value;
       this.PUSH_EMPTY = ps.EMPTY.value;
       this.PUSH_HANDLE_NOT_FOUND = ps.HANDLE_NOT_FOUND.value;
@@ -138,8 +146,25 @@ mergeInto(LibraryManager.library, {
     },
 
     // Plane layout for the formats we accept, with tightly packed strides.
+    // Some hardware decoders (Samsung Tizen) only hand out packed RGB frames.
     describeFrame: function(frame, width, height) {
       const format = frame.format || 'I420';
+
+      const rgbFormats = {
+        RGBA: this.PIXFMT_RGBA, RGBX: this.PIXFMT_RGBX,
+        BGRA: this.PIXFMT_BGRA, BGRX: this.PIXFMT_BGRX,
+      };
+      if (format in rgbFormats) {
+        const stride = width * 4;
+        return {
+          pixelFormat: rgbFormats[format],
+          payloadSize: stride * height,
+          yStride: stride, uStride: 0, vStride: 0,
+          uOffset: 0, vOffset: 0,
+          layout: [{ offset: 0, stride }],
+        };
+      }
+
       const yStride = width;
       const uvHeight = (height + 1) >> 1;
       const ySize = yStride * height;

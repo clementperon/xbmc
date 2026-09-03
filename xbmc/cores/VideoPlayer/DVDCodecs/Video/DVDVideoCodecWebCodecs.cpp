@@ -22,6 +22,11 @@
 #include <emscripten/bind.h>
 #include <emscripten/threading.h>
 
+extern "C"
+{
+#include <libswscale/swscale.h>
+}
+
 // Expose the bridge enums to JavaScript via Embind so the JS bridge can read
 // the canonical C++ values (Module.WebCodecsPixelFormat.NV12 etc.) instead of
 // duplicating them. Must live at global scope, hence outside any namespace.
@@ -30,7 +35,11 @@ EMSCRIPTEN_BINDINGS(kodi_webcodecs_bridge)
   emscripten::enum_<WebCodecsPixelFormat>("WebCodecsPixelFormat")
       .value("UNKNOWN", WEBCODECS_PIXFMT_UNKNOWN)
       .value("YUV420P", WEBCODECS_PIXFMT_YUV420P)
-      .value("NV12", WEBCODECS_PIXFMT_NV12);
+      .value("NV12", WEBCODECS_PIXFMT_NV12)
+      .value("RGBA", WEBCODECS_PIXFMT_RGBA)
+      .value("RGBX", WEBCODECS_PIXFMT_RGBX)
+      .value("BGRA", WEBCODECS_PIXFMT_BGRA)
+      .value("BGRX", WEBCODECS_PIXFMT_BGRX);
 
   emscripten::enum_<WebCodecsPushStatus>("WebCodecsPushStatus")
       .value("QUEUED", WEBCODECS_PUSH_QUEUED)
@@ -53,6 +62,7 @@ constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(1000);
 constexpr auto COPY_TIMEOUT = std::chrono::milliseconds(500);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
+constexpr int YUV_STRIDE_ALIGNMENT = 32;
 
 constexpr int CODEC_STRING_BUFFER_SIZE = 24;
 constexpr int H264_AVCC_MIN_EXTRADATA_SIZE = 7;
@@ -273,9 +283,37 @@ AVPixelFormat PixelFormatFromWebCodecs(int pixelFormat)
       return AV_PIX_FMT_YUV420P;
     case WEBCODECS_PIXFMT_NV12:
       return AV_PIX_FMT_NV12;
+    case WEBCODECS_PIXFMT_RGBA:
+      return AV_PIX_FMT_RGBA;
+    case WEBCODECS_PIXFMT_RGBX:
+      return AV_PIX_FMT_RGB0;
+    case WEBCODECS_PIXFMT_BGRA:
+      return AV_PIX_FMT_BGRA;
+    case WEBCODECS_PIXFMT_BGRX:
+      return AV_PIX_FMT_BGR0;
     case WEBCODECS_PIXFMT_UNKNOWN:
     default:
       return AV_PIX_FMT_NONE;
+  }
+}
+bool IsPackedRgb(AVPixelFormat format)
+{
+  return format == AV_PIX_FMT_RGBA || format == AV_PIX_FMT_RGB0 || format == AV_PIX_FMT_BGRA ||
+         format == AV_PIX_FMT_BGR0;
+}
+
+int SwsColorspace(AVColorSpace colorSpace)
+{
+  switch (colorSpace)
+  {
+    case AVCOL_SPC_BT470BG:
+    case AVCOL_SPC_SMPTE170M:
+      return SWS_CS_ITU601;
+    case AVCOL_SPC_BT2020_NCL:
+    case AVCOL_SPC_BT2020_CL:
+      return SWS_CS_BT2020;
+    default:
+      return SWS_CS_ITU709;
   }
 }
 } // namespace
@@ -284,11 +322,13 @@ CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
   : CDVDVideoCodec(processInfo)
 {
   m_videoBufferPool = std::make_shared<CVideoBufferPoolSysMem>();
+  m_rgbBufferPool = std::make_shared<CVideoBufferPoolSysMem>();
 }
 
 CDVDVideoCodecWebCodecs::~CDVDVideoCodecWebCodecs()
 {
   Dispose();
+  sws_freeContext(m_swsContext);
 }
 
 std::unique_ptr<CDVDVideoCodec> CDVDVideoCodecWebCodecs::Create(CProcessInfo& processInfo)
@@ -560,17 +600,84 @@ void CDVDVideoCodecWebCodecs::ReleaseCopyBuffer()
   m_copyBuffer = nullptr;
 }
 
-CVideoBuffer* CDVDVideoCodecWebCodecs::AcquirePictureBuffer(AVPixelFormat pixelFormat,
+CVideoBuffer* CDVDVideoCodecWebCodecs::AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
+                                                            AVPixelFormat pixelFormat,
                                                             int bufferSize)
 {
-  m_videoBufferPool->Configure(pixelFormat, AlignUp(bufferSize, DEFAULT_ALIGNMENT));
-  CVideoBuffer* buffer = m_videoBufferPool->Get();
+  pool.Configure(pixelFormat, AlignUp(bufferSize, DEFAULT_ALIGNMENT));
+  CVideoBuffer* buffer = pool.Get();
   if (buffer && !buffer->GetMemPtr())
   {
     buffer->Release();
     return nullptr;
   }
   return buffer;
+}
+
+// The renderer only takes planar YUV. The colour matrix and range used here are
+// the ones FillPictureMetadata() reports, so the renderer undoes this exactly.
+// Releases rgbBuffer and rewrites info to describe the YUV420P result.
+CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
+                                                        WebCodecsFrameInfo& info)
+{
+  const AVPixelFormat srcFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+  const int width = info.width;
+  const int height = info.height;
+  const int yStride = AlignUp(width, YUV_STRIDE_ALIGNMENT);
+  const int uvStride = yStride / 2;
+  const int uvHeight = (height + 1) / 2;
+  const int ySize = yStride * height;
+  const int uvSize = uvStride * uvHeight;
+
+  if (!m_loggedRgbConversion)
+  {
+    m_loggedRgbConversion = true;
+    CLog::Log(LOGINFO,
+              "CDVDVideoCodecWebCodecs::GetPicture - decoder outputs {} frames, converting to "
+              "YUV420P in software",
+              av_get_pix_fmt_name(srcFormat));
+  }
+
+  m_swsContext = sws_getCachedContext(m_swsContext, width, height, srcFormat, width, height,
+                                      AV_PIX_FMT_YUV420P, SWS_POINT, nullptr, nullptr, nullptr);
+  if (!m_swsContext)
+  {
+    rgbBuffer->Release();
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - cannot create swscale context "
+                        "for {}x{} {}",
+              width, height, av_get_pix_fmt_name(srcFormat));
+    return nullptr;
+  }
+
+  const int fullRange = m_hints.colorRange == AVCOL_RANGE_JPEG ? 1 : 0;
+  sws_setColorspaceDetails(m_swsContext, sws_getCoefficients(SWS_CS_DEFAULT), 1,
+                           sws_getCoefficients(SwsColorspace(m_hints.colorSpace)), fullRange, 0,
+                           1 << 16, 1 << 16);
+
+  CVideoBuffer* yuvBuffer =
+      AcquirePictureBuffer(*m_videoBufferPool, AV_PIX_FMT_YUV420P, ySize + 2 * uvSize);
+  if (!yuvBuffer)
+  {
+    rgbBuffer->Release();
+    return nullptr;
+  }
+
+  uint8_t* dst = yuvBuffer->GetMemPtr();
+  const uint8_t* src[1] = {rgbBuffer->GetMemPtr()};
+  const int srcStride[1] = {info.yStride};
+  uint8_t* dstPlanes[3] = {dst, dst + ySize, dst + ySize + uvSize};
+  const int dstStride[3] = {yStride, uvStride, uvStride};
+  sws_scale(m_swsContext, src, srcStride, 0, height, dstPlanes, dstStride);
+  rgbBuffer->Release();
+
+  info.pixelFormat = WEBCODECS_PIXFMT_YUV420P;
+  info.yStride = yStride;
+  info.uStride = uvStride;
+  info.vStride = uvStride;
+  info.uOffset = ySize;
+  info.vOffset = ySize + uvSize;
+  info.payloadSize = ySize + 2 * uvSize;
+  return yuvBuffer;
 }
 
 void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
@@ -685,7 +792,9 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     return VC_ERROR;
   }
 
-  CVideoBuffer* videoBuffer = AcquirePictureBuffer(pixelFormat, payloadSize);
+  const bool packedRgb = IsPackedRgb(pixelFormat);
+  CVideoBuffer* videoBuffer = AcquirePictureBuffer(
+      packedRgb ? *m_rgbBufferPool : *m_videoBufferPool, pixelFormat, payloadSize);
   if (!videoBuffer)
     return VC_NOBUFFER;
 
@@ -726,13 +835,21 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   }
   m_copyBuffer = nullptr;
 
-  const AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+  AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
   if (framePixelFormat == AV_PIX_FMT_NONE)
   {
     videoBuffer->Release();
     CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
               info.pixelFormat);
     return VC_ERROR;
+  }
+
+  if (IsPackedRgb(framePixelFormat))
+  {
+    videoBuffer = ConvertToYuv420p(videoBuffer, info);
+    if (!videoBuffer)
+      return VC_ERROR;
+    framePixelFormat = AV_PIX_FMT_YUV420P;
   }
 
   const int strides[YuvImage::MAX_PLANES] = {info.yStride, info.uStride, info.vStride};
