@@ -34,6 +34,10 @@ namespace
 // pump (InstallVsyncPump).  Presenters wait on it via emscripten_futex_wait
 // to pace to the browser compositor.
 volatile uint32_t g_vsyncTick = 0;
+// Frames posted to the main thread and not yet received there. The pump only
+// ticks while this is zero, so the main thread's message queue can never build
+// a backlog of undisplayed bitmaps when it falls behind the render thread.
+volatile uint32_t g_framesInFlight = 0;
 bool g_vsyncPumpInstalled = false;
 double g_vsyncWaitTimeoutMs = 100.0;
 
@@ -46,9 +50,12 @@ void InstallVsyncPump()
   MAIN_THREAD_EM_ASM(
       {
         const idx = $0 >> 2;
+        const inFlightIdx = $1 >> 2;
         let lastTimestamp = 0.0;
         let measuredRefreshRate = 0.0;
         globalThis.__kodiRefreshRate = 60.0;
+        Module.kodi = Module.kodi || {};
+        Module.kodi.frameReceived = () => { Atomics.sub(HEAP32, inFlightIdx, 1); };
         const tick = (timestamp) =>
         {
           if (lastTimestamp > 0.0)
@@ -66,13 +73,16 @@ void InstallVsyncPump()
             }
           }
           lastTimestamp = timestamp;
-          Atomics.add(HEAP32, idx, 1);
-          Atomics.notify(HEAP32, idx, 1);
+          if (Atomics.load(HEAP32, inFlightIdx) === 0)
+          {
+            Atomics.add(HEAP32, idx, 1);
+            Atomics.notify(HEAP32, idx, 1);
+          }
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
       },
-      &g_vsyncTick);
+      &g_vsyncTick, &g_framesInFlight);
 }
 
 bool IsTizenRuntime()
@@ -169,24 +179,29 @@ void ResizeWorkerGLContext(int width, int height)
 // pass a transfer list, and the ImageBitmap has to move without a copy.
 void PostFrameBitmap()
 {
-  EM_ASM({
+  __atomic_add_fetch(&g_framesInFlight, 1, __ATOMIC_ACQ_REL);
+  const int posted = EM_ASM_INT({
     try
     {
       const off = globalThis.__kodiOffCanvas;
       if (!off)
-        return;
+        return 0;
       const bm = off.transferToImageBitmap();
       const msg = {};
       msg.cmd = 9; // CMD_CALL_HANDLER
       msg.handler = 'onKodiFrame';
       msg.args = [ bm ];
       postMessage(msg, [ bm ]);
+      return 1;
     }
     catch (e)
     {
       console.error('[kodi] transferToImageBitmap/postMessage failed:', e);
+      return 0;
     }
   });
+  if (!posted)
+    __atomic_sub_fetch(&g_framesInFlight, 1, __ATOMIC_ACQ_REL);
 }
 
 void GetCanvasSize(int* width, int* height)
@@ -262,12 +277,7 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
 
   InstallVsyncPump();
   if (IsTizenRuntime())
-  {
-    // Tizen TV runtimes can stop delivering rAF ticks consistently while
-    // modal UI is active. Keep the wait short so input and dialog loops do
-    // not appear frozen behind a long compositor wait.
-    g_vsyncWaitTimeoutMs = 8.0;
-  }
+    CLog::Log(LOGINFO, "WASM: Tizen runtime detected");
 
   CLog::Log(LOGINFO, "WASM: using standalone OffscreenCanvas + transferToImageBitmap ({}x{})",
             initW, initH);
