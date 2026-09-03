@@ -8,20 +8,23 @@
 //
 // Also installs a same-origin HTTP proxy shim (see tools/wasm/serve.py).
 // Any cross-origin http(s) XHR/fetch issued from the wasm module is
-// rewritten to Module.kodiHttpProxy + '?u=<encoded>' so it bypasses CORS
-// in the browser dev setup. Set Module.kodiHttpProxy = null before module
-// startup to disable (e.g. on Tizen, where the web runtime allows
-// cross-origin XHR directly).
+// rewritten to '/proxy?u=<encoded>' so it bypasses CORS in the browser dev
+// setup. This file runs in the main thread and in every pthread worker, and
+// workers do not see the page's Module settings, so the decision is made
+// from the environment: only a page served over http(s) has serve.py behind
+// it. A Tizen package loads from file:// and its runtime allows cross-origin
+// XHR directly.
 
 (function installHttpProxy(scope) {
-  var Module = (scope.Module = scope.Module || {});
-  if (Module.kodiHttpProxy === undefined) {
-    Module.kodiHttpProxy = '/proxy';
+  var servedOverHttp = scope.location && /^https?:$/.test(scope.location.protocol);
+  var onTizen = /Tizen/i.test((scope.navigator && scope.navigator.userAgent) || '');
+  if (!servedOverHttp || onTizen) {
+    return;
   }
+  var base = '/proxy';
 
   function rewrite(url) {
-    var base = Module.kodiHttpProxy;
-    if (!base || typeof url !== 'string') {
+    if (typeof url !== 'string') {
       return url;
     }
     try {
