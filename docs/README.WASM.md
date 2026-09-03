@@ -343,6 +343,24 @@ Retail TVs expose no application log over `sdb`. To get console output from the 
 tz run -d -p kodiplayer
 ```
 
+Debug mode makes the TV open a DevTools port for the app; it changes on every launch and has to be forwarded over `sdb` before Chrome can reach it. `tools/wasm/tizen/inspect.sh` does the whole sequence — launch, parse the port, forward it to `localhost:7011` — and is also available as a build target:
+```
+cmake --build $HOME/kodi/build-wasm --target inspect_tizen
+# or directly, with an optional device serial from `sdb devices`:
+TIZEN_TARGET_SERIAL=192.168.1.51:26101 tools/wasm/tizen/inspect.sh
+```
+
+Then, in Chrome on the development machine, open `chrome://inspect`, click **Configure...** next to *Discover network targets*, add `localhost:7011`, and click **inspect** on the Kodi target. This uses Chrome's own DevTools frontend; the page the TV serves at `http://localhost:7011/` lists the same targets but ships a DevTools frontend old enough to render blank in a current Chrome.
+
+What the inspector gives you on a retail TV:
+* **Console** — everything Kodi logs (`SetLogTarget("console")`) plus the `[KODI_DBG]` instrumentation ticks. Kodi is already running when the inspector attaches, so startup output is missed.
+* **Performance / Memory** — main-thread activity and JS heap. GPU memory is not exposed; infer it from growth in frame time or from the app being killed.
+* **Application → Storage** — the IndexedDB the Emscripten filesystem persists userdata into.
+
+Under the hood the script runs `sdb shell 0 debug kodiplayer.Kodi`, which prints `port: <n>`, followed by `sdb forward tcp:7011 tcp:<n>`. Override the app ID with `KODI_TIZEN_APP_ID` and the local port with `KODI_TIZEN_INSPECT_PORT`.
+
+If the launch reports `with debug 0` (`tz`) or answers `closed` (`sdb`), the TV declined to open a debug port even though the app is installed and signed with a Samsung developer certificate. Check on the TV that Developer mode is on and its Host PC IP is this machine's address, then reboot the TV; a 2025 Tizen 9.0 set still refused after both, and the cause there is not yet understood.
+
 **[back to top](#table-of-contents)** | **[back to section top](#7-package-and-install-on-a-samsung-tv)**
 
 ## Audio Worklet Notes

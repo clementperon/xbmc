@@ -122,6 +122,24 @@ if(WASM_TIZEN_TZ_EXECUTABLE)
     VERBATIM
   )
   set_target_properties(install_tizen_wgt PROPERTIES FOLDER "Build Utilities")
+
+  get_filename_component(WASM_TIZEN_CORE_DIR "${WASM_TIZEN_TZ_EXECUTABLE}" DIRECTORY)
+  find_program(WASM_TIZEN_SDB_EXECUTABLE
+    NAMES sdb
+    HINTS "${WASM_TIZEN_CORE_DIR}/.." "$ENV{TIZEN_SDK}/tools" "$ENV{TIZEN_SDK_ROOT}/tools"
+  )
+  if(WASM_TIZEN_SDB_EXECUTABLE)
+    add_custom_target(inspect_tizen
+      COMMAND ${CMAKE_COMMAND} -E env
+              "SDB=${WASM_TIZEN_SDB_EXECUTABLE}"
+              "TIZEN_TARGET_SERIAL=${WASM_TIZEN_INSTALL_SERIAL}"
+              sh "${WASM_TIZEN_TEMPLATE_DIR}/inspect.sh"
+      COMMENT "Launching Kodi on the TV under the Web Inspector"
+      USES_TERMINAL
+      VERBATIM
+    )
+    set_target_properties(inspect_tizen PROPERTIES FOLDER "Build Utilities")
+  endif()
 else()
   message(STATUS "WASM: tz CLI not found. Set TIZEN_CLI_PATH/TIZEN_TOOLS_PATH/TIZEN_SDK/TIZEN_SDK_ROOT to enable package_tizen_wgt.")
 endif()
