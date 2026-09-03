@@ -12,8 +12,10 @@ This file only describes what is in this directory and how it is staged.
 
 - `icon.png`: application icon shown in the TV's Apps panel; 512x423 24-bit RGB PNG as Samsung requires, rendered from `tools/Linux/packaging/media/iconScalable.svg`.
 - `config.xml`: Tizen widget metadata. Holds the application and package IDs
-  (`kodiplayer.Kodi` / `kodiplayer`), the `tv-samsung` profile and the widget
-  version.
+  (`kodiplayer.Kodi` / `kodiplayer`), the `tv-samsung` profile, the widget
+  version and the privileges Kodi needs: `internet`, and the public-level
+  Samsung `network.public` and `productinfo` privileges that let the System
+  Information window show the TV's network configuration, model and firmware.
 - `tizen_web_project.yaml.in`: CMake-configured Tizen web project config. Its
   `signing_profile` is intentionally empty, which makes `tz` sign with whichever
   security profile is active.

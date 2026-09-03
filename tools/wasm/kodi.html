@@ -178,6 +178,15 @@
        typeof window.webapis !== 'undefined' ||
        /Tizen/i.test(navigator.userAgent || ''));
 
+    // Samsung's product APIs (webapis.network, webapis.productinfo) live in a
+    // script the TV web runtime serves; Kodi reads network and device details
+    // from them. Skipped in ordinary browsers, where the file does not exist.
+    if (isTizenRuntime) {
+      var webapisScript = document.createElement('script');
+      webapisScript.src = '$WEBAPIS/webapis/webapis.js';
+      document.head.appendChild(webapisScript);
+    }
+
     // ---------------------------------------------------------------------
     // Tizen TV remote: keep navigation keys inside the app. Kodi consumes
     // them through the wasm input layer; prevent the TV browser from moving
