@@ -6,10 +6,12 @@ XBMC_PLATFORM_DIR=tvos
 #also skip binary addons (pvr, audioencoder) as long as they are deployed in tree
 cd $WORKSPACE;git clean -xfd -e "cmake/.last_success_revision" -e "tools/depends" ${DEPLOYED_BINARY_ADDONS}
 
-# if depends path has changed - cleanout everything and do a full rebuild
+# if depends changed - reconfigure and let make rebuild only the affected deps
 if [ "$(pathChanged $WORKSPACE/tools/depends)" == "1" ]
 then
-  #clean up the rest too
-  cd $WORKSPACE;git clean -xffd
+  if [ "$DEPENDS_FULL_REBUILD" == "1" ]
+  then
+    cd $WORKSPACE;git clean -xffd
+  fi
   cd $WORKSPACE/tools/depends/;./bootstrap
 fi
