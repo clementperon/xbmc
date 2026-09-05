@@ -10,8 +10,9 @@
 // webcodecs_bridge.js and linked via --js-library.
 //
 // The VideoDecoder lives on the browser main thread, so the JS library proxies
-// every call there via Emscripten's __proxy: 'sync' attribute; callers may
-// invoke these functions from any pthread.
+// every call there with Emscripten's __proxy attribute; callers may invoke
+// these functions from any pthread. The two per-packet calls are asynchronous
+// and report through WebCodecsSharedState, the others are synchronous.
 
 #include <cstdint>
 
@@ -33,16 +34,22 @@ enum WebCodecsPixelFormat
   WEBCODECS_PIXFMT_BGRX = 6,
 };
 
-// Status codes returned by webcodecs_push_packet.
-enum WebCodecsPushStatus
+// Outcome of a webcodecs_copy_next_frame request, published in
+// WebCodecsSharedState::copyResult once copyDone carries the request's id.
+enum WebCodecsCopyResult
 {
-  WEBCODECS_PUSH_QUEUED = 1,
-  WEBCODECS_PUSH_EMPTY = 0,
-  WEBCODECS_PUSH_HANDLE_NOT_FOUND = -1,
-  WEBCODECS_PUSH_DECODER_FAILED = -2,
-  WEBCODECS_PUSH_NOT_CONFIGURED = -3,
-  WEBCODECS_PUSH_DECODE_THREW = -4,
-  WEBCODECS_PUSH_BUSY = -5,
+  WEBCODECS_COPY_OK = 1,
+  WEBCODECS_COPY_FAILED = -1,
+  WEBCODECS_COPY_DST_TOO_SMALL = -2,
+  WEBCODECS_COPY_NO_FRAME = -3,
+};
+
+// Cap on decoder frames alive at once: pushed but not yet run by the main
+// thread, queued for decode, awaiting copy, or being copied. Hardware decoders
+// stall when too many output frames stay open.
+enum
+{
+  WEBCODECS_MAX_INFLIGHT = 12
 };
 
 // Metadata written by webcodecs_copy_next_frame. Field offsets are locked
@@ -71,11 +78,12 @@ struct WebCodecsSharedState
   int32_t signal;
   int32_t queuedFrames;
   int32_t inflight; // decodeQueueSize + frame copies still in progress
-  int32_t busy; // webcodecs_push_packet would return WEBCODECS_PUSH_BUSY
   int32_t failed;
   int32_t nextPayloadSize; // of the frame webcodecs_copy_next_frame returns next
   int32_t nextPixelFormat;
-  int32_t copyResult; // 0 while a webcodecs_copy_next_frame copy runs, then 1 or -1
+  int32_t pushesProcessed; // webcodecs_push_packet calls the main thread has run
+  int32_t copyDone; // copyId of the last finished webcodecs_copy_next_frame
+  int32_t copyResult; // WebCodecsCopyResult of that copy
 };
 
 #ifdef __cplusplus
@@ -83,15 +91,16 @@ struct WebCodecsSharedState
 
 #include <cstddef>
 
-static_assert(sizeof(WebCodecsSharedState) == 32, "WebCodecsSharedState must be 32 bytes");
+static_assert(sizeof(WebCodecsSharedState) == 36, "WebCodecsSharedState must be 36 bytes");
 static_assert(offsetof(WebCodecsSharedState, signal) == 0, "signal offset");
 static_assert(offsetof(WebCodecsSharedState, queuedFrames) == 4, "queuedFrames offset");
 static_assert(offsetof(WebCodecsSharedState, inflight) == 8, "inflight offset");
-static_assert(offsetof(WebCodecsSharedState, busy) == 12, "busy offset");
-static_assert(offsetof(WebCodecsSharedState, failed) == 16, "failed offset");
-static_assert(offsetof(WebCodecsSharedState, nextPayloadSize) == 20, "nextPayloadSize offset");
-static_assert(offsetof(WebCodecsSharedState, nextPixelFormat) == 24, "nextPixelFormat offset");
-static_assert(offsetof(WebCodecsSharedState, copyResult) == 28, "copyResult offset");
+static_assert(offsetof(WebCodecsSharedState, failed) == 12, "failed offset");
+static_assert(offsetof(WebCodecsSharedState, nextPayloadSize) == 16, "nextPayloadSize offset");
+static_assert(offsetof(WebCodecsSharedState, nextPixelFormat) == 20, "nextPixelFormat offset");
+static_assert(offsetof(WebCodecsSharedState, pushesProcessed) == 24, "pushesProcessed offset");
+static_assert(offsetof(WebCodecsSharedState, copyDone) == 28, "copyDone offset");
+static_assert(offsetof(WebCodecsSharedState, copyResult) == 32, "copyResult offset");
 
 static_assert(sizeof(WebCodecsFrameInfo) == 56, "WebCodecsFrameInfo must be 56 bytes");
 static_assert(offsetof(WebCodecsFrameInfo, pixelFormat) == 0, "pixelFormat offset");
@@ -129,23 +138,26 @@ void webcodecs_destroy_decoder(int handle);
 // reset() drops pending work and requires reconfigure(); the bridge handles both.
 int webcodecs_reset_decoder(int handle);
 
-// Feeds one encoded packet. Returns a WebCodecsPushStatus.
-int webcodecs_push_packet(int handle,
-                          const uint8_t* data,
-                          int size,
-                          int keyFrame,
-                          double ptsSeconds,
-                          double durationSeconds);
+// Feeds one encoded packet. Runs asynchronously on the main thread and takes
+// ownership of `data`, which must come from malloc(). Each call is counted in
+// WebCodecsSharedState::pushesProcessed once it has run; a packet the decoder
+// rejects puts it into the failed state.
+void webcodecs_push_packet(int handle,
+                           uint8_t* data,
+                           int size,
+                           int keyFrame,
+                           double ptsSeconds,
+                           double durationSeconds);
 
-// Fills *info and starts copying the next queued frame into [dst, dst+dstSize);
-// completion is reported through WebCodecsSharedState::copyResult and dst must
-// stay valid until then. Returns 1 if a copy was started, 0 if no frame is
-// available yet, -1 on decoder failure, and -2 if dst is too small for
-// info->payloadSize.
-int webcodecs_copy_next_frame(int handle,
-                              uint8_t* dst,
-                              int dstSize,
-                              struct WebCodecsFrameInfo* info);
+// Copies the next queued frame into [dst, dst+dstSize) and fills *info. Runs
+// asynchronously on the main thread; when the copy has finished,
+// WebCodecsSharedState::copyDone is set to copyId and copyResult to a
+// WebCodecsCopyResult. dst and info must stay valid until then.
+void webcodecs_copy_next_frame(int handle,
+                               int copyId,
+                               uint8_t* dst,
+                               int dstSize,
+                               struct WebCodecsFrameInfo* info);
 
 // Fills *info with the next queued frame's metadata and closes the frame without
 // copying it. Returns 1 if a frame was discarded, 0 if none was queued.

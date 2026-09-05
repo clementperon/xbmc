@@ -40,8 +40,9 @@ private:
   void PollDecoderStats();
   static int32_t SharedLoad(const int32_t& field);
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
+  bool DecoderBusy() const;
   bool WaitForDrain();
-  bool WaitForCopy();
+  int32_t WaitForCopy(int copyId);
   VCReturn DiscardNextFrame(VideoPicture* pVideoPicture);
   void ReleaseCopyBuffer();
   CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
@@ -80,6 +81,11 @@ private:
   WebCodecsSharedState m_shared{};
   // Handed to the JS bridge as copy destination; owned here until the copy settles.
   CVideoBuffer* m_copyBuffer{nullptr};
+  WebCodecsFrameInfo m_copyInfo{};
+  int m_copyId{0};
+  // Pushes issued; the bridge's pushesProcessed trails it by the calls the main
+  // thread has not run yet.
+  int m_pushCount{0};
 
   std::string m_codecString;
 };

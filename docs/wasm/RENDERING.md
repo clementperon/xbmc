@@ -168,7 +168,9 @@ thread:
 
 Kodi's per-frame GUI path is entirely in the first two groups; the
 synchronous calls happen at init (shader locations, `glGetString`), when a
-texture or buffer is first created, and for large texture uploads.
+texture or buffer is first created, and for large texture uploads. Video
+planes would be such uploads, so `CLinuxRendererGLES::LoadPlane` sends them
+in bands below 256 KB on this target (AVSYNC.md §4).
 `VerifyGLState()` (a `glGetError` per draw) is compiled out unless
 `GL_DEBUGGING` is defined. Without `-sFULL_ES2`/`-sFULL_ES3`,
 `glDrawElements` and `glVertexAttribPointer` stay asynchronous; with them

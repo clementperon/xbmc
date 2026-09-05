@@ -8,10 +8,10 @@
 // DVDVideoCodecWebCodecsBridge.h. Linked via --js-library (see
 // cmake/scripts/wasm/ArchSetup.cmake).
 //
-// Every exported function has __proxy:'sync' so calls from any pthread are
-// automatically marshalled to the main browser thread, where the VideoDecoder
-// lives. Decoder state the C++ side polls is mirrored into WebCodecsSharedState
-// with Atomics instead (see publishState) so polling needs no round trip.
+// Every exported function carries a __proxy attribute so calls from any pthread
+// are marshalled to the main browser thread, where the VideoDecoder lives. The
+// per-packet calls are 'async' and report through WebCodecsSharedState, which
+// the C++ side polls with Atomics instead of a round trip (see publishState).
 //
 // Function signatures must match the C prototypes; mismatched __sig will
 // silently corrupt arguments on threaded builds.
@@ -26,14 +26,9 @@ mergeInto(LibraryManager.library, {
   $WebCodecsBridge: {
     MICROSECONDS_PER_SECOND: 1000000.0,
     FRAME_QUEUE_HIGH_WATER: 24,
-    // Cap on decoder frames alive at once: queued for decode, held open
-    // awaiting copy, or being copied. Beyond this push_packet reports BUSY so
-    // VideoPlayer re-queues the packet; hardware decoders stall when too many
-    // output frames stay open.
-    MAX_INFLIGHT: 12,
 
     // Enum values below are pulled from the C++-owned Embind registrations
-    // (Module.WebCodecsPixelFormat / Module.WebCodecsPushStatus) on first use
+    // (Module.WebCodecsPixelFormat / Module.WebCodecsCopyResult) on first use
     // by syncEnumsFromEmbind(). The C++ header (DVDVideoCodecWebCodecsBridge.h)
     // is the single source of truth; do not hardcode these here.
     PIXFMT_UNKNOWN: 0,
@@ -43,13 +38,10 @@ mergeInto(LibraryManager.library, {
     PIXFMT_RGBX: 0,
     PIXFMT_BGRA: 0,
     PIXFMT_BGRX: 0,
-    PUSH_QUEUED: 0,
-    PUSH_EMPTY: 0,
-    PUSH_HANDLE_NOT_FOUND: 0,
-    PUSH_DECODER_FAILED: 0,
-    PUSH_NOT_CONFIGURED: 0,
-    PUSH_DECODE_THREW: 0,
-    PUSH_BUSY: 0,
+    COPY_OK: 0,
+    COPY_FAILED: 0,
+    COPY_DST_TOO_SMALL: 0,
+    COPY_NO_FRAME: 0,
     _enumsReady: false,
 
     // Byte offsets inside struct WebCodecsFrameInfo (kept in sync with the
@@ -71,11 +63,12 @@ mergeInto(LibraryManager.library, {
     SS_SIGNAL: 0,
     SS_QUEUED_FRAMES: 1,
     SS_INFLIGHT: 2,
-    SS_BUSY: 3,
-    SS_FAILED: 4,
-    SS_NEXT_PAYLOAD_SIZE: 5,
-    SS_NEXT_PIXFMT: 6,
-    SS_COPY_RESULT: 7,
+    SS_FAILED: 3,
+    SS_NEXT_PAYLOAD_SIZE: 4,
+    SS_NEXT_PIXFMT: 5,
+    SS_PUSHES_PROCESSED: 6,
+    SS_COPY_DONE: 7,
+    SS_COPY_RESULT: 8,
 
     // Registry is lazily created on first decoder creation; this library file
     // is merged into both the main thread and every pthread module, but only
@@ -97,8 +90,8 @@ mergeInto(LibraryManager.library, {
       if (this._enumsReady)
         return;
       const pf = Module['WebCodecsPixelFormat'];
-      const ps = Module['WebCodecsPushStatus'];
-      if (!pf || !ps)
+      const cr = Module['WebCodecsCopyResult'];
+      if (!pf || !cr)
         throw new Error('WebCodecs bridge enums missing from Module (Embind not linked?)');
       this.PIXFMT_UNKNOWN = pf.UNKNOWN.value;
       this.PIXFMT_YUV420P = pf.YUV420P.value;
@@ -107,13 +100,10 @@ mergeInto(LibraryManager.library, {
       this.PIXFMT_RGBX = pf.RGBX.value;
       this.PIXFMT_BGRA = pf.BGRA.value;
       this.PIXFMT_BGRX = pf.BGRX.value;
-      this.PUSH_QUEUED = ps.QUEUED.value;
-      this.PUSH_EMPTY = ps.EMPTY.value;
-      this.PUSH_HANDLE_NOT_FOUND = ps.HANDLE_NOT_FOUND.value;
-      this.PUSH_DECODER_FAILED = ps.DECODER_FAILED.value;
-      this.PUSH_NOT_CONFIGURED = ps.NOT_CONFIGURED.value;
-      this.PUSH_DECODE_THREW = ps.DECODE_THREW.value;
-      this.PUSH_BUSY = ps.BUSY.value;
+      this.COPY_OK = cr.OK.value;
+      this.COPY_FAILED = cr.FAILED.value;
+      this.COPY_DST_TOO_SMALL = cr.DST_TOO_SMALL.value;
+      this.COPY_NO_FRAME = cr.NO_FRAME.value;
       this._enumsReady = true;
     },
 
@@ -127,12 +117,6 @@ mergeInto(LibraryManager.library, {
       return queueSize + (state.copying ? 1 : 0);
     },
 
-    // Frames waiting to be copied hold decoder output buffers just like chunks
-    // still decoding, so both count against MAX_INFLIGHT.
-    isBusy: function(state) {
-      return this.inflight(state) + state.frames.length >= this.MAX_INFLIGHT;
-    },
-
     publishState: function(state) {
       if (!state.sharedPtr)
         return;
@@ -140,10 +124,11 @@ mergeInto(LibraryManager.library, {
       const next = state.frames.length > 0 ? state.frames[0] : null;
       Atomics.store(HEAP32, base + this.SS_QUEUED_FRAMES, state.frames.length);
       Atomics.store(HEAP32, base + this.SS_INFLIGHT, this.inflight(state));
-      Atomics.store(HEAP32, base + this.SS_BUSY, this.isBusy(state) ? 1 : 0);
       Atomics.store(HEAP32, base + this.SS_FAILED, state.failed ? 1 : 0);
       Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payloadSize : 0);
       Atomics.store(HEAP32, base + this.SS_NEXT_PIXFMT, next ? next.pixelFormat : this.PIXFMT_UNKNOWN);
+      Atomics.store(HEAP32, base + this.SS_PUSHES_PROCESSED, state.pushesProcessed);
+      Atomics.store(HEAP32, base + this.SS_COPY_DONE, state.copyDone);
       Atomics.store(HEAP32, base + this.SS_COPY_RESULT, state.copyResult);
       Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
@@ -298,7 +283,9 @@ mergeInto(LibraryManager.library, {
       lastTimestamp: 0,
       frames: [],
       copying: false,
+      copyDone: 0,
       copyResult: 0,
+      pushesProcessed: 0,
       scratch: null,
       directCopy: true,
       generation: 0,
@@ -334,7 +321,7 @@ mergeInto(LibraryManager.library, {
         return;
       }
 
-      // Safety valve: push_packet reports BUSY long before this is reached.
+      // Safety valve: the codec's in-flight cap keeps the queue far below this.
       if (state.frames.length >= WebCodecsBridge.FRAME_QUEUE_HIGH_WATER) {
         state.droppedFrames += 1;
         frame.close();
@@ -457,74 +444,79 @@ mergeInto(LibraryManager.library, {
   },
 
   // ---------------------------------------------------------------------------
-  webcodecs_push_packet__deps: ['$WebCodecsBridge'],
-  webcodecs_push_packet__proxy: 'sync',
-  webcodecs_push_packet__sig: 'iiiiidd',
+  // Asynchronous: the video thread never waits for the main thread here. The
+  // caller malloc'd the packet and this side frees it.
+  webcodecs_push_packet__deps: ['$WebCodecsBridge', 'free'],
+  webcodecs_push_packet__proxy: 'async',
+  webcodecs_push_packet__sig: 'viiiidd',
   webcodecs_push_packet: function(handle, dataPtr, dataSize, keyFrame, ptsSeconds, durationSeconds) {
     const B = WebCodecsBridge;
+    const payload = HEAPU8.slice(dataPtr, dataPtr + dataSize);
+    _free(dataPtr);
     const state = B.getState(handle);
-    if (!state) return B.PUSH_HANDLE_NOT_FOUND;
-    if (state.failed) return B.PUSH_DECODER_FAILED;
-    if (!state.decoder || state.decoder.state !== 'configured') {
-      if (!state.errorMessage)
+    if (!state) return;
+
+    state.pushesProcessed += 1;
+    if (!state.failed) {
+      if (!state.decoder || state.decoder.state !== 'configured') {
+        state.failed = true;
         state.errorMessage = 'decoder not configured (state=' +
           (state.decoder ? state.decoder.state : 'null') + ')';
-      return B.PUSH_NOT_CONFIGURED;
+      } else {
+        const tsMicros = Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND);
+        const durMicros = Math.max(0, Math.round(durationSeconds * B.MICROSECONDS_PER_SECOND));
+        try {
+          state.decoder.decode(new EncodedVideoChunk({
+            type: keyFrame ? 'key' : 'delta',
+            timestamp: tsMicros,
+            duration: durMicros > 0 ? durMicros : undefined,
+            data: payload,
+          }));
+        } catch (e) {
+          state.failed = true;
+          state.errorMessage = 'decode threw: ' + String(e);
+        }
+      }
     }
-
-    if (dataSize <= 0)
-      return B.PUSH_EMPTY;
-
-    if (B.isBusy(state))
-      return B.PUSH_BUSY;
-
-    const tsMicros = Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND);
-    const durMicros = Math.max(0, Math.round(durationSeconds * B.MICROSECONDS_PER_SECOND));
-    const payload = HEAPU8.slice(dataPtr, dataPtr + dataSize);
-
-    try {
-      state.decoder.decode(new EncodedVideoChunk({
-        type: keyFrame ? 'key' : 'delta',
-        timestamp: tsMicros,
-        duration: durMicros > 0 ? durMicros : undefined,
-        data: payload,
-      }));
-      B.publishState(state);
-      return B.PUSH_QUEUED;
-    } catch (e) {
-      state.failed = true;
-      state.errorMessage = 'decode threw: ' + String(e);
-      B.publishState(state);
-      return B.PUSH_DECODE_THREW;
-    }
+    B.publishState(state);
   },
 
   // ---------------------------------------------------------------------------
+  // Asynchronous; the outcome lands in copyDone/copyResult. The head frame is
+  // the one the caller sized its buffer for: only its own calls remove frames,
+  // and they run in order.
   webcodecs_copy_next_frame__deps: ['$WebCodecsBridge'],
-  webcodecs_copy_next_frame__proxy: 'sync',
-  webcodecs_copy_next_frame__sig: 'iiiii',
-  webcodecs_copy_next_frame: function(handle, dstPtr, dstSize, infoPtr) {
+  webcodecs_copy_next_frame__proxy: 'async',
+  webcodecs_copy_next_frame__sig: 'viiiii',
+  webcodecs_copy_next_frame: function(handle, copyId, dstPtr, dstSize, infoPtr) {
     const B = WebCodecsBridge;
     const state = B.getState(handle);
-    if (!state) return 0;
-    if (state.failed) return -1;
-    if (state.copying || state.frames.length === 0) return 0;
+    if (!state) return;
+
+    const finish = (result) => {
+      state.copyDone = copyId;
+      state.copyResult = result;
+      B.publishState(state);
+    };
+    if (state.failed || state.copying) return finish(B.COPY_FAILED);
+    if (state.frames.length === 0) return finish(B.COPY_NO_FRAME);
 
     const entry = state.frames[0];
-    B.writeFrameInfo(infoPtr, entry);
-    if (entry.payloadSize > dstSize)
-      return -2;
+    if (entry.payloadSize > dstSize) {
+      B.writeFrameInfo(infoPtr, entry);
+      return finish(B.COPY_DST_TOO_SMALL);
+    }
 
     state.frames.shift();
     state.copying = true;
-    state.copyResult = 0;
     const generation = state.generation;
-    B.publishState(state);
-
+    let result = B.COPY_FAILED;
     B.copyFrame(state, entry, dstPtr).then(() => {
-      state.copyResult = 1;
+      // The codec, and with it infoPtr, may be gone after a destroy.
+      if (state.sharedPtr)
+        B.writeFrameInfo(infoPtr, entry);
+      result = B.COPY_OK;
     }, (e) => {
-      state.copyResult = -1;
       if (state.generation === generation) {
         state.failed = true;
         state.errorMessage = 'frame copy failed: ' + String(e);
@@ -532,9 +524,8 @@ mergeInto(LibraryManager.library, {
     }).finally(() => {
       entry.frame.close();
       state.copying = false;
-      B.publishState(state);
+      finish(result);
     });
-    return 1;
   },
 
   // ---------------------------------------------------------------------------

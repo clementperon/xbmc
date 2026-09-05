@@ -166,14 +166,14 @@ the temporal unit for AV1. The decoder is configured with
 │   AddData(packet):                                                 │
 │     PacketIsKeyFrame() parses the bitstream (IDR, IRAP, VPx, AV1)  │
 │     skip deltas until the first key                                 │
-│     shared.busy? → return false (VideoPlayer re-queues the packet)  │
-│     webcodecs_push_packet()               ── sync proxy ──►  main   │
+│     DecoderBusy()? → return false (VideoPlayer re-queues the packet)│
+│     webcodecs_push_packet(copy)          ── async proxy ──►  main   │
 │   GetPicture():                                                     │
 │     shared.queuedFrames == 0 → VC_BUFFER (futex wait ≤20 ms if busy)│
 │     DROP flag set? → webcodecs_discard_next_frame() ── sync ──► main │
 │     pool.Get() → CVideoBufferSysMem sized from shared.nextPayloadSize│
-│     webcodecs_copy_next_frame(dst)        ── sync proxy ──►  main   │
-│     futex wait on shared.signal until shared.copyResult != 0        │
+│     webcodecs_copy_next_frame(dst, id)   ── async proxy ──►  main   │
+│     futex wait on shared.signal until shared.copyDone == id         │
 │     packed RGB? → sws_scale → YUV420P (see 3.5)                     │
 │     fill VideoPicture{pts, duration, colour metadata} → VC_PICTURE  │
 └─────────────────────────────┬──────────────────────────────────────┘
@@ -188,12 +188,23 @@ the temporal unit for AV1. The decoder is configured with
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-`WebCodecsSharedState` (32 bytes, layout asserted in
+`WebCodecsSharedState` (36 bytes, layout asserted in
 `DVDVideoCodecWebCodecsBridge.h`) carries `signal`, `queuedFrames`,
-`inflight`, `busy`, `failed`, `nextPayloadSize`, `nextPixelFormat` and
-`copyResult`. The JS side rewrites all of them and bumps `signal` on every
-state change, so the C++ side reads them with acquire loads and only ever
-blocks in `emscripten_futex_wait(&signal, seen, timeout)`.
+`inflight`, `failed`, `nextPayloadSize`, `nextPixelFormat`,
+`pushesProcessed`, `copyDone` and `copyResult`. The JS side rewrites all of
+them and bumps `signal` on every state change, so the C++ side reads them
+with acquire loads and only ever blocks in
+`emscripten_futex_wait(&signal, seen, timeout)`.
+
+The two calls made for every packet, `webcodecs_push_packet` and
+`webcodecs_copy_next_frame`, are asynchronous proxies: they return as soon
+as the call is queued for the main thread, so the video thread never waits
+for the main thread to be free. A push takes a `malloc`'d copy of the packet
+that the JS side frees, and is counted in `pushesProcessed` once it has run.
+A copy carries an id; the JS side writes the frame metadata, sets `copyDone`
+to that id and `copyResult` to the outcome, and the codec waits on the futex
+for exactly that id. The remaining calls (create, reset, destroy, discard,
+stats, error text) are synchronous and rare.
 
 ### 3.3 Backpressure
 
@@ -201,7 +212,7 @@ Two limits, both enforced on the main thread:
 
 | Limit | Value | Effect |
 |---|---|---|
-| `MAX_INFLIGHT` | 12 | `busy` is set when `decodeQueueSize + copying + queuedFrames` reaches it; `push_packet` applies the same rule. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
+| `WEBCODECS_MAX_INFLIGHT` | 12 | The codec is busy when `pending pushes + inflight + queuedFrames` reaches it, where pending pushes are its own push count minus `pushesProcessed`. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
 | `FRAME_QUEUE_HIGH_WATER` | 24 | Safety valve in the output callback: frames beyond it are closed and counted as dropped. Not reached while `busy` works. |
 
 Decoded frames stay open on the main thread until the codec asks for one,
@@ -299,9 +310,10 @@ the numbers the two previous sections provide.
 5. **Upload and draw.** `CLinuxRendererGLES` uploads the planes with
    `glTexSubImage2D` from the render pthread. Under Emscripten's proxying,
    uploads of 256 KB or more are synchronous round trips to the main
-   thread (`system/lib/gl/webgl1.c`), and a 1080p luma plane is 2 MB, so
-   the video upload is the one place per frame where the render thread
-   blocks on main.
+   thread (`system/lib/gl/webgl1.c`), so on this target `LoadPlane` cuts
+   each plane into bands below that size. Every band is copied and queued
+   like the GUI's own calls, and the render thread only meets the main
+   thread at `commit_frame`.
 6. **Display-as-clock.** `CVideoSyncWasm` feeds `CVideoReferenceClock` from
    the same rAF pump: the pump stores each tick's timestamp in
    `CurrentHostCounter()` units (both are `performance.timeOrigin +
@@ -340,18 +352,12 @@ Ordered by expected impact on a two-core Tizen TV.
    RGBA and draw it without a colour conversion removes the pass entirely;
    it is the cheapest sysmem path possible short of the video-plane design
    in RENDERING.md §9.3.
-2. **`push_packet` is a synchronous proxy call per packet.** Only the
-   return status needs the round trip, and `busy` / `failed` are already in
-   shared memory. An asynchronous variant has to copy the packet before
-   dispatching (the DemuxPacket does not outlive the call), which is a
-   `memdup` per packet — cheaper than blocking the video thread behind a
-   busy main thread.
-3. **The last frames of a stream can be lost.** Drain does not flush
+2. **The last frames of a stream can be lost.** Drain does not flush
    (§3.6), so a decoder that withholds output until it sees more input
    never emits its final frames at end of stream. Flushing only when the
    player knows the stream has really ended would need a new codec-control
    flag.
-4. **10-bit output is not accepted.** The bridge describes I420, NV12 and
+3. **10-bit output is not accepted.** The bridge describes I420, NV12 and
    packed RGB frames only. A decoder that emits `I420P10` for HEVC Main 10,
    VP9 profile 2 or 10-bit AV1 fails the stream rather than falling back;
    accepting those formats needs the 16-bit plane layout in `describeFrame`
