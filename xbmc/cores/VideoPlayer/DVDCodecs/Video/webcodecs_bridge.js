@@ -241,6 +241,8 @@ mergeInto(LibraryManager.library, {
       if (height > 0) config.codedHeight = height;
       if (state.codec.startsWith('avc1'))
         config.avc = { format: state.annexB ? 'annexb' : 'avc' };
+      else if (state.codec.startsWith('hvc1') || state.codec.startsWith('hev1'))
+        config.hevc = { format: state.annexB ? 'annexb' : 'hevc' };
       if (state.description)
         config.description = state.description;
       return config;

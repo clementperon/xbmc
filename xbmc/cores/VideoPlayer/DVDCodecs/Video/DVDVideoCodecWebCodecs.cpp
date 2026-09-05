@@ -10,6 +10,7 @@
 #include "DVDVideoCodecWebCodecsBridge.h"
 #include "cores/VideoPlayer/Buffers/VideoBuffer.h"
 #include "cores/VideoPlayer/Interface/TimingConstants.h"
+#include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <algorithm>
@@ -78,6 +79,31 @@ constexpr uint8_t H264_AVCC_LENGTH_SIZE_MASK = 0x03;
 constexpr uint8_t H264_NAL_TYPE_MASK = 0x1F;
 constexpr uint8_t H264_NAL_TYPE_IDR = 5;
 
+constexpr int HEVC_HVCC_MIN_EXTRADATA_SIZE = 23;
+constexpr uint8_t HEVC_HVCC_CONFIG_VERSION = 1;
+constexpr int HEVC_HVCC_PROFILE_OFFSET = 1;
+constexpr int HEVC_HVCC_COMPAT_FLAGS_OFFSET = 2;
+constexpr int HEVC_HVCC_CONSTRAINT_FLAGS_OFFSET = 6;
+constexpr int HEVC_HVCC_CONSTRAINT_FLAGS_SIZE = 6;
+constexpr int HEVC_HVCC_LEVEL_OFFSET = 12;
+constexpr int HEVC_HVCC_LENGTH_SIZE_OFFSET = 21;
+constexpr uint8_t HEVC_HVCC_LENGTH_SIZE_MASK = 0x03;
+constexpr int HEVC_MAX_PROFILE_IDC = 31;
+constexpr int HEVC_DEFAULT_LEVEL_IDC = 120;
+
+constexpr uint8_t HEVC_NAL_TYPE_MASK = 0x3F;
+constexpr uint8_t HEVC_NAL_TYPE_BLA_W_LP = 16;
+constexpr uint8_t HEVC_NAL_TYPE_RSV_IRAP_VCL23 = 23;
+
+constexpr int AV1_AV1C_MIN_EXTRADATA_SIZE = 4;
+constexpr uint8_t AV1_AV1C_MARKER_AND_VERSION = 0x81;
+constexpr int AV1_OBU_SEQUENCE_HEADER = 1;
+constexpr int AV1_OBU_FRAME_HEADER = 3;
+constexpr int AV1_OBU_FRAME = 6;
+constexpr int AV1_FRAME_TYPE_KEY = 0;
+constexpr int AV1_MAX_LEVEL_IDX = 31;
+constexpr int AV1_DEFAULT_LEVEL_IDX = 8;
+
 constexpr uint8_t ANNEXB_START_CODE_BYTE = 0x01;
 
 constexpr int VP9_FRAME_MARKER = 2;
@@ -113,6 +139,20 @@ bool HasAVCCExtradata(const CDVDStreamInfo& hints)
          hints.extradata.GetData()[0] == H264_AVCC_CONFIG_VERSION;
 }
 
+// An HEVCDecoderConfigurationRecord has 22 fixed bytes followed by numOfArrays.
+bool HasHVCCExtradata(const CDVDStreamInfo& hints)
+{
+  return hints.extradata.GetSize() >= HEVC_HVCC_MIN_EXTRADATA_SIZE &&
+         hints.extradata.GetData()[0] == HEVC_HVCC_CONFIG_VERSION;
+}
+
+// An AV1CodecConfigurationRecord starts with marker = 1 and version = 1.
+bool HasAV1CExtradata(const CDVDStreamInfo& hints)
+{
+  return hints.extradata.GetSize() >= AV1_AV1C_MIN_EXTRADATA_SIZE &&
+         hints.extradata.GetData()[0] == AV1_AV1C_MARKER_AND_VERSION;
+}
+
 std::string BuildH264CodecString(const CDVDStreamInfo& hints)
 {
   const auto& extradata = hints.extradata;
@@ -128,6 +168,75 @@ std::string BuildH264CodecString(const CDVDStreamInfo& hints)
   }
 
   return "avc1.42E01E";
+}
+
+// ISO/IEC 14496-15 Annex E: hvc1.<profile space + idc>.<compatibility flags,
+// bit-reversed hex>.<tier><level>.<constraint bytes, trailing zeros dropped>.
+std::string BuildHEVCCodecString(const CDVDStreamInfo& hints)
+{
+  if (!HasHVCCExtradata(hints))
+  {
+    // Parameter sets travel in-band. A Main stream is also Main 10 compatible.
+    const int profile =
+        hints.profile > 0 ? std::min(hints.profile, HEVC_MAX_PROFILE_IDC) : AV_PROFILE_HEVC_MAIN;
+    const unsigned int compat =
+        (1u << profile) | (profile == AV_PROFILE_HEVC_MAIN ? 1u << AV_PROFILE_HEVC_MAIN_10 : 0u);
+    const int level = hints.level > 0 ? hints.level : HEVC_DEFAULT_LEVEL_IDC;
+    return StringUtils::Format("hev1.{}.{:X}.L{}.B0", profile, compat, level);
+  }
+
+  const uint8_t* record = hints.extradata.GetData();
+  const uint8_t profileByte = record[HEVC_HVCC_PROFILE_OFFSET];
+  const int profileSpace = profileByte >> 6;
+  const bool highTier = (profileByte & 0x20) != 0;
+  const int profileIdc = profileByte & 0x1F;
+
+  uint32_t compat = 0;
+  for (int i = 0; i < 4; ++i)
+    compat = (compat << 8) | record[HEVC_HVCC_COMPAT_FLAGS_OFFSET + i];
+  uint32_t reversedCompat = 0;
+  for (int i = 0; i < 32; ++i, compat >>= 1)
+    reversedCompat = (reversedCompat << 1) | (compat & 1u);
+
+  std::string codec = "hvc1.";
+  if (profileSpace > 0)
+    codec += static_cast<char>('A' + profileSpace - 1);
+  codec += StringUtils::Format("{}.{:X}.{}{}", profileIdc, reversedCompat, highTier ? 'H' : 'L',
+                               static_cast<int>(record[HEVC_HVCC_LEVEL_OFFSET]));
+
+  int constraintBytes = HEVC_HVCC_CONSTRAINT_FLAGS_SIZE;
+  while (constraintBytes > 0 &&
+         record[HEVC_HVCC_CONSTRAINT_FLAGS_OFFSET + constraintBytes - 1] == 0)
+    --constraintBytes;
+  for (int i = 0; i < constraintBytes; ++i)
+    codec += StringUtils::Format(".{:X}",
+                                 static_cast<int>(record[HEVC_HVCC_CONSTRAINT_FLAGS_OFFSET + i]));
+  return codec;
+}
+
+// AV1 ISOBMFF binding: av01.<profile>.<level><tier>.<bit depth>. The optional
+// colour fields default to the 4:2:0 stream types WebCodecs decodes.
+std::string BuildAV1CodecString(const CDVDStreamInfo& hints)
+{
+  int profile = std::clamp(hints.profile, 0, static_cast<int>(AV_PROFILE_AV1_PROFESSIONAL));
+  int levelIdx =
+      hints.level >= 0 && hints.level <= AV1_MAX_LEVEL_IDX ? hints.level : AV1_DEFAULT_LEVEL_IDX;
+  bool highTier = false;
+  int bitDepth = hints.bitdepth > 0 ? hints.bitdepth : 8;
+
+  if (HasAV1CExtradata(hints))
+  {
+    const uint8_t* record = hints.extradata.GetData();
+    profile = record[1] >> 5;
+    levelIdx = record[1] & 0x1F;
+    highTier = (record[2] & 0x80) != 0;
+    const bool highBitdepth = (record[2] & 0x40) != 0;
+    const bool twelveBit = (record[2] & 0x20) != 0;
+    bitDepth = highBitdepth ? (twelveBit ? 12 : 10) : 8;
+  }
+
+  return StringUtils::Format("av01.{}.{:02}{}.{:02}", profile, levelIdx, highTier ? 'H' : 'M',
+                             bitDepth);
 }
 
 int ClampTwoDigitCodecValue(int value, int fallback)
@@ -165,8 +274,22 @@ std::string BuildVP9CodecString(const CDVDStreamInfo& hints)
   return buffer;
 }
 
-// Returns true if the H.264 sample contains an IDR NAL unit.
-bool H264SampleContainsIDR(const uint8_t* data, int size, int nalLengthSize)
+using NalPredicate = bool (*)(uint8_t firstHeaderByte);
+
+bool H264NalIsIDR(uint8_t firstHeaderByte)
+{
+  return (firstHeaderByte & H264_NAL_TYPE_MASK) == H264_NAL_TYPE_IDR;
+}
+
+bool HEVCNalIsIRAP(uint8_t firstHeaderByte)
+{
+  const uint8_t type = (firstHeaderByte >> 1) & HEVC_NAL_TYPE_MASK;
+  return type >= HEVC_NAL_TYPE_BLA_W_LP && type <= HEVC_NAL_TYPE_RSV_IRAP_VCL23;
+}
+
+// Walks the NAL units of a sample, length-prefixed when nalLengthSize > 0 and
+// Annex B otherwise, and returns true if any satisfies isKeyNal.
+bool SampleHasKeyNalUnit(const uint8_t* data, int size, int nalLengthSize, NalPredicate isKeyNal)
 {
   if (!data || size <= 0)
     return false;
@@ -182,7 +305,7 @@ bool H264SampleContainsIDR(const uint8_t* data, int size, int nalLengthSize)
       offset += nalLengthSize;
       if (nalSize == 0 || offset + static_cast<int>(nalSize) > size)
         break;
-      if ((data[offset] & H264_NAL_TYPE_MASK) == H264_NAL_TYPE_IDR)
+      if (isKeyNal(data[offset]))
         return true;
       offset += nalSize;
     }
@@ -199,8 +322,94 @@ bool H264SampleContainsIDR(const uint8_t* data, int size, int nalLengthSize)
       continue;
 
     const int nalStart = threeByteStart ? i + 3 : i + 4;
-    if (nalStart < size && (data[nalStart] & H264_NAL_TYPE_MASK) == H264_NAL_TYPE_IDR)
+    if (nalStart < size && isKeyNal(data[nalStart]))
       return true;
+  }
+  return false;
+}
+
+// MSB-first bit reader; reads past the end yield zero bits.
+class CBitReader
+{
+public:
+  CBitReader(const uint8_t* data, int size) : m_data(data), m_bits(size * 8) {}
+
+  uint32_t Read(int count)
+  {
+    uint32_t value = 0;
+    for (int i = 0; i < count; ++i)
+    {
+      const uint32_t bit = m_pos < m_bits ? (m_data[m_pos >> 3] >> (7 - (m_pos & 7))) & 1u : 0u;
+      ++m_pos;
+      value = (value << 1) | bit;
+    }
+    return value;
+  }
+
+private:
+  const uint8_t* m_data;
+  int m_bits;
+  int m_pos{0};
+};
+
+bool ReadLeb128(const uint8_t* data, int size, int& offset, uint32_t& value)
+{
+  value = 0;
+  for (int i = 0; i < 8; ++i)
+  {
+    if (offset >= size)
+      return false;
+    const uint8_t byte = data[offset++];
+    value |= static_cast<uint32_t>(byte & 0x7F) << (7 * i);
+    if ((byte & 0x80) == 0)
+      return true;
+  }
+  return false;
+}
+
+// A key temporal unit starts with a key frame. frame_type follows
+// show_existing_frame in the uncompressed header unless the sequence header
+// sets reduced_still_picture_header, which makes every frame a key frame.
+bool AV1TemporalUnitIsKeyFrame(const uint8_t* data, int size)
+{
+  if (!data || size <= 0)
+    return false;
+
+  bool reducedStillPictureHeader = false;
+  int offset = 0;
+  while (offset < size)
+  {
+    const uint8_t header = data[offset++];
+    if ((header & 0x80) != 0)
+      return false;
+    const int obuType = (header >> 3) & 0x0F;
+    const bool hasExtension = (header & 0x04) != 0;
+    const bool hasSize = (header & 0x02) != 0;
+    if (hasExtension && offset++ >= size)
+      return false;
+
+    uint32_t obuSize = static_cast<uint32_t>(size - offset);
+    if (hasSize && !ReadLeb128(data, size, offset, obuSize))
+      return false;
+    if (obuSize > static_cast<uint32_t>(size - offset))
+      return false;
+
+    CBitReader bits(data + offset, static_cast<int>(obuSize));
+    if (obuType == AV1_OBU_SEQUENCE_HEADER)
+    {
+      bits.Read(3); // seq_profile
+      bits.Read(1); // still_picture
+      reducedStillPictureHeader = bits.Read(1) != 0;
+    }
+    else if (obuType == AV1_OBU_FRAME_HEADER || obuType == AV1_OBU_FRAME)
+    {
+      if (reducedStillPictureHeader)
+        return true;
+      if (bits.Read(1) != 0) // show_existing_frame
+        return false;
+      return bits.Read(2) == AV1_FRAME_TYPE_KEY;
+    }
+    offset += static_cast<int>(obuSize);
   }
   return false;
 }
@@ -248,11 +457,15 @@ bool PacketIsKeyFrame(const CDVDStreamInfo& hints, const DemuxPacket& packet, in
   switch (hints.codec)
   {
     case AV_CODEC_ID_H264:
-      return H264SampleContainsIDR(packet.pData, packet.iSize, nalLengthSize);
+      return SampleHasKeyNalUnit(packet.pData, packet.iSize, nalLengthSize, H264NalIsIDR);
+    case AV_CODEC_ID_HEVC:
+      return SampleHasKeyNalUnit(packet.pData, packet.iSize, nalLengthSize, HEVCNalIsIRAP);
     case AV_CODEC_ID_VP8:
       return VP8SampleIsKeyFrame(packet.pData, packet.iSize);
     case AV_CODEC_ID_VP9:
       return VP9SampleIsKeyFrame(packet.pData, packet.iSize);
+    case AV_CODEC_ID_AV1:
+      return AV1TemporalUnitIsKeyFrame(packet.pData, packet.iSize);
     default:
       return false;
   }
@@ -362,64 +575,71 @@ bool CDVDVideoCodecWebCodecs::Register()
 
 bool CDVDVideoCodecWebCodecs::SupportsCodec(const CDVDStreamInfo& hints) const
 {
-  return hints.codec == AV_CODEC_ID_H264 || hints.codec == AV_CODEC_ID_VP8 ||
-         hints.codec == AV_CODEC_ID_VP9;
+  return hints.codec == AV_CODEC_ID_H264 || hints.codec == AV_CODEC_ID_HEVC ||
+         hints.codec == AV_CODEC_ID_VP8 || hints.codec == AV_CODEC_ID_VP9 ||
+         hints.codec == AV_CODEC_ID_AV1;
 }
 
+// Only the AVC and HEVC configuration records are passed as description; with
+// them the packets are length-prefixed, without them they are Annex B with the
+// parameter sets in-band. VP8, VP9 and AV1 carry everything in the bitstream.
 bool CDVDVideoCodecWebCodecs::BuildCodecConfiguration(const CDVDStreamInfo& hints)
 {
   m_codecString.clear();
   m_annexB = false;
   m_nalLengthSize = 0;
+  m_hasDescription = false;
 
-  if (hints.codec == AV_CODEC_ID_H264)
+  switch (hints.codec)
   {
-    m_codecString = BuildH264CodecString(hints);
-    if (HasAVCCExtradata(hints))
-    {
-      m_annexB = false;
-      m_nalLengthSize =
-          (hints.extradata.GetData()[H264_AVCC_LENGTH_SIZE_OFFSET] & H264_AVCC_LENGTH_SIZE_MASK) +
-          1;
-    }
-    else
-    {
-      m_annexB = true;
-      m_nalLengthSize = 0;
-    }
-    return true;
+    case AV_CODEC_ID_H264:
+      m_codecString = BuildH264CodecString(hints);
+      m_hasDescription = HasAVCCExtradata(hints);
+      m_annexB = !m_hasDescription;
+      if (m_hasDescription)
+        m_nalLengthSize =
+            (hints.extradata.GetData()[H264_AVCC_LENGTH_SIZE_OFFSET] & H264_AVCC_LENGTH_SIZE_MASK) +
+            1;
+      return true;
+    case AV_CODEC_ID_HEVC:
+      m_codecString = BuildHEVCCodecString(hints);
+      m_hasDescription = HasHVCCExtradata(hints);
+      m_annexB = !m_hasDescription;
+      if (m_hasDescription)
+        m_nalLengthSize =
+            (hints.extradata.GetData()[HEVC_HVCC_LENGTH_SIZE_OFFSET] & HEVC_HVCC_LENGTH_SIZE_MASK) +
+            1;
+      return true;
+    case AV_CODEC_ID_VP8:
+      m_codecString = "vp8";
+      return true;
+    case AV_CODEC_ID_VP9:
+      m_codecString = BuildVP9CodecString(hints);
+      return true;
+    case AV_CODEC_ID_AV1:
+      m_codecString = BuildAV1CodecString(hints);
+      return true;
+    default:
+      return false;
   }
-
-  if (hints.codec == AV_CODEC_ID_VP9)
-  {
-    m_codecString = BuildVP9CodecString(hints);
-    return true;
-  }
-
-  if (hints.codec == AV_CODEC_ID_VP8)
-  {
-    m_codecString = "vp8";
-    return true;
-  }
-
-  return false;
 }
 
 bool CDVDVideoCodecWebCodecs::CreateDecoder()
 {
-  const uint8_t* extraData = m_hints.extradata.GetData();
-  const int extraDataSize = static_cast<int>(m_hints.extradata.GetSize());
+  const uint8_t* description = m_hasDescription ? m_hints.extradata.GetData() : nullptr;
+  const int descriptionSize = m_hasDescription ? static_cast<int>(m_hints.extradata.GetSize()) : 0;
 
   m_shared = {};
-  m_decoderHandle = webcodecs_create_decoder(m_codecString.c_str(), m_hints.width, m_hints.height,
-                                             extraData, extraDataSize, m_annexB ? 1 : 0, &m_shared);
+  m_decoderHandle =
+      webcodecs_create_decoder(m_codecString.c_str(), m_hints.width, m_hints.height, description,
+                               descriptionSize, m_annexB ? 1 : 0, &m_shared);
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
   {
     CLog::Log(LOGDEBUG,
               "CDVDVideoCodecWebCodecs::CreateDecoder - unable to configure decoder for {} "
-              "(annexB={}, extradataSize={}, {}x{}): check that VideoDecoder is available and "
+              "(annexB={}, descriptionSize={}, {}x{}): check that VideoDecoder is available and "
               "that the codec/description match the stream",
-              m_codecString, m_annexB, extraDataSize, m_hints.width, m_hints.height);
+              m_codecString, m_annexB, descriptionSize, m_hints.width, m_hints.height);
     return false;
   }
 
