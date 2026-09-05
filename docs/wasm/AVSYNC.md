@@ -281,21 +281,29 @@ the numbers the two previous sections provide.
    futex of RENDERING.md §2.3, and shows the queued picture whose pts is
    closest to `clock + displayLatency`. `GetFPS()` is the refresh rate the
    rAF pump measured at window creation.
-4. **Display latency.** `CWinSystemWasmGLESContext` does not override
-   `GetDisplayLatency()`, so Kodi uses the generic fallback
-   `(videoscreen.noofbuffers + 1) / fps`, 66.7 ms at 60 Hz with the default
-   of 3. The real figure is the proxied GL queue plus `commit_frame` plus
-   the compositor, roughly one to two refresh intervals; the user-facing
-   audio offset setting absorbs the difference for now.
+4. **Display latency.** `CWinSystemWasmGLESContext::GetDisplayLatency()`
+   reports two refresh intervals, 33.3 ms at 60 Hz: `PrepareNextRender` runs
+   in the display frame the rAF tick started, the commit lands in that same
+   frame, the compositor picks the canvas up at the next frame boundary and
+   the panel scans it out one interval later. Inside a modal dialog's nested
+   loop `PresentRenderImpl` first waits for a tick, which adds up to one more
+   interval. Panel processing is invisible to Kodi on every platform; the
+   audio offset setting absorbs it.
 5. **Upload and draw.** `CLinuxRendererGLES` uploads the planes with
    `glTexSubImage2D` from the render pthread. Under Emscripten's proxying,
    uploads of 256 KB or more are synchronous round trips to the main
    thread (`system/lib/gl/webgl1.c`), and a 1080p luma plane is 2 MB, so
    the video upload is the one place per frame where the render thread
    blocks on main.
-6. **Display-as-clock.** The wasm window system provides no `CVideoSync`,
-   so `videoplayer.usedisplayasclock` falls back to the system clock. The
-   audio-master path above does not need it.
+6. **Display-as-clock.** `CVideoSyncWasm` feeds `CVideoReferenceClock` from
+   the same rAF pump: the pump stores each tick's timestamp in
+   `CurrentHostCounter()` units (both are `performance.timeOrigin +
+   performance.now()` under pthreads), and the vblank count is derived from
+   the time between ticks because the browser skips `requestAnimationFrame`
+   callbacks while its main thread is busy. With *Sync playback to display*
+   enabled the player clock therefore follows the display, audio is
+   resampled to it, and `CRenderManager` runs its clock-sync mode; the
+   default audio-master path is unchanged.
 
 ---
 
@@ -331,16 +339,12 @@ Ordered by expected impact on a two-core Tizen TV.
    dispatching (the DemuxPacket does not outlive the call), which is a
    `memdup` per packet — cheaper than blocking the video thread behind a
    busy main thread.
-3. **Display latency is the generic fallback.** A `GetDisplayLatency()`
-   override measured from the rAF pump, or a `CVideoSync` implementation
-   fed by the same `g_vsyncTick` counter, would give `CRenderManager`
-   both the real latency and the clock-sync mode.
-4. **The last frames of a stream can be lost.** Drain does not flush
+3. **The last frames of a stream can be lost.** Drain does not flush
    (§3.6), so a decoder that withholds output until it sees more input
    never emits its final frames at end of stream. Flushing only when the
    player knows the stream has really ended would need a new codec-control
    flag.
-5. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
+4. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
    in hardware; both map onto WebCodecs (`hvc1.`/`hev1.` from `hvcC`,
    `av01.` from `av1C`) with the same bridge.
 
@@ -357,4 +361,6 @@ Ordered by expected impact on a two-core Tizen TV.
 | Main-thread `VideoDecoder` driver | `xbmc/cores/VideoPlayer/DVDCodecs/Video/webcodecs_bridge.js` |
 | Keyframe flag from the demuxer (fallback only) | `xbmc/cores/VideoPlayer/Interface/DemuxPacket.h`, `DVDDemuxers/DVDDemuxFFmpeg.cpp` |
 | Sync-error diagnostics | `xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp` |
+| Vsync pump shared with the GUI present path | `xbmc/windowing/wasm/WasmVsync.cpp` |
+| Video sync for `CVideoReferenceClock`, display latency | `xbmc/windowing/wasm/VideoSyncWasm.cpp`, `WinSystemWasmGLESContext.cpp` |
 | Link flags (`-sAUDIO_WORKLET`, `-sWASM_WORKERS`, `--js-library`) | `cmake/scripts/wasm/ArchSetup.cmake` |

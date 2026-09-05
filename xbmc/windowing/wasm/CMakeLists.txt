@@ -1,10 +1,14 @@
-set(SOURCES WinEventsWasm.cpp
+set(SOURCES VideoSyncWasm.cpp
+            WinEventsWasm.cpp
             WasmClipboard.cpp
-            WasmKeyboard.cpp)
+            WasmKeyboard.cpp
+            WasmVsync.cpp)
 
-set(HEADERS WinEventsWasm.h
+set(HEADERS VideoSyncWasm.h
+            WinEventsWasm.h
             WasmClipboard.h
-            WasmKeyboard.h)
+            WasmKeyboard.h
+            WasmVsync.h)
 
 if(TARGET ${APP_NAME_LC}::OpenGLES)
   list(APPEND SOURCES WinSystemWasmGLESContext.cpp)

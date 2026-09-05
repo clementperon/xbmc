@@ -5,7 +5,9 @@
 
 #include "WinSystemWasmGLESContext.h"
 
+#include "VideoSyncWasm.h"
 #include "WasmClipboard.h"
+#include "WasmVsync.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.h"
 #include "cores/VideoPlayer/Process/wasm/ProcessInfoWasm.h"
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h"
@@ -25,57 +27,19 @@
 #include <emscripten/em_asm.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
-#include <emscripten/threading.h>
-
 #include <emscripten/html5_webgl.h>
+
+using namespace KODI::WINDOWING::WASM;
 
 // See docs/wasm/RENDERING.md for the rationale behind this architecture.
 
 namespace
 {
-// Incremented by the main thread's requestAnimationFrame pump; PresentRenderImpl
-// waits on it so the Kodi thread never renders faster than the display.
-volatile uint32_t g_vsyncTick = 0;
-bool g_vsyncPumpInstalled = false;
 constexpr double VSYNC_WAIT_TIMEOUT_MS = 100.0;
-
-void InstallVsyncPump()
-{
-  if (g_vsyncPumpInstalled)
-    return;
-  g_vsyncPumpInstalled = true;
-
-  MAIN_THREAD_EM_ASM(
-      {
-        const idx = $0 >> 2;
-        let lastTimestamp = 0.0;
-        let measuredRefreshRate = 0.0;
-        globalThis.__kodiRefreshRate = 60.0;
-        const tick = (timestamp) =>
-        {
-          if (lastTimestamp > 0.0)
-          {
-            const intervalMs = timestamp - lastTimestamp;
-            if (intervalMs > 0.0)
-            {
-              const hz = 1000.0 / intervalMs;
-              if (hz >= 20.0 && hz <= 240.0)
-              {
-                measuredRefreshRate =
-                  measuredRefreshRate > 0.0 ? measuredRefreshRate * 0.9 + hz * 0.1 : hz;
-                globalThis.__kodiRefreshRate = measuredRefreshRate;
-              }
-            }
-          }
-          lastTimestamp = timestamp;
-          Atomics.add(HEAP32, idx, 1);
-          Atomics.notify(HEAP32, idx, 1);
-          requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      },
-      &g_vsyncTick);
-}
+// Kodi commits within the display frame the tick started, the compositor picks
+// the canvas up at the next frame boundary and the panel shows it one interval
+// after that.
+constexpr float DISPLAY_LATENCY_FRAMES = 2.0f;
 
 bool IsTizenRuntime()
 {
@@ -132,16 +96,6 @@ void GetCanvasSize(int* width, int* height)
   if (*height <= 0)
     *height = 720;
 }
-
-double GetBrowserRefreshRate()
-{
-  const double refreshRate = MAIN_THREAD_EM_ASM_DOUBLE(
-      {
-        const rate = globalThis.__kodiRefreshRate;
-        return Number.isFinite(rate) && rate >= 20.0 && rate <= 240.0 ? rate : 60.0;
-      });
-  return refreshRate;
-}
 } // namespace
 
 void CWinSystemWasmGLESContext::Register()
@@ -192,7 +146,7 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
     return false;
   }
 
-  InstallVsyncPump();
+  VSYNC::InstallPump();
   if (IsTizenRuntime())
     CLog::Log(LOGINFO, "WASM: Tizen runtime detected");
 
@@ -221,7 +175,7 @@ bool CWinSystemWasmGLESContext::CreateNewWindow(const std::string& name,
   int h = 0;
   GetCanvasSize(&w, &h);
 
-  UpdateDesktopResolution(res, "Browser", w, h, static_cast<float>(GetBrowserRefreshRate()), 0);
+  UpdateDesktopResolution(res, "Browser", w, h, static_cast<float>(VSYNC::RefreshRate()), 0);
   res.bFullScreen = fullScreen;
 
   emscripten_set_canvas_element_size("#canvas", w, h);
@@ -284,8 +238,7 @@ void CWinSystemWasmGLESContext::ForceFullScreen(const RESOLUTION_INFO& resInfo)
   RESOLUTION_INFO& desktop = CDisplaySettings::GetInstance().GetResolutionInfo(RES_DESKTOP);
   const std::string output = desktop.strOutput.empty() ? "Browser" : desktop.strOutput;
   const uint32_t flags = desktop.dwFlags;
-  UpdateDesktopResolution(desktop, output, w, h, static_cast<float>(GetBrowserRefreshRate()),
-                          flags);
+  UpdateDesktopResolution(desktop, output, w, h, static_cast<float>(VSYNC::RefreshRate()), flags);
   GetGfxContext().ResetOverscan(desktop);
 
   ResizeWindow(w, h, 0, 0);
@@ -320,11 +273,7 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
   // #endregion
 
   // The timeout keeps Kodi running when rAF is throttled (hidden tab).
-  const uint32_t current = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
-  if (current == m_lastVsyncSeen)
-    emscripten_futex_wait(const_cast<uint32_t*>(&g_vsyncTick), current, VSYNC_WAIT_TIMEOUT_MS);
-
-  const uint32_t next = __atomic_load_n(&g_vsyncTick, __ATOMIC_ACQUIRE);
+  const uint32_t next = VSYNC::WaitForTick(m_lastVsyncSeen, VSYNC_WAIT_TIMEOUT_MS);
   // #region agent log
   const double t1 = emscripten_get_now();
   s_waitMs += t1 - t0;
@@ -377,6 +326,16 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
 int CWinSystemWasmGLESContext::GetBufferAge()
 {
   return 1;
+}
+
+float CWinSystemWasmGLESContext::GetDisplayLatency()
+{
+  return DISPLAY_LATENCY_FRAMES * 1000.0f / static_cast<float>(VSYNC::RefreshRate());
+}
+
+std::unique_ptr<CVideoSync> CWinSystemWasmGLESContext::GetVideoSync(CVideoReferenceClock* clock)
+{
+  return std::make_unique<CVideoSyncWasm>(clock);
 }
 
 std::string CWinSystemWasmGLESContext::GetClipboardText()
