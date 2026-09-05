@@ -42,6 +42,7 @@ private:
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
   bool WaitForDrain();
   bool WaitForCopy();
+  VCReturn DiscardNextFrame(VideoPicture* pVideoPicture);
   void ReleaseCopyBuffer();
   CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
                                      AVPixelFormat pixelFormat,

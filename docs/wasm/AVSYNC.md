@@ -90,12 +90,15 @@ delay = (m_writeFrame - m_readFrame) / sampleRate      ring fill
       + AudioContext.baseLatency + AudioContext.outputLatency
 ```
 
-`m_readFrame` advances once per render quantum, so the estimate has a
-±2.7 ms (128 / 48000) sawtooth on top of it. `AEDelayStatus::tick` is the
-host counter at the time of the read and ActiveAE extrapolates from it,
-which is the same treatment every other sink gets. `IAESink::GetLatency()`
-is left at 0 on purpose: the pipeline latency is already inside `delay`,
-adding it again would shift lip-sync by the same amount.
+The `AudioContext` is created with `latencyHint: 'playback'`, so the browser
+uses its largest output buffer; that latency lands in `outputLatency`, hence
+in `delay`, and does not move lip-sync. `m_readFrame` advances once per
+render quantum, so the estimate has a ±2.7 ms (128 / 48000) sawtooth on top
+of it. `AEDelayStatus::tick` is the host counter at the time of the read and
+ActiveAE extrapolates from it, which is the same treatment every other sink
+gets. `IAESink::GetLatency()` is left at 0 on purpose: the pipeline latency
+is already inside `delay`, adding it again would shift lip-sync by the same
+amount.
 
 `GetCacheTotal()` returns the ring capacity (100 ms). ActiveAE keeps its own
 0.4 s of stream cache plus 0.2 s of post-stage water level ahead of that,
@@ -160,6 +163,7 @@ AVCC record (MPEG-TS, raw H.264); `vp09.PP.LL.DD` from the stream hints;
 │     webcodecs_push_packet()               ── sync proxy ──►  main   │
 │   GetPicture():                                                     │
 │     shared.queuedFrames == 0 → VC_BUFFER (futex wait ≤20 ms if busy)│
+│     DROP flag set? → webcodecs_discard_next_frame() ── sync ──► main │
 │     pool.Get() → CVideoBufferSysMem sized from shared.nextPayloadSize│
 │     webcodecs_copy_next_frame(dst)        ── sync proxy ──►  main   │
 │     futex wait on shared.signal until shared.copyResult != 0        │
@@ -190,7 +194,7 @@ Two limits, both enforced on the main thread:
 
 | Limit | Value | Effect |
 |---|---|---|
-| `MAX_INFLIGHT` | 12 | `busy` is set when `decodeQueueSize + copying + queuedFrames` reaches it. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
+| `MAX_INFLIGHT` | 12 | `busy` is set when `decodeQueueSize + copying + queuedFrames` reaches it; `push_packet` applies the same rule. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
 | `FRAME_QUEUE_HIGH_WATER` | 24 | Safety valve in the output callback: frames beyond it are closed and counted as dropped. Not reached while `busy` works. |
 
 Decoded frames stay open on the main thread until the codec asks for one,
@@ -247,6 +251,13 @@ RGB to 4:2:0 before the renderer turns it back into RGB; see §6.
   the remaining in-flight count is logged. The cost is at a real end of
   stream: frames a decoder holds back until it sees more input are never
   emitted.
+* **Drop** (`DVD_CODEC_CTRL_DROP`, `DVD_CODEC_CTRL_DROP_ANY`) → the next
+  queued frame is closed without `copyTo()` through
+  `webcodecs_discard_next_frame`, and `GetPicture()` returns a picture flagged
+  `DVP_FLAG_DROPPED`. VideoPlayerVideo still configures the renderer from such
+  a picture, so it carries an uncopied buffer of the displayed format; it is
+  never rendered. Skipping the copy saves the most exactly when the CPU is
+  already behind.
 * **Destroy** → `webcodecs_destroy_decoder` closes frames and decoder and
   zeroes the state pointer so a late `copyTo` completion cannot publish
   into memory the codec has freed.
@@ -314,37 +325,24 @@ Ordered by expected impact on a two-core Tizen TV.
    RGBA and draw it without a colour conversion removes the pass entirely;
    it is the cheapest sysmem path possible short of the video-plane design
    in RENDERING.md §9.3.
-2. **No drop-on-request.** `DVD_CODEC_CTRL_DROP` / `DROP_ANY` are ignored;
-   a late frame is still copied out of the decoder before VideoPlayer
-   discards it. Popping and closing the `VideoFrame` without `copyTo` when
-   a drop is requested saves the most expensive step exactly when the CPU
-   is already behind.
-3. **`push_packet` is a synchronous proxy call per packet.** Only the
+2. **`push_packet` is a synchronous proxy call per packet.** Only the
    return status needs the round trip, and `busy` / `failed` are already in
    shared memory. An asynchronous variant has to copy the packet before
    dispatching (the DemuxPacket does not outlive the call), which is a
    `memdup` per packet — cheaper than blocking the video thread behind a
    busy main thread.
-4. **Display latency is the generic fallback.** A `GetDisplayLatency()`
+3. **Display latency is the generic fallback.** A `GetDisplayLatency()`
    override measured from the rAF pump, or a `CVideoSync` implementation
    fed by the same `g_vsyncTick` counter, would give `CRenderManager`
    both the real latency and the clock-sync mode.
-5. **`AudioContext` latency hint is `interactive`.** For a media player
-   `playback` is the documented choice: larger hardware buffer, fewer
-   worklet wake-ups, no effect on sync because `outputLatency` is reported
-   in `GetDelay()`.
-6. **The last frames of a stream can be lost.** Drain does not flush
+4. **The last frames of a stream can be lost.** Drain does not flush
    (§3.6), so a decoder that withholds output until it sees more input
    never emits its final frames at end of stream. Flushing only when the
    player knows the stream has really ended would need a new codec-control
    flag.
-7. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
+5. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
    in hardware; both map onto WebCodecs (`hvc1.`/`hev1.` from `hvcC`,
    `av01.` from `av1C`) with the same bridge.
-8. **The two `busy` computations differ.** `publishState` counts queued
-   frames in `busy`; `webcodecs_push_packet` checks `inflight` alone. The
-   C++ side consults the shared flag first so the stricter rule wins, but
-   the bridge should have one `isBusy()`.
 
 ---
 

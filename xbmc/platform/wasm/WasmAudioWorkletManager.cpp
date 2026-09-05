@@ -37,7 +37,9 @@ constexpr auto ASYNC_TIMEOUT = std::chrono::seconds(5);
 int CreateAudioContextOnMain(int requestedSampleRate)
 {
   EmscriptenWebAudioCreateAttributes attrs{};
-  attrs.latencyHint = "interactive";
+  // The largest output buffer the browser offers; the added latency is part of
+  // outputLatency and so of the delay the sink reports.
+  attrs.latencyHint = "playback";
   attrs.sampleRate = static_cast<uint32_t>(std::max(requestedSampleRate, 0));
   attrs.renderSizeHint = AUDIO_CONTEXT_RENDER_SIZE_DEFAULT;
   return emscripten_create_audio_context(&attrs);

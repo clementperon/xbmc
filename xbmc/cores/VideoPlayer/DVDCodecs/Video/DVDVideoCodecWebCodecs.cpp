@@ -89,6 +89,22 @@ int AlignUp(int value, int alignment)
   return ((value + alignment - 1) / alignment) * alignment;
 }
 
+struct Yuv420pLayout
+{
+  int yStride;
+  int uvStride;
+  int ySize;
+  int uvSize;
+  int Size() const { return ySize + 2 * uvSize; }
+};
+
+Yuv420pLayout Yuv420pLayoutFor(int width, int height)
+{
+  const int yStride = AlignUp(width, YUV_STRIDE_ALIGNMENT);
+  const int uvStride = yStride / 2;
+  return {yStride, uvStride, yStride * height, uvStride * ((height + 1) / 2)};
+}
+
 // An AVCDecoderConfigurationRecord is only complete once numOfSequenceParameterSets,
 // its last fixed field, is present at byte 6.
 bool HasAVCCExtradata(const CDVDStreamInfo& hints)
@@ -652,11 +668,7 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
   const AVPixelFormat srcFormat = PixelFormatFromWebCodecs(info.pixelFormat);
   const int width = info.width;
   const int height = info.height;
-  const int yStride = AlignUp(width, YUV_STRIDE_ALIGNMENT);
-  const int uvStride = yStride / 2;
-  const int uvHeight = (height + 1) / 2;
-  const int ySize = yStride * height;
-  const int uvSize = uvStride * uvHeight;
+  const Yuv420pLayout layout = Yuv420pLayoutFor(width, height);
 
   if (!m_loggedRgbConversion)
   {
@@ -684,7 +696,7 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
                            1 << 16, 1 << 16);
 
   CVideoBuffer* yuvBuffer =
-      AcquirePictureBuffer(*m_videoBufferPool, AV_PIX_FMT_YUV420P, ySize + 2 * uvSize);
+      AcquirePictureBuffer(*m_videoBufferPool, AV_PIX_FMT_YUV420P, layout.Size());
   if (!yuvBuffer)
   {
     rgbBuffer->Release();
@@ -694,18 +706,18 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
   uint8_t* dst = yuvBuffer->GetMemPtr();
   const uint8_t* src[1] = {rgbBuffer->GetMemPtr()};
   const int srcStride[1] = {info.yStride};
-  uint8_t* dstPlanes[3] = {dst, dst + ySize, dst + ySize + uvSize};
-  const int dstStride[3] = {yStride, uvStride, uvStride};
+  uint8_t* dstPlanes[3] = {dst, dst + layout.ySize, dst + layout.ySize + layout.uvSize};
+  const int dstStride[3] = {layout.yStride, layout.uvStride, layout.uvStride};
   sws_scale(m_swsContext, src, srcStride, 0, height, dstPlanes, dstStride);
   rgbBuffer->Release();
 
   info.pixelFormat = WEBCODECS_PIXFMT_YUV420P;
-  info.yStride = yStride;
-  info.uStride = uvStride;
-  info.vStride = uvStride;
-  info.uOffset = ySize;
-  info.vOffset = ySize + uvSize;
-  info.payloadSize = ySize + 2 * uvSize;
+  info.yStride = layout.yStride;
+  info.uStride = layout.uvStride;
+  info.vStride = layout.uvStride;
+  info.uOffset = layout.ySize;
+  info.vOffset = layout.ySize + layout.uvSize;
+  info.payloadSize = layout.Size();
   return yuvBuffer;
 }
 
@@ -760,6 +772,41 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
   pVideoPicture->colorBits = PICTURE_COLOR_BITS;
 }
 
+// A picture flagged DVP_FLAG_DROPPED is never rendered, but VideoPlayerVideo
+// still configures the renderer from it, so it carries a buffer of the format the
+// displayed pictures have.
+CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::DiscardNextFrame(VideoPicture* pVideoPicture)
+{
+  WebCodecsFrameInfo info{};
+  if (webcodecs_discard_next_frame(m_decoderHandle, &info) != 1)
+    return VC_BUFFER;
+
+  AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+  if (pixelFormat == AV_PIX_FMT_NONE)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
+              info.pixelFormat);
+    return VC_ERROR;
+  }
+
+  int bufferSize = info.payloadSize;
+  if (IsPackedRgb(pixelFormat))
+  {
+    pixelFormat = AV_PIX_FMT_YUV420P;
+    bufferSize = Yuv420pLayoutFor(info.width, info.height).Size();
+  }
+
+  CVideoBuffer* videoBuffer = AcquirePictureBuffer(*m_videoBufferPool, pixelFormat, bufferSize);
+  if (!videoBuffer)
+    return VC_NOBUFFER;
+  videoBuffer->SetPixelFormat(pixelFormat);
+
+  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info.width, info.height,
+                      info.keyFrame != 0, info.ptsSeconds, info.durationSeconds);
+  pVideoPicture->iFlags |= DVP_FLAG_DROPPED;
+  return VC_PICTURE;
+}
+
 CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVideoPicture)
 {
   if (!m_opened || m_decoderHandle == INVALID_DECODER_HANDLE)
@@ -789,6 +836,9 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
 
   if (SharedLoad(m_shared.queuedFrames) == 0)
     return draining ? VC_EOF : VC_BUFFER;
+
+  if (m_codecControlFlags & (DVD_CODEC_CTRL_DROP | DVD_CODEC_CTRL_DROP_ANY))
+    return DiscardNextFrame(pVideoPicture);
 
   const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(SharedLoad(m_shared.nextPixelFormat));
   const int payloadSize = SharedLoad(m_shared.nextPayloadSize);
