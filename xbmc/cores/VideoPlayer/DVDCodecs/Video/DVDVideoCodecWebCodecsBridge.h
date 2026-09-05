@@ -127,12 +127,6 @@ void webcodecs_destroy_decoder(int handle);
 // reset() drops pending work and requires reconfigure(); the bridge handles both.
 int webcodecs_reset_decoder(int handle);
 
-// Starts VideoDecoder.flush(), which releases every frame the decoder is still
-// holding. Completion is reflected in WebCodecsSharedState::inflight. The
-// decoder then requires a key chunk, so the caller must skip deltas until one
-// arrives. Returns 1 if a flush is running, 0 otherwise.
-int webcodecs_flush_decoder(int handle);
-
 // Feeds one encoded packet. Returns a WebCodecsPushStatus.
 int webcodecs_push_packet(int handle,
                           const uint8_t* data,
