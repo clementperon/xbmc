@@ -359,7 +359,6 @@ Ordered by expected impact on a two-core Tizen TV.
 | Video codec (`CDVDVideoCodec`) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp` |
 | Shared ABI: enums, `WebCodecsSharedState`, `WebCodecsFrameInfo` | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecsBridge.h` |
 | Main-thread `VideoDecoder` driver | `xbmc/cores/VideoPlayer/DVDCodecs/Video/webcodecs_bridge.js` |
-| Keyframe flag from the demuxer (fallback only) | `xbmc/cores/VideoPlayer/Interface/DemuxPacket.h`, `DVDDemuxers/DVDDemuxFFmpeg.cpp` |
 | Sync-error diagnostics | `xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp` |
 | Vsync pump shared with the GUI present path | `xbmc/windowing/wasm/WasmVsync.cpp` |
 | Video sync for `CVideoReferenceClock`, display latency | `xbmc/windowing/wasm/VideoSyncWasm.cpp`, `WinSystemWasmGLESContext.cpp` |
