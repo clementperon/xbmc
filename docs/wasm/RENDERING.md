@@ -454,19 +454,16 @@ Relevant Emscripten source, for reference:
 
 ## 7. Debugging
 
-- **Worker console output.** Kodi's log and the `[KODI_DBG]`
-  instrumentation are written from Workers. `kodi_pre.js` forwards lines
-  matching `KODI_DBG|[kodi]|WASM|WebGL|GL_|lost|ERROR|error` to the main
-  thread, where they appear in the console prefixed `[worker]` and are
-  kept in `Module.kodi.workerLog` (last 1000 entries). This is what makes
-  them reachable from tooling that only sees the main-thread console.
+- **Worker console output.** Kodi's log is written from Workers.
+  `kodi_pre.js` forwards lines matching
+  `[kodi]|WASM|WebGL|GL_|lost|ERROR|error` to the main thread, where they
+  appear in the console prefixed `[worker]` and are kept in
+  `Module.kodi.workerLog` (last 1000 entries). This is what makes them
+  reachable from tooling that only sees the main-thread console.
 
-- **Present stats.** Once a second `PresentRenderImpl` logs
-  `[KODI_DBG] ... present stats | {"frames","timeouts","avgWaitMs",
-  "avgCommitMs","maxCommitMs","tick"}`. Healthy: `frames` at the display
-  rate, `timeouts` 0, `avgCommitMs` well under a millisecond. `timeouts`
-  at ~10/s with `avgWaitMs` ≈ 100 means no rAF ticks — check
-  `document.visibilityState` first; a hidden tab is the normal cause.
+- **No frames while the tab is visible.** `PresentRenderImpl` gives up on
+  a frame when no rAF tick arrives within 100 ms; check
+  `document.visibilityState` first, a hidden tab is the normal cause.
 
 - **Frame rate collapses to ~10 fps while the tab is visible.** Either
   the pump is not installed (`globalThis.__kodiRefreshRate` undefined on

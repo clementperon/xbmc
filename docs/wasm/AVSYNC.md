@@ -311,7 +311,7 @@ the numbers the two previous sections provide.
 
 | Symptom | Where to look |
 |---|---|
-| Audio stutters, `worklet underrun` warnings | The sink thread is late filling the ring: main thread saturated (video copies, GL) or the pthread starved. Check `[KODI_DBG]` present stats and whether `AudioContext.state` is `running`. |
+| Audio stutters, `worklet underrun` warnings | The sink thread is late filling the ring: main thread saturated (video copies, GL) or the pthread starved. Check that `AudioContext.state` is `running`. |
 | `large audio sync error` with a stable `sinkDelay` | Clock drift between `AudioContext` and the host counter; expected to be small. If `sinkDelay` jumps, `outputLatency` changed (device switch, HDMI re-negotiation): the pipeline latency is only sampled at sink initialisation. |
 | `dropped N queued WebCodecs frames` | The output queue hit `FRAME_QUEUE_HIGH_WATER`; VideoPlayer is not pulling pictures — usually the render side is stalled. |
 | `frame copy did not complete within 500 ms` | `copyTo()` never resolved: main thread blocked or the frame was closed by a `reset()` racing the copy. |

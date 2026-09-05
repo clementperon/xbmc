@@ -67,9 +67,6 @@
 #include "network/NetworkFileItemClassify.h"
 #include "playlists/PlayListFileItemClassify.h"
 #include "video/VideoFileItemClassify.h"
-#if defined(TARGET_WASM)
-#include "platform/wasm/DebugLog.h"
-#endif
 #ifdef HAS_FILESYSTEM_NFS
 #include "filesystem/NFSFile.h"
 #endif
@@ -179,10 +176,8 @@
 #endif
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -1545,50 +1540,6 @@ void CApplication::UnlockFrameMoveGuard()
 
 void CApplication::FrameMove(bool processEvents, bool processGUI)
 {
-#if defined(TARGET_WASM)
-  using KODI::PLATFORM::WASM::DEBUGLOG::NowMs;
-  using KODI::PLATFORM::WASM::DEBUGLOG::Post;
-  static std::atomic<double> s_lastReportMs{0.0};
-  static std::atomic<uint64_t> s_calls{0};
-  static std::atomic<uint64_t> s_toastUsTotal{0};
-  static std::atomic<uint64_t> s_msgInputUsTotal{0};
-  static std::atomic<uint64_t> s_inertialSeekUsTotal{0};
-  static std::atomic<uint64_t> s_externalUsTotal{0};
-  static std::atomic<uint64_t> s_guiProcessUsTotal{0};
-  static std::atomic<uint64_t> s_wmFrameMoveUsTotal{0};
-  static std::atomic<uint64_t> s_playerFrameMoveUsTotal{0};
-  static std::atomic<uint64_t> s_driveRenderLoopUsTotal{0};
-  static std::atomic<uint64_t> s_totalUsTotal{0};
-  static std::atomic<uint64_t> s_maxToastUs{0};
-  static std::atomic<uint64_t> s_maxMsgInputUs{0};
-  static std::atomic<uint64_t> s_maxInertialSeekUs{0};
-  static std::atomic<uint64_t> s_maxExternalUs{0};
-  static std::atomic<uint64_t> s_maxGuiProcessUs{0};
-  static std::atomic<uint64_t> s_maxWmFrameMoveUs{0};
-  static std::atomic<uint64_t> s_maxPlayerFrameMoveUs{0};
-  static std::atomic<uint64_t> s_maxDriveRenderLoopUs{0};
-  static std::atomic<uint64_t> s_maxTotalUs{0};
-  auto updateMax = [](std::atomic<uint64_t>& target, uint64_t value)
-  {
-    uint64_t cur = target.load();
-    while (value > cur && !target.compare_exchange_weak(cur, value))
-    {
-    }
-  };
-  auto elapsedUs = [](const auto& end, const auto& start) -> uint64_t
-  {
-    return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-  };
-  uint64_t toastUs = 0;
-  uint64_t msgInputUs = 0;
-  uint64_t inertialSeekUs = 0;
-  uint64_t externalUs = 0;
-  uint64_t guiProcessUs = 0;
-  uint64_t wmFrameMoveUs = 0;
-  uint64_t playerFrameMoveUs = 0;
-  uint64_t driveRenderLoopUs = 0;
-  const auto appFrameT0 = std::chrono::steady_clock::now();
-#endif
   const auto appPlayer = GetComponent<CApplicationPlayer>();
   bool renderGUI = GetComponent<CApplicationPowerHandling>()->GetRenderGUI();
   if (processEvents)
@@ -1613,29 +1564,15 @@ void CApplication::FrameMove(bool processEvents, bool processGUI)
         }
       }
     }
-#if defined(TARGET_WASM)
-    auto appFrameStep = std::chrono::steady_clock::now();
-    toastUs = elapsedUs(appFrameStep, appFrameT0);
-#endif
 
     m_pMsgHandling->HandleEvents();
     CServiceBroker::GetInputManager().Process(CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindowOrDialog(), frameTime);
-#if defined(TARGET_WASM)
-    auto appFrameNext = std::chrono::steady_clock::now();
-    msgInputUs = elapsedUs(appFrameNext, appFrameStep);
-    appFrameStep = appFrameNext;
-#endif
 
     if (processGUI && renderGUI)
     {
       m_pInertialScrollingHandler->ProcessInertialScroll(frameTime);
       appPlayer->GetSeekHandler().FrameMove();
     }
-#if defined(TARGET_WASM)
-    appFrameNext = std::chrono::steady_clock::now();
-    inertialSeekUs = elapsedUs(appFrameNext, appFrameStep);
-    appFrameStep = appFrameNext;
-#endif
 
     // Open the door for external calls e.g python exactly here.
     // Window size can be between 2 and 10ms and depends on number of continuous requests
@@ -1654,10 +1591,6 @@ void CApplication::FrameMove(bool processEvents, bool processGUI)
       m_frameMoveGuard.lock();
       m_ProcessedExternalDecay = 5;
     }
-#if defined(TARGET_WASM)
-    appFrameNext = std::chrono::steady_clock::now();
-    externalUs = elapsedUs(appFrameNext, appFrameStep);
-#endif
     if (m_ProcessedExternalDecay && --m_ProcessedExternalDecay == 0)
       m_ProcessedExternalCalls = 0;
   }
@@ -1702,100 +1635,13 @@ void CApplication::FrameMove(bool processEvents, bool processGUI)
     if (!m_skipGuiRender && appPlayer->IsRenderingVideoLayer() &&
         !CServiceBroker::GetGUI()->GetWindowManager().HasDirtyRegions())
       m_skipGuiRender = true;
-#if defined(TARGET_WASM)
-    auto appFrameStep = std::chrono::steady_clock::now();
-    guiProcessUs = elapsedUs(appFrameStep, appFrameT0) - toastUs - msgInputUs - inertialSeekUs -
-                   externalUs;
-#endif
     CServiceBroker::GetGUI()->GetWindowManager().FrameMove();
-#if defined(TARGET_WASM)
-    auto appFrameNext = std::chrono::steady_clock::now();
-    wmFrameMoveUs = elapsedUs(appFrameNext, appFrameStep);
-#endif
   }
 
-#if defined(TARGET_WASM)
-  auto appFramePlayerStart = std::chrono::steady_clock::now();
-#endif
   appPlayer->FrameMove();
-#if defined(TARGET_WASM)
-  auto appFramePlayerEnd = std::chrono::steady_clock::now();
-  playerFrameMoveUs = elapsedUs(appFramePlayerEnd, appFramePlayerStart);
-#endif
 
   // this will go away when render systems gets its own thread
-#if defined(TARGET_WASM)
-  auto appFrameDriveStart = std::chrono::steady_clock::now();
-#endif
   CServiceBroker::GetWinSystem()->DriveRenderLoop();
-#if defined(TARGET_WASM)
-  auto appFrameTEnd = std::chrono::steady_clock::now();
-  driveRenderLoopUs = elapsedUs(appFrameTEnd, appFrameDriveStart);
-  const uint64_t totalUs = elapsedUs(appFrameTEnd, appFrameT0);
-
-  s_calls.fetch_add(1, std::memory_order_relaxed);
-  s_toastUsTotal.fetch_add(toastUs, std::memory_order_relaxed);
-  s_msgInputUsTotal.fetch_add(msgInputUs, std::memory_order_relaxed);
-  s_inertialSeekUsTotal.fetch_add(inertialSeekUs, std::memory_order_relaxed);
-  s_externalUsTotal.fetch_add(externalUs, std::memory_order_relaxed);
-  s_guiProcessUsTotal.fetch_add(guiProcessUs, std::memory_order_relaxed);
-  s_wmFrameMoveUsTotal.fetch_add(wmFrameMoveUs, std::memory_order_relaxed);
-  s_playerFrameMoveUsTotal.fetch_add(playerFrameMoveUs, std::memory_order_relaxed);
-  s_driveRenderLoopUsTotal.fetch_add(driveRenderLoopUs, std::memory_order_relaxed);
-  s_totalUsTotal.fetch_add(totalUs, std::memory_order_relaxed);
-  updateMax(s_maxToastUs, toastUs);
-  updateMax(s_maxMsgInputUs, msgInputUs);
-  updateMax(s_maxInertialSeekUs, inertialSeekUs);
-  updateMax(s_maxExternalUs, externalUs);
-  updateMax(s_maxGuiProcessUs, guiProcessUs);
-  updateMax(s_maxWmFrameMoveUs, wmFrameMoveUs);
-  updateMax(s_maxPlayerFrameMoveUs, playerFrameMoveUs);
-  updateMax(s_maxDriveRenderLoopUs, driveRenderLoopUs);
-  updateMax(s_maxTotalUs, totalUs);
-
-  const double nowMs = NowMs();
-  double last = s_lastReportMs.load();
-  if (nowMs - last >= 1000.0 && s_lastReportMs.compare_exchange_strong(last, nowMs))
-  {
-    const uint64_t calls = s_calls.exchange(0);
-    char buf[1024];
-    std::snprintf(buf, sizeof(buf),
-                  "{\"calls\":%llu,\"avgToastUs\":%llu,\"maxToastUs\":%llu,"
-                  "\"avgMsgInputUs\":%llu,\"maxMsgInputUs\":%llu,"
-                  "\"avgInertialSeekUs\":%llu,\"maxInertialSeekUs\":%llu,"
-                  "\"avgExternalUs\":%llu,\"maxExternalUs\":%llu,"
-                  "\"avgGuiProcessUs\":%llu,\"maxGuiProcessUs\":%llu,"
-                  "\"avgWmFrameMoveUs\":%llu,\"maxWmFrameMoveUs\":%llu,"
-                  "\"avgPlayerFrameMoveUs\":%llu,\"maxPlayerFrameMoveUs\":%llu,"
-                  "\"avgDriveRenderLoopUs\":%llu,\"maxDriveRenderLoopUs\":%llu,"
-                  "\"avgTotalUs\":%llu,\"maxTotalUs\":%llu}",
-                  static_cast<unsigned long long>(calls),
-                  static_cast<unsigned long long>(calls ? s_toastUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxToastUs.exchange(0)),
-                  static_cast<unsigned long long>(calls ? s_msgInputUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxMsgInputUs.exchange(0)),
-                  static_cast<unsigned long long>(
-                      calls ? s_inertialSeekUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxInertialSeekUs.exchange(0)),
-                  static_cast<unsigned long long>(calls ? s_externalUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxExternalUs.exchange(0)),
-                  static_cast<unsigned long long>(
-                      calls ? s_guiProcessUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxGuiProcessUs.exchange(0)),
-                  static_cast<unsigned long long>(
-                      calls ? s_wmFrameMoveUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxWmFrameMoveUs.exchange(0)),
-                  static_cast<unsigned long long>(
-                      calls ? s_playerFrameMoveUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxPlayerFrameMoveUs.exchange(0)),
-                  static_cast<unsigned long long>(
-                      calls ? s_driveRenderLoopUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxDriveRenderLoopUs.exchange(0)),
-                  static_cast<unsigned long long>(calls ? s_totalUsTotal.exchange(0) / calls : 0),
-                  static_cast<unsigned long long>(s_maxTotalUs.exchange(0)));
-    Post("Application.cpp:FrameMove:tick", "application frame move split tick", buf);
-  }
-#endif
 }
 
 
