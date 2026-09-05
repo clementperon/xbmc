@@ -40,7 +40,7 @@ private:
   void PollDecoderStats();
   static int32_t SharedLoad(const int32_t& field);
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
-  void WaitForDrain();
+  bool WaitForDrain();
   bool WaitForCopy();
   void ReleaseCopyBuffer();
   CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
@@ -66,7 +66,7 @@ private:
 
   int m_decoderHandle{0};
   bool m_opened{false};
-  bool m_drainSubmitted{false};
+  bool m_drained{false};
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
   int m_nalLengthSize{0};

@@ -190,7 +190,7 @@ Two limits, both enforced on the main thread:
 
 | Limit | Value | Effect |
 |---|---|---|
-| `MAX_INFLIGHT` | 12 | `busy` is set when `decodeQueueSize + copying + flushing + queuedFrames` reaches it. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
+| `MAX_INFLIGHT` | 12 | `busy` is set when `decodeQueueSize + copying + queuedFrames` reaches it. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
 | `FRAME_QUEUE_HIGH_WATER` | 24 | Safety valve in the output callback: frames beyond it are closed and counted as dropped. Not reached while `busy` works. |
 
 Decoded frames stay open on the main thread until the codec asks for one,
@@ -236,11 +236,17 @@ RGB to 4:2:0 before the renderer turns it back into RGB; see §6.
   flight is waited for first (`ReleaseCopyBuffer`) so the browser never
   writes into a buffer Kodi has recycled.
 * **Drain** (`DVD_CODEC_CTRL_DRAIN`, sent at end of stream, on stream change
-  and when VideoPlayerVideo detects a still frame) → `webcodecs_flush_decoder`:
-  `VideoDecoder.flush()` releases the reorder buffer; `GetPicture()` waits
-  up to 1 s for `inflight` to reach 0, returns the remaining pictures, then
-  `VC_EOF`. WebCodecs requires a key chunk after `flush()`, so the codec
-  skips deltas again; see §6 for the consequence.
+  and when VideoPlayerVideo detects a still frame) does not call
+  `VideoDecoder.flush()`. A flushed decoder demands a key chunk, and
+  VideoPlayerVideo drains whenever no packet arrives for ten frame times, so
+  every stall on a long-GOP stream would freeze the picture until the next
+  IDR. Instead `GetPicture()` hands out whatever is queued, waits for
+  `inflight` to reach 0 and for the decoder to stay silent for 100 ms, then
+  returns `VC_EOF`; the decoder keeps its reference state and delta packets
+  decode normally when data resumes. The wait is bounded by 1 s, after which
+  the remaining in-flight count is logged. The cost is at a real end of
+  stream: frames a decoder holds back until it sees more input are never
+  emitted.
 * **Destroy** → `webcodecs_destroy_decoder` closes frames and decoder and
   zeroes the state pointer so a late `copyTo` completion cannot publish
   into memory the codec has freed.
@@ -288,7 +294,6 @@ the numbers the two previous sections provide.
 |---|---|
 | Audio stutters, `worklet underrun` warnings | The sink thread is late filling the ring: main thread saturated (video copies, GL) or the pthread starved. Check `[KODI_DBG]` present stats and whether `AudioContext.state` is `running`. |
 | `large audio sync error` with a stable `sinkDelay` | Clock drift between `AudioContext` and the host counter; expected to be small. If `sinkDelay` jumps, `outputLatency` changed (device switch, HDMI re-negotiation): the pipeline latency is only sampled at sink initialisation. |
-| Video freezes after a network stall, audio continues | Drain → `flush()` → waiting for the next key packet (§3.6, §6). Look for `drain requested, flushing` followed by no `VC_PICTURE` until the next IDR. |
 | `dropped N queued WebCodecs frames` | The output queue hit `FRAME_QUEUE_HIGH_WATER`; VideoPlayer is not pulling pictures — usually the render side is stalled. |
 | `frame copy did not complete within 500 ms` | `copyTo()` never resolved: main thread blocked or the frame was closed by a `reset()` racing the copy. |
 | Lip-sync off by a constant | Compare `GetDisplayLatency()` (§4.4) with the measured present latency; adjust with the audio offset setting until a `CVideoSync`/latency override exists. |
@@ -309,33 +314,30 @@ Ordered by expected impact on a two-core Tizen TV.
    RGBA and draw it without a colour conversion removes the pass entirely;
    it is the cheapest sysmem path possible short of the video-plane design
    in RENDERING.md §9.3.
-2. **Drain flushes the decoder.** VideoPlayerVideo drains on every still
-   frame (no packet for ten frame times), and `flush()` makes WebCodecs
-   demand a key chunk, so playback freezes until the next IDR after any
-   stall on a long-GOP stream. Draining by waiting for `inflight == 0`
-   without `flush()` — and flushing only for a real end of stream — keeps
-   the decoder's reference state; with `optimizeForLatency` most decoders
-   hold no reorder buffer anyway, so the frames a flush would release are
-   few or none.
-3. **No drop-on-request.** `DVD_CODEC_CTRL_DROP` / `DROP_ANY` are ignored;
+2. **No drop-on-request.** `DVD_CODEC_CTRL_DROP` / `DROP_ANY` are ignored;
    a late frame is still copied out of the decoder before VideoPlayer
    discards it. Popping and closing the `VideoFrame` without `copyTo` when
    a drop is requested saves the most expensive step exactly when the CPU
    is already behind.
-4. **`push_packet` is a synchronous proxy call per packet.** Only the
+3. **`push_packet` is a synchronous proxy call per packet.** Only the
    return status needs the round trip, and `busy` / `failed` are already in
    shared memory. An asynchronous variant has to copy the packet before
    dispatching (the DemuxPacket does not outlive the call), which is a
    `memdup` per packet — cheaper than blocking the video thread behind a
    busy main thread.
-5. **Display latency is the generic fallback.** A `GetDisplayLatency()`
+4. **Display latency is the generic fallback.** A `GetDisplayLatency()`
    override measured from the rAF pump, or a `CVideoSync` implementation
    fed by the same `g_vsyncTick` counter, would give `CRenderManager`
    both the real latency and the clock-sync mode.
-6. **`AudioContext` latency hint is `interactive`.** For a media player
+5. **`AudioContext` latency hint is `interactive`.** For a media player
    `playback` is the documented choice: larger hardware buffer, fewer
    worklet wake-ups, no effect on sync because `outputLatency` is reported
    in `GetDelay()`.
+6. **The last frames of a stream can be lost.** Drain does not flush
+   (§3.6), so a decoder that withholds output until it sees more input
+   never emits its final frames at end of stream. Flushing only when the
+   player knows the stream has really ended would need a new codec-control
+   flag.
 7. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
    in hardware; both map onto WebCodecs (`hvc1.`/`hev1.` from `hvcC`,
    `av01.` from `av1C`) with the same bridge.

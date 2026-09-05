@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 
 #include <emscripten/bind.h>
@@ -59,6 +60,7 @@ constexpr int DECODER_ERROR_BUFFER_SIZE = 512;
 constexpr int DISPLAY_WIDTH_ALIGN_MASK = -3;
 constexpr double FRAME_WAIT_MS = 20.0;
 constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(1000);
+constexpr auto DRAIN_SETTLE_TIME = std::chrono::milliseconds(100);
 constexpr auto COPY_TIMEOUT = std::chrono::milliseconds(500);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
@@ -418,7 +420,7 @@ void CDVDVideoCodecWebCodecs::Dispose()
   }
   m_opened = false;
   m_waitingForKeyFrame = true;
-  m_drainSubmitted = false;
+  m_drained = false;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
 }
@@ -441,7 +443,7 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
   m_name = "webcodecs-" + m_codecString;
   m_opened = true;
   m_waitingForKeyFrame = true;
-  m_drainSubmitted = false;
+  m_drained = false;
   m_codecControlFlags = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
@@ -485,7 +487,7 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (status == WEBCODECS_PUSH_BUSY)
     return false;
 
-  m_drainSubmitted = false;
+  m_drained = false;
 
   if (status <= 0)
   {
@@ -515,7 +517,7 @@ void CDVDVideoCodecWebCodecs::Reset()
   ReleaseCopyBuffer();
   webcodecs_reset_decoder(m_decoderHandle);
   m_waitingForKeyFrame = true;
-  m_drainSubmitted = false;
+  m_drained = false;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
   CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::Reset - decoder reset after seek/flush");
@@ -561,17 +563,44 @@ void CDVDVideoCodecWebCodecs::WaitForDecoderSignal(uint32_t seenSignal, double m
   emscripten_futex_wait(&m_shared.signal, seenSignal, maxWaitMs);
 }
 
-// VideoPlayerVideo stops draining at the first VC_BUFFER, so in-flight decodes
-// have to be waited for here rather than reported as "need more data".
-void CDVDVideoCodecWebCodecs::WaitForDrain()
+// Draining never calls VideoDecoder.flush(): a flushed decoder demands a key
+// chunk, and VideoPlayerVideo drains on every still frame and stalled stream, so
+// playback would freeze until the next IDR each time. Instead wait until nothing
+// is pending and the decoder has stayed silent for DRAIN_SETTLE_TIME. Frames a
+// decoder holds back until it sees more input are lost at end of stream.
+// Returns true once the drain is over, false while frames are still arriving.
+bool CDVDVideoCodecWebCodecs::WaitForDrain()
 {
   const auto deadline = std::chrono::steady_clock::now() + DRAIN_TIMEOUT;
-  while (std::chrono::steady_clock::now() < deadline)
+  std::optional<std::chrono::steady_clock::time_point> settleDeadline;
+  while (true)
   {
     const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
-    if (SharedLoad(m_shared.queuedFrames) > 0 || SharedLoad(m_shared.inflight) <= 0 ||
-        SharedLoad(m_shared.failed))
-      return;
+    if (SharedLoad(m_shared.queuedFrames) > 0 || SharedLoad(m_shared.failed))
+      return false;
+
+    const auto now = std::chrono::steady_clock::now();
+    const int32_t inflight = SharedLoad(m_shared.inflight);
+    if (now >= deadline)
+    {
+      PollDecoderStats();
+      CLog::Log(LOGWARNING,
+                "CDVDVideoCodecWebCodecs::WaitForDrain - drain timed out with {} pending "
+                "WebCodecs operations",
+                inflight);
+      return true;
+    }
+
+    if (inflight > 0)
+      settleDeadline.reset();
+    else if (!settleDeadline)
+      settleDeadline = now + DRAIN_SETTLE_TIME;
+    else if (now >= *settleDeadline)
+    {
+      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::WaitForDrain - drain completed");
+      return true;
+    }
+
     WaitForDecoderSignal(seen, FRAME_WAIT_MS);
   }
 }
@@ -737,20 +766,14 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     return VC_ERROR;
 
   const bool draining = (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN) != 0;
-  if (draining && !m_drainSubmitted)
-  {
-    m_drainSubmitted = true;
-    m_waitingForKeyFrame = true;
-    webcodecs_flush_decoder(m_decoderHandle);
-    CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain requested, flushing");
-  }
-  else if (!draining)
-    m_drainSubmitted = false;
-
   if (draining)
-    WaitForDrain();
+  {
+    if (!m_drained)
+      m_drained = WaitForDrain();
+  }
   else
   {
+    m_drained = false;
     const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
     if (SharedLoad(m_shared.queuedFrames) == 0 && SharedLoad(m_shared.busy))
       WaitForDecoderSignal(seen, FRAME_WAIT_MS);
@@ -765,21 +788,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   }
 
   if (SharedLoad(m_shared.queuedFrames) == 0)
-  {
-    if (!draining)
-      return VC_BUFFER;
-
-    PollDecoderStats();
-    const int32_t inflight = SharedLoad(m_shared.inflight);
-    if (inflight > 0)
-      CLog::Log(LOGWARNING,
-                "CDVDVideoCodecWebCodecs::GetPicture - drain timed out with {} pending "
-                "WebCodecs operations",
-                inflight);
-    else
-      CLog::Log(LOGDEBUG, "CDVDVideoCodecWebCodecs::GetPicture - drain completed (EOF)");
-    return VC_EOF;
-  }
+    return draining ? VC_EOF : VC_BUFFER;
 
   const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(SharedLoad(m_shared.nextPixelFormat));
   const int payloadSize = SharedLoad(m_shared.nextPayloadSize);
