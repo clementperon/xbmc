@@ -239,10 +239,10 @@ bool VP9SampleIsKeyFrame(const uint8_t* data, int size)
   return readBit() == VP9_FRAME_TYPE_KEY;
 }
 
-// WebCodecs needs 'key' to mean "decodable on its own". The demuxer flag is not
-// that: FFmpeg sets AV_PKT_FLAG_KEY on non-IDR I-frames (open GOP), whose
-// leading pictures reference frames the decoder never saw. Parse the bitstream
-// where we can and only trust the demuxer for codecs we don't parse.
+// WebCodecs needs 'key' to mean "decodable on its own". The demuxer's flag is
+// not that: FFmpeg sets AV_PKT_FLAG_KEY on non-IDR I-frames (open GOP), whose
+// leading pictures reference frames the decoder never saw, so the bitstream is
+// parsed instead. Every codec SupportsCodec() accepts has a case here.
 bool PacketIsKeyFrame(const CDVDStreamInfo& hints, const DemuxPacket& packet, int nalLengthSize)
 {
   switch (hints.codec)
@@ -254,7 +254,7 @@ bool PacketIsKeyFrame(const CDVDStreamInfo& hints, const DemuxPacket& packet, in
     case AV_CODEC_ID_VP9:
       return VP9SampleIsKeyFrame(packet.pData, packet.iSize);
     default:
-      return packet.m_keyFrame;
+      return false;
   }
 }
 
