@@ -363,12 +363,16 @@ If the launch reports `with debug 0` (`tz`) or answers `closed` (`sdb`), the TV 
 
 **[back to top](#table-of-contents)** | **[back to section top](#7-package-and-install-on-a-samsung-tv)**
 
-## Audio Worklet Notes
+## Audio and video playback
 
-- The wasm build now links with `-sAUDIO_WORKLET` and `-sWASM_WORKERS`.
-- Browser audio output is provided via Web Audio / Wasm Audio Worklets and still requires the same COOP/COEP headers listed above.
-- As with normal browser autoplay policy, audio context resume requires a user interaction (keyboard, mouse, touch) before playback starts.
-- `-sSINGLE_FILE` is not compatible with Emscripten's standard Audio Worklet path.
+Audio goes out through a Web Audio `AudioWorklet` (`-sAUDIO_WORKLET` and `-sWASM_WORKERS`, which need the same COOP/COEP headers as pthreads), video is decoded with WebCodecs `VideoDecoder` for H.264, VP8 and VP9 and falls back to FFmpeg for everything else. Both paths, the buffering and timing numbers behind them and how they keep audio and video in sync are described in **[docs/wasm/AVSYNC.md](wasm/AVSYNC.md)**; GUI rendering is described in **[docs/wasm/RENDERING.md](wasm/RENDERING.md)**.
+
+Two browser rules show up as behaviour:
+
+- Audio only starts after the first user interaction (keyboard, mouse or touch); this is the browser's autoplay policy.
+- `-sSINGLE_FILE` is not compatible with Emscripten's Audio Worklet path.
+
+For manual validation use at least one H.264 MP4 and one VP9 WebM sample and check that playback starts in sync, that pause/resume and repeated seeks keep lip-sync, that end of stream drains cleanly, and that an unsupported codec falls back to `CDVDVideoCodecFFmpeg`.
 
 ## Samsung TV information
 
@@ -388,50 +392,4 @@ In an ordinary browser none of these APIs exist; the network page then shows loo
 
 - Some dependency recipes still need WASM validation/tuning in `tools/depends/target/*`.
 - Binary add-ons are not built for the WASM target.
-- Video decoding through WebCodecs is experimental — see below.
-
-## Experimental WebCodecs Video Decode Path
-
-The wasm build now includes an experimental `CDVDVideoCodecWebCodecs` backend.
-It is registered as a platform video codec and is selected before
-`CDVDVideoCodecFFmpeg` when all of the following are true:
-
-- Browser exposes `VideoDecoder` / `EncodedVideoChunk`.
-- Stream codec currently matches one of the supported WebCodecs mappings:
-  - H.264 (`AV_CODEC_ID_H264`)
-  - VP9 (`AV_CODEC_ID_VP9`)
-- Decoder configuration succeeds in JS (otherwise Kodi immediately falls back to FFmpeg decode).
-
-Current packet/config mapping details:
-
-- H.264:
-  - If FFmpeg demux provides AVCDecoderConfigurationRecord (`extradata[0] == 1`), Kodi builds an
-    `avc1.<profile><compat><level>` codec string and passes extradata as WebCodecs `description`.
-  - Otherwise Kodi switches to Annex-B mode (`config.avc.format = "annexb"`).
-- VP9:
-  - Uses baseline `vp09.00.10.08` codec string with demux packets forwarded as-is.
-- Timestamping:
-  - Packet `pts` / `duration` (seconds) are converted to WebCodecs microseconds on submit.
-  - Decoded frame timestamps are converted back to seconds for Kodi `VideoPicture`.
-
-Frame bridge strategy (phase 1 correctness-first):
-
-- WebCodecs output callback copies each `VideoFrame` to I420 in JS (`VideoFrame.copyTo`).
-- A compact frame queue is maintained in JS.
-- `GetPicture()` copies queued I420 bytes into `CVideoBufferSysMem` and publishes
-  `VideoPicture` with `AV_PIX_FMT_YUV420P`.
-
-This intentionally favors correctness and fallback safety over zero-copy performance.
-
-## WebCodecs Validation Checklist
-
-For manual validation use at least one H.264 MP4 and one VP9 WebM sample:
-
-1. Playback starts with A/V sync matching the existing audio master clock.
-2. Pause/resume keeps lip-sync stable.
-3. Repeated seeks (forward and backward) recover without permanent stalls.
-4. End-of-stream drain returns cleanly.
-5. Unsupported codec/configuration falls back to `CDVDVideoCodecFFmpeg`.
-
-The browser-side packet/seek probing helper is documented in
-`tools/wasm/mediabunny_spike.mjs`.
+- WebCodecs decoding is experimental; its open items are listed in [docs/wasm/AVSYNC.md](wasm/AVSYNC.md) §6.

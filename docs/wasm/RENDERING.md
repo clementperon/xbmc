@@ -7,9 +7,9 @@ designs that were considered, and why we didn't pick them.
 **Scope.** Sections 1-8 cover GUI presentation (the path from an OpenGL
 ES 2/3 draw call inside Kodi to a pixel on the user's screen). Section 9
 covers how decoded video reaches the screen today and the video-plane
-design it should move to. Audio output lives in
-`xbmc/platform/wasm/WasmAudioWorkletManager.cpp` and is not documented
-here; input is covered only where it touches rendering.
+design it should move to. Audio output, WebCodecs decoding and A/V sync
+are documented in [AVSYNC.md](AVSYNC.md); input is covered only where it
+touches rendering.
 
 ---
 
