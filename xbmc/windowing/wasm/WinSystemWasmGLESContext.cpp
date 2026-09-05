@@ -14,14 +14,11 @@
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "rendering/gles/ScreenshotSurfaceGLES.h"
 #include "settings/DisplaySettings.h"
-#include "platform/wasm/DebugLog.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WindowSystemFactory.h"
 
-#include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 
 #include <emscripten/em_asm.h>
@@ -262,55 +259,15 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
   if (!rendered || m_webglContext <= 0)
     return;
 
-  // #region agent log: temporary present-path timing, remove when done.
-  static uint32_t s_frames = 0;
-  static uint32_t s_timeouts = 0;
-  static double s_waitMs = 0.0;
-  static double s_commitMs = 0.0;
-  static double s_commitMaxMs = 0.0;
-  static double s_lastReportMs = 0.0;
-  const double t0 = emscripten_get_now();
-  // #endregion
-
   // The timeout keeps Kodi running when rAF is throttled (hidden tab).
   const uint32_t next = VSYNC::WaitForTick(m_lastVsyncSeen, VSYNC_WAIT_TIMEOUT_MS);
-  // #region agent log
-  const double t1 = emscripten_get_now();
-  s_waitMs += t1 - t0;
-  // #endregion
   if (next == m_lastVsyncSeen)
-  {
-    // #region agent log
-    ++s_timeouts;
-    // #endregion
     return;
-  }
   m_lastVsyncSeen = next;
 
   // Synchronous: blits the offscreen framebuffer to the canvas on the main
   // thread once every queued GL call before it has executed.
   const EMSCRIPTEN_RESULT r = emscripten_webgl_commit_frame();
-  // #region agent log
-  const double t2 = emscripten_get_now();
-  s_commitMs += t2 - t1;
-  if (t2 - t1 > s_commitMaxMs)
-    s_commitMaxMs = t2 - t1;
-  ++s_frames;
-  if (t2 - s_lastReportMs >= 1000.0)
-  {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf),
-                  "{\"frames\":%u,\"timeouts\":%u,\"avgWaitMs\":%.1f,\"avgCommitMs\":%.1f,"
-                  "\"maxCommitMs\":%.1f,\"tick\":%u}",
-                  s_frames, s_timeouts, s_waitMs / std::max(1u, s_frames + s_timeouts),
-                  s_commitMs / std::max(1u, s_frames), s_commitMaxMs, next);
-    KODI::PLATFORM::WASM::DEBUGLOG::Post("WinSystemWasmGLESContext.cpp:PresentRenderImpl",
-                                         "present stats", buf);
-    s_frames = s_timeouts = 0;
-    s_waitMs = s_commitMs = s_commitMaxMs = 0.0;
-    s_lastReportMs = t2;
-  }
-  // #endregion
   if (r != EMSCRIPTEN_RESULT_SUCCESS)
   {
     CLog::Log(LOGWARNING, "WASM: emscripten_webgl_commit_frame failed ({})", r);

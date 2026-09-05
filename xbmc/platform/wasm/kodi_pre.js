@@ -127,7 +127,7 @@
   if (typeof document === 'undefined') {
     // Worker side. Forward diagnostic console lines to the main thread, where
     // DevTools/extension consoles can see them (Module.onKodiWorkerLog).
-    var forward = /KODI_DBG|\[kodi\]|WASM|WebGL|GL_|lost|ERROR|error/;
+    var forward = /\[kodi\]|WASM|WebGL|GL_|lost|ERROR|error/;
     ['log', 'warn', 'error'].forEach(function (level) {
       var orig = console[level].bind(console);
       console[level] = function () {

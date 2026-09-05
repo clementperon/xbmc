@@ -353,7 +353,7 @@ TIZEN_TARGET_SERIAL=192.168.1.51:26101 tools/wasm/tizen/inspect.sh
 Then, in Chrome on the development machine, open `chrome://inspect`, click **Configure...** next to *Discover network targets*, add `localhost:7011`, and click **inspect** on the Kodi target. This uses Chrome's own DevTools frontend; the page the TV serves at `http://localhost:7011/` lists the same targets but ships a DevTools frontend old enough to render blank in a current Chrome.
 
 What the inspector gives you on a retail TV:
-* **Console** — everything Kodi logs (`SetLogTarget("console")`) plus the `[KODI_DBG]` instrumentation ticks. Kodi is already running when the inspector attaches, so startup output is missed.
+* **Console** — everything Kodi logs (`SetLogTarget("console")`). Kodi is already running when the inspector attaches, so startup output is missed.
 * **Performance / Memory** — main-thread activity and JS heap. GPU memory is not exposed; infer it from growth in frame time or from the app being killed.
 * **Application → Storage** — the IndexedDB the Emscripten filesystem persists userdata into.
 

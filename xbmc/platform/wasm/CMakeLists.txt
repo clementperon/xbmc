@@ -1,5 +1,4 @@
 set(SOURCES CPUInfoWasm.cpp
-            DebugLog.cpp
             GPUInfoWasm.cpp
             MemUtils.cpp
             PlatformWasm.cpp
@@ -7,7 +6,6 @@ set(SOURCES CPUInfoWasm.cpp
             WasmAudioWorkletManager.cpp)
 
 set(HEADERS CPUInfoWasm.h
-            DebugLog.h
             GPUInfoWasm.h
             PlatformWasm.h
             TizenWebApis.h

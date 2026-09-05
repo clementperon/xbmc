@@ -9,21 +9,14 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 
-#include <emscripten.h>
 #include <emscripten/em_asm.h>
 #include <emscripten/threading.h>
 #include <emscripten/webaudio.h>
-
-// #region agent log: temporary debug instrumentation, remove when done.
-#include "DebugLog.h"
-// #endregion
 
 namespace
 {
@@ -197,19 +190,6 @@ void ClearResumeHooksOnMain(int audioContext)
 
 } // namespace
 
-// #region agent log: temporary debug instrumentation, remove when done.
-// Audio worklets run in AudioWorkletGlobalScope which doesn't have fetch().
-// The worklet thread only updates atomic counters; the writer thread reads
-// them and posts to the debug endpoint.
-namespace
-{
-std::atomic<uint64_t> g_workletCalls{0};
-std::atomic<uint64_t> g_workletMaxGapUs{0};
-std::atomic<uint64_t> g_workletSilenceCount{0};
-std::atomic<double> g_workletLastEntryMs{0.0};
-} // namespace
-// #endregion
-
 namespace KODI::PLATFORM::WASM
 {
 CWasmAudioWorkletManager& CWasmAudioWorkletManager::Instance()
@@ -312,39 +292,8 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
                                                    unsigned int frames,
                                                    unsigned int offsetFrames)
 {
-// #region agent log: temporary debug instrumentation, remove when done.
-  using KODI::PLATFORM::WASM::DEBUGLOG::Post;
-  using KODI::PLATFORM::WASM::DEBUGLOG::NowMs;
-  static std::atomic<double> s_lastWriteEntryMs{0.0};
-  static std::atomic<double> s_lastReportMs{0.0};
-  static std::atomic<uint64_t> s_callCount{0};
-  static std::atomic<uint64_t> s_totalWrittenFrames{0};
-  static std::atomic<uint64_t> s_zeroReturnCount{0};
-  static std::atomic<uint64_t> s_stalledMsAccum{0};
-  static std::atomic<uint64_t> s_maxGapUs{0};
-  const double entryMs = NowMs();
-  const double prevEntryMs = s_lastWriteEntryMs.exchange(entryMs);
-  if (prevEntryMs > 0.0)
-  {
-    const uint64_t gapUs = static_cast<uint64_t>((entryMs - prevEntryMs) * 1000.0);
-    uint64_t cur = s_maxGapUs.load();
-    while (gapUs > cur && !s_maxGapUs.compare_exchange_weak(cur, gapUs))
-    {
-    }
-  }
-// #endregion
-
   if (!planes || frames == 0 || !IsReady())
-  {
-// #region agent log: temporary debug instrumentation, remove when done.
-    s_zeroReturnCount.fetch_add(1, std::memory_order_relaxed);
-    Post("WasmAudioWorkletManager.cpp:WritePlanar:earlyReturn", "WritePlanar early-return",
-         std::string("{\"hasPlanes\":") + (planes ? "true" : "false") +
-             ",\"frames\":" + std::to_string(frames) +
-             ",\"isReady\":" + (IsReady() ? "true" : "false") + "}");
-// #endregion
     return 0;
-  }
 
   const unsigned int configuredChannels = m_channels.load(std::memory_order_relaxed);
   if (configuredChannels == 0 || configuredChannels > kMaxChannels)
@@ -409,28 +358,6 @@ unsigned int CWasmAudioWorkletManager::WritePlanar(const float* const* planes,
     m_writeFrame.store(writeFrame + toWrite, std::memory_order_release);
     writtenFrames += static_cast<unsigned int>(toWrite);
   }
-
-// #region agent log: temporary debug instrumentation, remove when done.
-  s_callCount.fetch_add(1, std::memory_order_relaxed);
-  s_totalWrittenFrames.fetch_add(writtenFrames, std::memory_order_relaxed);
-  if (writtenFrames == 0)
-    s_zeroReturnCount.fetch_add(1, std::memory_order_relaxed);
-  s_stalledMsAccum.fetch_add(stalledMs, std::memory_order_relaxed);
-
-  const double nowMs = NowMs();
-  double last = s_lastReportMs.load();
-  if (nowMs - last >= 1000.0 && s_lastReportMs.compare_exchange_strong(last, nowMs))
-  {
-    s_callCount.store(0, std::memory_order_relaxed);
-    s_totalWrittenFrames.store(0, std::memory_order_relaxed);
-    s_zeroReturnCount.store(0, std::memory_order_relaxed);
-    s_stalledMsAccum.store(0, std::memory_order_relaxed);
-    s_maxGapUs.store(0, std::memory_order_relaxed);
-    g_workletCalls.store(0, std::memory_order_relaxed);
-    g_workletMaxGapUs.store(0, std::memory_order_relaxed);
-    g_workletSilenceCount.store(0, std::memory_order_relaxed);
-  }
-// #endregion
 
   return writtenFrames;
 }
@@ -808,32 +735,9 @@ bool CWasmAudioWorkletManager::ProcessAudio(
 
 bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw)
 {
-// #region agent log: temporary debug instrumentation, remove when done.
-  // NOTE: do not call Post() here; AudioWorkletGlobalScope has no fetch.
-  // Use emscripten_get_now() (returns performance.now()), available in worklet.
-  const double wEntryMs = emscripten_get_now();
-  const double wPrevMs = g_workletLastEntryMs.exchange(wEntryMs);
-  if (wPrevMs > 0.0)
-  {
-    const uint64_t gapUs = static_cast<uint64_t>((wEntryMs - wPrevMs) * 1000.0);
-    uint64_t cur = g_workletMaxGapUs.load();
-    while (gapUs > cur && !g_workletMaxGapUs.compare_exchange_weak(cur, gapUs))
-    {
-    }
-  }
-  g_workletCalls.fetch_add(1, std::memory_order_relaxed);
-  auto countSilence = [&]()
-  { g_workletSilenceCount.fetch_add(1, std::memory_order_relaxed); };
-// #endregion
-
   auto* outputs = static_cast<AudioSampleFrame*>(outputsRaw);
   if (numOutputs <= 0 || !outputs)
-  {
-// #region agent log: temporary debug instrumentation, remove when done.
-    countSilence();
-// #endregion
     return true;
-  }
 
   const int samplesPerChannel = outputs[0].samplesPerChannel;
   if (samplesPerChannel <= 0 || !outputs[0].data)
@@ -854,9 +758,6 @@ bool CWasmAudioWorkletManager::ProcessAudioImpl(int numOutputs, void* outputsRaw
   if (!m_ready.load(std::memory_order_seq_cst))
   {
     zeroOutput();
-// #region agent log: temporary debug instrumentation, remove when done.
-    countSilence();
-// #endregion
     return true;
   }
 
