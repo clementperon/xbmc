@@ -127,16 +127,20 @@ mergeInto(LibraryManager.library, {
       return queueSize + (state.copying ? 1 : 0);
     },
 
+    // Frames waiting to be copied hold decoder output buffers just like chunks
+    // still decoding, so both count against MAX_INFLIGHT.
+    isBusy: function(state) {
+      return this.inflight(state) + state.frames.length >= this.MAX_INFLIGHT;
+    },
+
     publishState: function(state) {
       if (!state.sharedPtr)
         return;
       const base = state.sharedPtr >> 2;
-      const inflight = this.inflight(state);
       const next = state.frames.length > 0 ? state.frames[0] : null;
       Atomics.store(HEAP32, base + this.SS_QUEUED_FRAMES, state.frames.length);
-      Atomics.store(HEAP32, base + this.SS_INFLIGHT, inflight);
-      Atomics.store(HEAP32, base + this.SS_BUSY,
-                    inflight + state.frames.length >= this.MAX_INFLIGHT ? 1 : 0);
+      Atomics.store(HEAP32, base + this.SS_INFLIGHT, this.inflight(state));
+      Atomics.store(HEAP32, base + this.SS_BUSY, this.isBusy(state) ? 1 : 0);
       Atomics.store(HEAP32, base + this.SS_FAILED, state.failed ? 1 : 0);
       Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payloadSize : 0);
       Atomics.store(HEAP32, base + this.SS_NEXT_PIXFMT, next ? next.pixelFormat : this.PIXFMT_UNKNOWN);
@@ -469,7 +473,7 @@ mergeInto(LibraryManager.library, {
     if (dataSize <= 0)
       return B.PUSH_EMPTY;
 
-    if (B.inflight(state) >= B.MAX_INFLIGHT)
+    if (B.isBusy(state))
       return B.PUSH_BUSY;
 
     const tsMicros = Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND);
@@ -528,6 +532,22 @@ mergeInto(LibraryManager.library, {
       state.copying = false;
       B.publishState(state);
     });
+    return 1;
+  },
+
+  // ---------------------------------------------------------------------------
+  webcodecs_discard_next_frame__deps: ['$WebCodecsBridge'],
+  webcodecs_discard_next_frame__proxy: 'sync',
+  webcodecs_discard_next_frame__sig: 'iii',
+  webcodecs_discard_next_frame: function(handle, infoPtr) {
+    const B = WebCodecsBridge;
+    const state = B.getState(handle);
+    if (!state || state.frames.length === 0) return 0;
+
+    const entry = state.frames.shift();
+    B.writeFrameInfo(infoPtr, entry);
+    entry.frame.close();
+    B.publishState(state);
     return 1;
   },
 

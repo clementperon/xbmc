@@ -145,6 +145,10 @@ int webcodecs_copy_next_frame(int handle,
                               int dstSize,
                               struct WebCodecsFrameInfo* info);
 
+// Fills *info with the next queued frame's metadata and closes the frame without
+// copying it. Returns 1 if a frame was discarded, 0 if none was queued.
+int webcodecs_discard_next_frame(int handle, struct WebCodecsFrameInfo* info);
+
 // Reads accumulated queue stats.
 int webcodecs_read_stats(int handle, int* droppedFrames, int* highWaterMark);
 
