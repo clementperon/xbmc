@@ -173,7 +173,13 @@ they become synchronous, which is one more reason those flags are off.
 
 `PresentRenderImpl(rendered)`:
 
-1. Returns immediately if Kodi drew nothing (`rendered == false`).
+1. Returns immediately if Kodi drew nothing (`rendered == false`). That is
+   the steady state of a static screen: the offscreen framebuffer keeps the
+   previous frame, because Emscripten forces `preserveDrawingBuffer`
+   together with `renderViaOffscreenBackBuffer`, so `GetBufferAge()`
+   reports 1 and `CGUIWindowManager::Render` repaints dirty regions only.
+   With none, `CRenderSystemGLES::PresentRender` sleeps 40 ms, as on
+   native targets.
 2. **`emscripten_futex_wait(&vsyncTick, lastSeen, 100 ms)`.** Paces the
    loop to the display. If no tick arrives in 100 ms the frame is
    dropped and the function returns, which is what happens while the
@@ -241,6 +247,11 @@ Kodi code were required.
 directly. No `ImageBitmap`, no `postMessage`, no second canvas, and the
 GUI canvas can be given an alpha channel with a context attribute — which
 the video-plane design (§9) needs.
+
+**Idle frames are free.** The offscreen framebuffer is a single buffer that
+`commit_frame` only reads, so Kodi's dirty-region tracking works as on a
+platform with buffer age 1: a static screen issues no GL calls and no
+commit.
 
 **The proxying cost is bounded and measured.** The hot path is
 asynchronous (2.3); the main thread does the WebGL work, which on a
@@ -458,6 +469,12 @@ Relevant Emscripten source, for reference:
   main-thread round trip per frame; `emscripten_webgl_make_context_current`
   inside the frame loop was the first offender.
 
+- **Only the control that changed repaints; the rest is black.** The back
+  buffer is not being preserved. `GetBufferAge()` returning 1 relies on the
+  offscreen framebuffer surviving `commit_frame`; check that
+  `renderViaOffscreenBackBuffer` is still set in `CreateProxiedGLContext`
+  and that nothing takes another context on, or clears, `#canvas`.
+
 - **Nothing renders.** `Module.ctx` must be set on main and Kodi's log
   must show `WASM: using main-thread WebGL2 context proxied to the Kodi
   thread`. A `bitmaprenderer` or `2d` context taken on `#canvas` before
@@ -476,13 +493,6 @@ Relevant Emscripten source, for reference:
 
 - **HiDPI.** Render at `cssSize * devicePixelRatio`; rescale mouse
   input by `devicePixelRatio` in `TranslateMousePosition`.
-
-- **Static dialogs redraw at the display rate.** Kodi reports
-  `rendered == true` on every iteration of a modal loop even for a
-  dialog nothing is changing in, so a static Power Options dialog
-  costs a full GUI pass and a commit per vsync. Finding what marks the
-  screen dirty each iteration would cut GUI load on the TV
-  substantially.
 
 - **Video.** See §9.
 

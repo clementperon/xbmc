@@ -376,7 +376,7 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
 
 int CWinSystemWasmGLESContext::GetBufferAge()
 {
-  return 0;
+  return 1;
 }
 
 std::string CWinSystemWasmGLESContext::GetClipboardText()
