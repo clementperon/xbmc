@@ -30,6 +30,7 @@
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
 
+#include <algorithm>
 #include <mutex>
 
 using namespace Shaders;
@@ -389,7 +390,22 @@ void CLinuxRendererGLES::LoadPlane(CYuvPlane& plane, int type,
     }
   }
   GLenum datatype = (bpp == 2) ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+#if defined(TARGET_WASM)
+  // Emscripten proxies GL calls to the browser main thread and turns uploads of
+  // 256 KB or more into synchronous round trips, while smaller ones are copied
+  // and queued. Uploading in bands below that size keeps the render thread from
+  // waiting on the main thread once per plane.
+  const size_t rowBytes =
+      pixelStoreChanged ? static_cast<size_t>(stride) : static_cast<size_t>(width) * bps;
+  const unsigned int bandRows = std::max(1u, (256u * 1024u - 1u) / (width * bps));
+  for (unsigned int row = 0; row < height; row += bandRows)
+  {
+    glTexSubImage2D(m_textureTarget, 0, 0, row, width, std::min(bandRows, height - row), type,
+                    datatype, static_cast<const unsigned char*>(pixelData) + row * rowBytes);
+  }
+#else
   glTexSubImage2D(m_textureTarget, 0, 0, 0, width, height, type, datatype, pixelData);
+#endif
 
   if (m_pixelStoreKey > 0 && pixelStoreChanged)
     glPixelStorei(m_pixelStoreKey, 0);

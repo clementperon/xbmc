@@ -18,6 +18,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <string>
 
@@ -43,14 +45,11 @@ EMSCRIPTEN_BINDINGS(kodi_webcodecs_bridge)
       .value("BGRA", WEBCODECS_PIXFMT_BGRA)
       .value("BGRX", WEBCODECS_PIXFMT_BGRX);
 
-  emscripten::enum_<WebCodecsPushStatus>("WebCodecsPushStatus")
-      .value("QUEUED", WEBCODECS_PUSH_QUEUED)
-      .value("EMPTY", WEBCODECS_PUSH_EMPTY)
-      .value("HANDLE_NOT_FOUND", WEBCODECS_PUSH_HANDLE_NOT_FOUND)
-      .value("DECODER_FAILED", WEBCODECS_PUSH_DECODER_FAILED)
-      .value("NOT_CONFIGURED", WEBCODECS_PUSH_NOT_CONFIGURED)
-      .value("DECODE_THREW", WEBCODECS_PUSH_DECODE_THREW)
-      .value("BUSY", WEBCODECS_PUSH_BUSY);
+  emscripten::enum_<WebCodecsCopyResult>("WebCodecsCopyResult")
+      .value("OK", WEBCODECS_COPY_OK)
+      .value("FAILED", WEBCODECS_COPY_FAILED)
+      .value("DST_TOO_SMALL", WEBCODECS_COPY_DST_TOO_SMALL)
+      .value("NO_FRAME", WEBCODECS_COPY_NO_FRAME);
 }
 
 namespace
@@ -484,28 +483,6 @@ std::string ReadDecoderError(int decoderHandle)
   return std::string(buffer);
 }
 
-const char* PushStatusToString(int status)
-{
-  switch (status)
-  {
-    case WEBCODECS_PUSH_QUEUED:
-      return "queued";
-    case WEBCODECS_PUSH_EMPTY:
-      return "empty packet";
-    case WEBCODECS_PUSH_HANDLE_NOT_FOUND:
-      return "decoder handle not found";
-    case WEBCODECS_PUSH_DECODER_FAILED:
-      return "decoder in failed state";
-    case WEBCODECS_PUSH_NOT_CONFIGURED:
-      return "decoder not configured";
-    case WEBCODECS_PUSH_DECODE_THREW:
-      return "decode threw";
-    case WEBCODECS_PUSH_BUSY:
-      return "decoder busy (backpressure)";
-  }
-  return "unknown";
-}
-
 AVPixelFormat PixelFormatFromWebCodecs(int pixelFormat)
 {
   switch (pixelFormat)
@@ -630,6 +607,8 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
   const int descriptionSize = m_hasDescription ? static_cast<int>(m_hints.extradata.GetSize()) : 0;
 
   m_shared = {};
+  m_pushCount = 0;
+  m_copyId = 0;
   m_decoderHandle =
       webcodecs_create_decoder(m_codecString.c_str(), m_hints.width, m_hints.height, description,
                                descriptionSize, m_annexB ? 1 : 0, &m_shared);
@@ -705,7 +684,8 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (m_waitingForKeyFrame && !isKeyFrame)
     return true;
 
-  if (SharedLoad(m_shared.busy))
+  // Backpressure: decoder is saturated, let VideoPlayer re-queue this packet.
+  if (DecoderBusy())
     return false;
 
   double ptsSeconds = 0.0;
@@ -716,32 +696,19 @@ bool CDVDVideoCodecWebCodecs::AddData(const DemuxPacket& packet)
   if (packet.duration > 0.0 && std::isfinite(packet.duration))
     durationSeconds = packet.duration / static_cast<double>(DVD_TIME_BASE);
 
-  const int status = webcodecs_push_packet(m_decoderHandle, packet.pData, packet.iSize,
-                                           isKeyFrame ? 1 : 0, ptsSeconds, durationSeconds);
-
-  // Backpressure: decoder is saturated, let VideoPlayer re-queue this packet.
-  if (status == WEBCODECS_PUSH_BUSY)
+  // The push runs on the main thread after this call has returned, so it gets
+  // its own copy of the packet and frees it.
+  auto* data = static_cast<uint8_t*>(std::malloc(packet.iSize));
+  if (!data)
     return false;
+  std::memcpy(data, packet.pData, packet.iSize);
+  ++m_pushCount;
+  webcodecs_push_packet(m_decoderHandle, data, packet.iSize, isKeyFrame ? 1 : 0, ptsSeconds,
+                        durationSeconds);
 
   m_drained = false;
-
-  if (status <= 0)
-  {
-    if (status == WEBCODECS_PUSH_EMPTY)
-      return true;
-
-    const std::string error = ReadDecoderError(m_decoderHandle);
-    CLog::Log(LOGDEBUG,
-              "CDVDVideoCodecWebCodecs::AddData - decode rejected packet (size={}, pts={:.6f}s, "
-              "key={}, status={} [{}]): {}",
-              packet.iSize, ptsSeconds, isKeyFrame, status, PushStatusToString(status),
-              error.empty() ? "<no js error>" : error);
-    return false;
-  }
-
   if (isKeyFrame)
     m_waitingForKeyFrame = false;
-
   return true;
 }
 
@@ -790,6 +757,15 @@ void CDVDVideoCodecWebCodecs::PollDecoderStats()
 int32_t CDVDVideoCodecWebCodecs::SharedLoad(const int32_t& field)
 {
   return __atomic_load_n(&field, __ATOMIC_ACQUIRE);
+}
+
+// Pushes the main thread has not run yet are invisible to the shared counters
+// and have to be counted here.
+bool CDVDVideoCodecWebCodecs::DecoderBusy() const
+{
+  const int32_t pendingPushes = m_pushCount - SharedLoad(m_shared.pushesProcessed);
+  return pendingPushes + SharedLoad(m_shared.inflight) + SharedLoad(m_shared.queuedFrames) >=
+         WEBCODECS_MAX_INFLIGHT;
 }
 
 // Callers sample `seenSignal` before checking the shared state, so a change that
@@ -841,17 +817,18 @@ bool CDVDVideoCodecWebCodecs::WaitForDrain()
   }
 }
 
-bool CDVDVideoCodecWebCodecs::WaitForCopy()
+// Returns the WebCodecsCopyResult of request copyId, or 0 if it has not
+// finished within COPY_TIMEOUT.
+int32_t CDVDVideoCodecWebCodecs::WaitForCopy(int copyId)
 {
   const auto deadline = std::chrono::steady_clock::now() + COPY_TIMEOUT;
   while (true)
   {
     const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
-    const int32_t result = SharedLoad(m_shared.copyResult);
-    if (result != 0)
-      return result > 0;
+    if (SharedLoad(m_shared.copyDone) == copyId)
+      return SharedLoad(m_shared.copyResult);
     if (std::chrono::steady_clock::now() >= deadline)
-      return false;
+      return 0;
     WaitForDecoderSignal(seen, FRAME_WAIT_MS);
   }
 }
@@ -860,7 +837,7 @@ void CDVDVideoCodecWebCodecs::ReleaseCopyBuffer()
 {
   if (!m_copyBuffer)
     return;
-  WaitForCopy();
+  WaitForCopy(m_copyId);
   m_copyBuffer->Release();
   m_copyBuffer = nullptr;
 }
@@ -1042,7 +1019,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
   {
     m_drained = false;
     const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
-    if (SharedLoad(m_shared.queuedFrames) == 0 && SharedLoad(m_shared.busy))
+    if (SharedLoad(m_shared.queuedFrames) == 0 && DecoderBusy())
       WaitForDecoderSignal(seen, FRAME_WAIT_MS);
   }
 
@@ -1071,49 +1048,45 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     return VC_ERROR;
   }
 
+  // A copy an earlier call gave up on has to settle before another starts.
+  ReleaseCopyBuffer();
+
   const bool packedRgb = IsPackedRgb(pixelFormat);
   CVideoBuffer* videoBuffer = AcquirePictureBuffer(
       packedRgb ? *m_rgbBufferPool : *m_videoBufferPool, pixelFormat, payloadSize);
   if (!videoBuffer)
     return VC_NOBUFFER;
 
-  WebCodecsFrameInfo info{};
-  const int copyStatus =
-      webcodecs_copy_next_frame(m_decoderHandle, videoBuffer->GetMemPtr(), payloadSize, &info);
-  if (copyStatus != 1)
-  {
-    videoBuffer->Release();
-    if (copyStatus == 0)
-      return VC_BUFFER;
-
-    const std::string error = ReadDecoderError(m_decoderHandle);
-    CLog::Log(LOGERROR,
-              "CDVDVideoCodecWebCodecs::GetPicture - cannot start frame copy (status={}, "
-              "payloadSize={} vs published {}): {}",
-              copyStatus, info.payloadSize, payloadSize,
-              error.empty() ? "<no js error>" : error);
-    return VC_ERROR;
-  }
-
+  m_copyInfo = {};
   m_copyBuffer = videoBuffer;
-  if (!WaitForCopy())
+  webcodecs_copy_next_frame(m_decoderHandle, ++m_copyId, videoBuffer->GetMemPtr(), payloadSize,
+                            &m_copyInfo);
+  const int32_t copyResult = WaitForCopy(m_copyId);
+  if (copyResult == 0)
   {
-    if (SharedLoad(m_shared.copyResult) == 0)
-    {
-      CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - frame copy did not complete "
-                          "within {} ms",
-                COPY_TIMEOUT.count());
-      return VC_ERROR;
-    }
-
-    ReleaseCopyBuffer();
-    const std::string error = ReadDecoderError(m_decoderHandle);
-    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed: {}",
-              error.empty() ? "<no js error>" : error);
+    CLog::Log(LOGERROR,
+              "CDVDVideoCodecWebCodecs::GetPicture - frame copy did not complete within {} ms",
+              COPY_TIMEOUT.count());
     return VC_ERROR;
   }
   m_copyBuffer = nullptr;
 
+  if (copyResult != WEBCODECS_COPY_OK)
+  {
+    videoBuffer->Release();
+    if (copyResult == WEBCODECS_COPY_NO_FRAME)
+      return VC_BUFFER;
+
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGERROR,
+              "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed (result={}, "
+              "payloadSize={} vs published {}): {}",
+              copyResult, m_copyInfo.payloadSize, payloadSize,
+              error.empty() ? "<no js error>" : error);
+    return VC_ERROR;
+  }
+
+  WebCodecsFrameInfo& info = m_copyInfo;
   AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
   if (framePixelFormat == AV_PIX_FMT_NONE)
   {
