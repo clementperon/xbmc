@@ -139,10 +139,13 @@ every frame, so the browser can reclaim whatever it allocates.
    `emscripten_webgl_get_current_context()` returns 0, and a per-frame
    `make_context_current` costs a synchronous main-thread round trip
    (during bring-up it took the frame rate from 120 to 10).
-4. `InstallVsyncPump` installs the `requestAnimationFrame` pump on the
-   main thread; it increments a shared `uint32_t` and `Atomics.notify`s
-   it every display frame, and keeps an EMA of the refresh rate in
-   `globalThis.__kodiRefreshRate`.
+4. `VSYNC::InstallPump` (`WasmVsync.cpp`) installs the `requestAnimationFrame`
+   pump on the main thread. Every display frame it stores the frame's
+   timestamp in `CurrentHostCounter()` units and an EMA of the refresh rate
+   in shared memory (the rate is mirrored to `globalThis.__kodiRefreshRate`
+   for debugging), increments a shared `uint32_t` and `Atomics.notify`s
+   every waiter: the Kodi render thread (§2.3) and, when *Sync playback to
+   display* is on, the video reference clock (AVSYNC.md §4).
 
 ### 2.3 Per-frame path
 
@@ -429,7 +432,9 @@ These flags are deliberately **not** set:
 |---|---|
 | HTML shell | `tools/wasm/kodi.html` |
 | Main-thread glue: canvas focus, paste, worker log forwarding | `xbmc/platform/wasm/kodi_pre.js` |
-| Proxied context creation, `PresentRenderImpl`, vsync pump | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
+| Proxied context creation, `PresentRenderImpl`, display latency | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
+| Vsync pump: tick count, tick time, refresh rate in shared memory | `xbmc/windowing/wasm/WasmVsync.cpp` |
+| Reference-clock video sync fed by the pump | `xbmc/windowing/wasm/VideoSyncWasm.cpp` |
 | Input events (keyboard / mouse / resize) | `xbmc/windowing/wasm/WinEventsWasm.cpp` |
 | WASM `main()` + `WasmRunIteration` | `xbmc/platform/wasm/ApplicationWasm.cpp`, `xbmc/application/Application.cpp` |
 | Link flags | `cmake/scripts/wasm/ArchSetup.cmake` |

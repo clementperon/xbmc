@@ -51,6 +51,9 @@ public:
    */
   int GetBufferAge() override;
 
+  float GetDisplayLatency() override;
+  std::unique_ptr<CVideoSync> GetVideoSync(CVideoReferenceClock* clock) override;
+
   std::string GetClipboardText() override;
 
 protected:
