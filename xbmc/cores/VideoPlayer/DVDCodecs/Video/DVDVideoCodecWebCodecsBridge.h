@@ -111,8 +111,10 @@ extern "C"
 {
 #endif
 
-// Returns a positive decoder handle on success, 0 on failure. `shared` must stay
-// valid until webcodecs_destroy_decoder.
+// Returns a positive decoder handle on success, 0 on failure. `description` is
+// the AVC or HEVC decoder configuration record when the stream has one, and
+// `annexB` selects the Annex B bitstream format for those two codecs. `shared`
+// must stay valid until webcodecs_destroy_decoder.
 int webcodecs_create_decoder(const char* codec,
                              int codedWidth,
                              int codedHeight,

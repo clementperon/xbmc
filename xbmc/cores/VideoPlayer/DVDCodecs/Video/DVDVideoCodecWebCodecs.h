@@ -70,6 +70,7 @@ private:
   bool m_drained{false};
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
+  bool m_hasDescription{false};
   int m_nalLengthSize{0};
   int m_codecControlFlags{0};
   int m_lastLoggedDroppedFrames{0};

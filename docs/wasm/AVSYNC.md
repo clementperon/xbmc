@@ -138,18 +138,25 @@ is launched by the user so this resolves at the first remote key.
 `CDVDVideoCodecWebCodecs` is registered as a hardware codec (`webcodecs_dec`)
 from `CWinSystemWasmGLESContext::InitWindowSystem`, so `CDVDFactoryCodec`
 tries it before FFmpeg. `Open()` fails cleanly — and the player falls back
-to the software FFmpeg decoder — when the codec is not H.264, VP8 or VP9,
-when the page has no `VideoDecoder`, or when `configure()` throws. A
+to the software FFmpeg decoder — when the codec is not H.264, HEVC, VP8,
+VP9 or AV1, when the page has no `VideoDecoder`, or when `configure()`
+throws. A
 configuration that `isConfigSupported()` later rejects is reported through
 the shared `failed` flag and surfaces as `VC_ERROR` on the next
 `GetPicture()`.
 
-Codec strings: `avc1.PPCCLL` from the AVCDecoderConfigurationRecord (with
-the record passed as `description`, packets in AVCC length-prefixed form),
-or `avc1.42E01E` + `avc: {format: 'annexb'}` when the extradata is not an
-AVCC record (MPEG-TS, raw H.264); `vp09.PP.LL.DD` from the stream hints;
-`vp8`. The decoder is configured with `optimizeForLatency: true` and
-`hardwareAcceleration: 'prefer-hardware'`.
+Codec strings: `avc1.PPCCLL` from the AVCDecoderConfigurationRecord and
+`hvc1.P.C.LNNN.B0` from the HEVCDecoderConfigurationRecord, each passed as
+`description` with the packets in length-prefixed form; `avc1.42E01E` or
+`hev1.P.C.LNNN.B0` from the stream hints plus `{format: 'annexb'}` when the
+extradata is not such a record (MPEG-TS, raw streams), the parameter sets
+then travel in-band; `vp09.PP.LL.DD` from the stream hints; `vp8`;
+`av01.P.LLT.DD` from the AV1CodecConfigurationRecord, with temporal units
+passed as-is and no description. Keyframes are classified from the
+bitstream for every codec: IDR NAL units for H.264, IRAP NAL units for
+HEVC, the frame header bits for VP8 and VP9, the first frame header OBU of
+the temporal unit for AV1. The decoder is configured with
+`optimizeForLatency: true` and `hardwareAcceleration: 'prefer-hardware'`.
 
 ### 3.2 Thread and queue layout
 
@@ -157,7 +164,7 @@ AVCC record (MPEG-TS, raw H.264); `vp09.PP.LL.DD` from the stream hints;
 ┌────────────────────────────────────────────────────────────────────┐
 │ VideoPlayerVideo thread (Kodi pthread)                             │
 │   AddData(packet):                                                 │
-│     PacketIsKeyFrame() parses the bitstream (IDR / VP8 / VP9 hdr)  │
+│     PacketIsKeyFrame() parses the bitstream (IDR, IRAP, VPx, AV1)  │
 │     skip deltas until the first key                                 │
 │     shared.busy? → return false (VideoPlayer re-queues the packet)  │
 │     webcodecs_push_packet()               ── sync proxy ──►  main   │
@@ -344,9 +351,11 @@ Ordered by expected impact on a two-core Tizen TV.
    never emits its final frames at end of stream. Flushing only when the
    player knows the stream has really ended would need a new codec-control
    flag.
-4. **Codec coverage** is H.264, VP8 and VP9. Tizen TVs decode HEVC and AV1
-   in hardware; both map onto WebCodecs (`hvc1.`/`hev1.` from `hvcC`,
-   `av01.` from `av1C`) with the same bridge.
+4. **10-bit output is not accepted.** The bridge describes I420, NV12 and
+   packed RGB frames only. A decoder that emits `I420P10` for HEVC Main 10,
+   VP9 profile 2 or 10-bit AV1 fails the stream rather than falling back;
+   accepting those formats needs the 16-bit plane layout in `describeFrame`
+   and `AV_PIX_FMT_YUV420P10` in `GetPicture`.
 
 ---
 
