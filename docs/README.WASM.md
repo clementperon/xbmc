@@ -357,6 +357,8 @@ What the inspector gives you on a retail TV:
 * **Performance / Memory** — main-thread activity and JS heap. GPU memory is not exposed; infer it from growth in frame time or from the app being killed.
 * **Application → Storage** — the IndexedDB the Emscripten filesystem persists userdata into.
 
+For CPU profiles of Kodi's threads without the DevTools GUI, `tools/wasm/tizen/profiling/` has a DevTools Protocol client that attaches to the page and to every worker, saves one `.cpuprofile` per thread and can wait for playback to start before sampling, plus scripts that summarise and compare the profiles and snippets that read Kodi's log and A/V timing out of the Emscripten filesystem. Configure the build with `-DENABLE_WASM_PROFILING=ON` so the profiles carry wasm function names. The workflow is in the *Profiling* section of **[tools/wasm/tizen/README.md](../tools/wasm/tizen/README.md)**.
+
 Under the hood the script runs `sdb shell 0 debug kodiplayer.Kodi`, which prints `port: <n>`, followed by `sdb forward tcp:7011 tcp:<n>`. Override the app ID with `KODI_TIZEN_APP_ID` and the local port with `KODI_TIZEN_INSPECT_PORT`.
 
 If the launch reports `with debug 0` (`tz`) or answers `closed` (`sdb`), the TV declined to open a debug port even though the app is installed and signed with a Samsung developer certificate. Check on the TV that Developer mode is on and its Host PC IP is this machine's address, then reboot the TV; a 2025 Tizen 9.0 set still refused after both, and the cause there is not yet understood.
