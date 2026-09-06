@@ -177,6 +177,7 @@ void CGUIDialog::Open_Internal(bool bProcessRenderLoop, const std::string &param
 
     while (m_active)
     {
+      PumpPlatformEvents();
       if (!CServiceBroker::GetGUI()->GetWindowManager().ProcessRenderLoop(false))
         break;
     }
@@ -236,5 +237,16 @@ void CGUIDialog::CancelAutoClose(void)
 
 void CGUIDialog::ProcessRenderLoop(bool renderOnly)
 {
+  PumpPlatformEvents();
   CServiceBroker::GetGUI()->GetWindowManager().ProcessRenderLoop(renderOnly);
+}
+
+void CGUIDialog::PumpPlatformEvents()
+{
+#if defined(TARGET_WASM)
+  // Modal dialogs run a nested render loop that bypasses the normal
+  // CWinSystemBase::DriveRenderLoop() message pump. Keep the platform event
+  // pump alive here so wasm browser/remote input continues to reach Kodi.
+  CServiceBroker::GetWinSystem()->MessagePump();
+#endif
 }

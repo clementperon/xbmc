@@ -198,6 +198,8 @@ public:
   float GetCacheTotal();
   float GetMaxDelay() const;
   float GetWaterLevel();
+  int GetBufferedSamples();
+  double GetSinkDelaySeconds();
   void SetSuspended(bool state);
   void SetCurrentSinkFormat(const AEAudioFormat& SinkFormat);
   void SetSinkCacheTotal(float time) { m_sinkCacheTotal = time; }
@@ -288,6 +290,7 @@ protected:
   void PlaySound(CActiveAESound *sound);
   static uint8_t **AllocSoundSample(SampleConfig &config, int &samples, int &bytes_per_sample, int &planes, int &linesize);
   static void FreeSoundSample(uint8_t **data);
+  void GetDelay(AEDelayStatus& status) { m_stats.GetDelay(status); }
   void GetDelay(AEDelayStatus& status, CActiveAEStream *stream) { m_stats.GetDelay(status, stream); }
   void GetSyncInfo(CAESyncInfo& info, CActiveAEStream *stream) { m_stats.GetSyncInfo(info, stream); }
   float GetCacheTime(CActiveAEStream *stream) { return m_stats.GetCacheTime(stream); }
