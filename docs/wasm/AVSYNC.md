@@ -194,7 +194,10 @@ the temporal unit for AV1. The decoder is configured with
 `pushesProcessed`, `copyDone` and `copyResult`. The JS side rewrites all of
 them and bumps `signal` on every state change, so the C++ side reads them
 with acquire loads and only ever blocks in
-`emscripten_futex_wait(&signal, seen, timeout)`.
+`emscripten_futex_wait(&signal, seen, timeout)`. The fields are stored one
+at a time with the signal last, so a reader that catches a publish half-way
+can see a frame count without its metadata; it treats that as "no frame
+yet" and asks again.
 
 The two calls made for every packet, `webcodecs_push_packet` and
 `webcodecs_copy_next_frame`, are asynchronous proxies: they return as soon
