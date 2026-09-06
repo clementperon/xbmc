@@ -12,6 +12,7 @@
 #include "WebGLCommit.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.h"
 #include "cores/VideoPlayer/Process/wasm/ProcessInfoWasm.h"
+#include "cores/VideoPlayer/VideoRenderers/HwDecRender/RendererWebCodecs.h"
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h"
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "rendering/gles/ScreenshotSurfaceGLES.h"
@@ -124,6 +125,7 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
   CProcessInfoWasm::Register();
   CDVDVideoCodecWebCodecs::Register();
   CLinuxRendererGLES::Register();
+  CRendererWebCodecs::Register();
   CScreenshotSurfaceGLES::Register();
 
   int initW = 0;
