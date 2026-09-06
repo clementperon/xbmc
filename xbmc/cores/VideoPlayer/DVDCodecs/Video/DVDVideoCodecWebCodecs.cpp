@@ -28,6 +28,7 @@
 
 extern "C"
 {
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -662,7 +663,9 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
   m_codecControlFlags = 0;
   m_lastLoggedDroppedFrames = 0;
   m_highWaterMark = 0;
+  m_reportedPixelFormat = AV_PIX_FMT_NONE;
   m_processInfo.SetVideoDecoderName(m_name, true);
+  m_processInfo.SetVideoDeintMethod("none");
   m_processInfo.SetVideoDimensions(hints.width, hints.height);
   CLog::Log(LOGINFO,
             "CDVDVideoCodecWebCodecs::Open - Using WebCodecs for video decoding: {} ({}x{}, annexB={})",
@@ -969,6 +972,16 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
   pVideoPicture->colorBits = PICTURE_COLOR_BITS;
 }
 
+// Takes the WebCodecs output format so a packed RGB fallback is visible in the process info.
+void CDVDVideoCodecWebCodecs::ReportPixelFormat(AVPixelFormat format)
+{
+  if (format == m_reportedPixelFormat)
+    return;
+  m_reportedPixelFormat = format;
+  const char* name = av_get_pix_fmt_name(format);
+  m_processInfo.SetVideoPixelFormat(name ? name : "");
+}
+
 // A picture flagged DVP_FLAG_DROPPED is never rendered, but VideoPlayerVideo
 // still configures the renderer from it, so it carries a buffer of the format the
 // displayed pictures have.
@@ -985,6 +998,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::DiscardNextFrame(VideoPicture*
               info.pixelFormat);
     return VC_ERROR;
   }
+  ReportPixelFormat(pixelFormat);
 
   int bufferSize = info.payloadSize;
   if (IsPackedRgb(pixelFormat))
@@ -1095,6 +1109,7 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
               info.pixelFormat);
     return VC_ERROR;
   }
+  ReportPixelFormat(framePixelFormat);
 
   if (IsPackedRgb(framePixelFormat))
   {

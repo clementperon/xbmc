@@ -45,6 +45,7 @@ private:
   int32_t WaitForCopy(int copyId);
   VCReturn DiscardNextFrame(VideoPicture* pVideoPicture);
   void ReleaseCopyBuffer();
+  void ReportPixelFormat(AVPixelFormat format);
   CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
                                      AVPixelFormat pixelFormat,
                                      int bufferSize);
@@ -65,6 +66,7 @@ private:
   std::shared_ptr<CVideoBufferPoolSysMem> m_rgbBufferPool;
   SwsContext* m_swsContext{nullptr};
   bool m_loggedRgbConversion{false};
+  AVPixelFormat m_reportedPixelFormat{AV_PIX_FMT_NONE};
 
   int m_decoderHandle{0};
   bool m_opened{false};
