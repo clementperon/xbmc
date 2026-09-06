@@ -242,23 +242,37 @@ sets `dts = DVD_NOPTS_VALUE`; VideoPlayerVideo takes `pts` as-is and
 replaces `iDuration` with its own frame-rate estimate, as it does for every
 codec.
 
-### 3.5 Pixel formats and the copy
+### 3.5 Pixel formats: texture import, and the copy fallback
 
-`describeFrame()` maps the `VideoFrame.format` to a tightly packed layout
-and `copyTo()` writes straight into the `CVideoBufferSysMem` memory (the
-wasm heap is a `SharedArrayBuffer` under pthreads, and Chromium's `copyTo`
-accepts a view on it; a browser that rejects shared views falls back to a
-scratch buffer plus one `memcpy`).
+When the page's WebGL accepts a `VideoFrame` as a `texImage2D` source
+(probed once at window-system init, ZERO_COPY.md §4.7), `GetPicture()`
+returns a `CVideoBufferWebCodecs` that only names the frame, and
+`CRendererWebCodecs` has the browser import it into a texture on the main
+thread. Every `VideoFrame.format` the decoder can emit, `I420`, `NV12`,
+`RGBX`, `I420P10`, …, goes through the same call; the browser converts it
+to the canvas colour space using the frame's own `colorSpace`, whose
+matrix, primaries, transfer and range also fill the picture's colour fields
+(ZERO_COPY.md §5.5), and the process info shows the WebCodecs format name.
+No pixel crosses the wasm heap.
+
+Without that support the codec copies: `copyLayout()` maps the format to a
+tightly packed layout and `copyTo()` writes straight into the
+`CVideoBufferSysMem` memory (the wasm heap is a `SharedArrayBuffer` under
+pthreads, and Chromium's `copyTo` accepts a view on it; a browser that
+rejects shared views falls back to a scratch buffer plus one `memcpy`).
 
 | `VideoFrame.format` | Handed to the renderer as | Extra work |
 |---|---|---|
 | `I420` | `AV_PIX_FMT_YUV420P` | none |
 | `NV12` | `AV_PIX_FMT_NV12` | none |
 | `RGBA` / `RGBX` / `BGRA` / `BGRX` | `AV_PIX_FMT_YUV420P` | `sws_scale` RGB → YUV420P on the VideoPlayer thread, `SWS_POINT`, colour matrix taken from the stream hints so the renderer's YUV→RGB inverts it exactly |
+| anything else (10-bit, 4:2:2, 4:4:4, alpha) | — | the stream fails |
 
-Packed RGB is what the Samsung Tizen hardware decoder currently returns.
-That path costs an extra CPU pass over every frame and quantises full-range
-RGB to 4:2:0 before the renderer turns it back into RGB; see §6.
+Packed RGB is what the Samsung Tizen hardware decoder returns; on the copy
+path it costs an extra CPU pass over every frame and quantises full-range
+RGB to 4:2:0 before the renderer turns it back into RGB. The copy path stays
+until the texture import has been validated on the TV and the desktop
+browsers (ZERO_COPY.md §7).
 
 ### 3.6 Seek, flush and end of stream
 
@@ -358,27 +372,23 @@ Enable `LOGAVTIMING` in the component logging settings to see
 
 ## 6. Known limitations and planned improvements
 
-Ordered by expected impact on a two-core Tizen TV. Items 1 and 3 are both
-removed by the zero-copy design in [ZERO_COPY.md](ZERO_COPY.md), which hands
-the decoder's frames to WebGL without a pass through the wasm heap.
+Ordered by expected impact on a two-core Tizen TV.
 
-1. **Packed-RGB frames go through a software RGB→YUV pass.** The renderer
-   only takes planar YUV, so a decoder that outputs RGBA costs a 1080p
-   `sws_scale` per frame and a 4:2:0 quantisation of the picture. Teaching
-   `CLinuxRendererGLES` (or a small dedicated renderer) to upload packed
-   RGBA and draw it without a colour conversion removes the pass entirely;
-   it is the cheapest sysmem path possible short of the video-plane design
-   in RENDERING.md §9.3.
-2. **The last frames of a stream can be lost.** Drain does not flush
+1. **The last frames of a stream can be lost.** Drain does not flush
    (§3.6), so a decoder that withholds output until it sees more input
    never emits its final frames at end of stream. Flushing only when the
    player knows the stream has really ended would need a new codec-control
    flag.
-3. **10-bit output is not accepted.** The bridge describes I420, NV12 and
-   packed RGB frames only. A decoder that emits `I420P10` for HEVC Main 10,
-   VP9 profile 2 or 10-bit AV1 fails the stream rather than falling back;
-   accepting those formats needs the 16-bit plane layout in `describeFrame`
-   and `AV_PIX_FMT_YUV420P10` in `GetPicture`.
+2. **The copy fallback is limited.** A browser whose WebGL rejects a
+   `VideoFrame` source gets the sysmem path of §3.5, which converts packed
+   RGB in software and fails 10-bit, 4:2:2, 4:4:4 and alpha formats. The
+   path is slated for removal once the texture import is validated
+   (ZERO_COPY.md §7.1 step 6); until then those browsers keep today's
+   behaviour.
+3. **HDR is the browser's.** On the texture-import path a PQ or HLG frame
+   is converted to the sRGB canvas by the browser; Kodi's tone mapping and
+   its settings do not apply, and the result is not yet verified on the TV
+   (ZERO_COPY.md §7.3).
 
 ---
 
