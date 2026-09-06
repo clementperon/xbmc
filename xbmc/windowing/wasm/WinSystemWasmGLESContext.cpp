@@ -9,6 +9,7 @@
 #include "VideoSyncWasm.h"
 #include "WasmClipboard.h"
 #include "WasmVsync.h"
+#include "WebGLCommit.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.h"
 #include "cores/VideoPlayer/Process/wasm/ProcessInfoWasm.h"
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h"
@@ -266,12 +267,11 @@ void CWinSystemWasmGLESContext::PresentRenderImpl(bool rendered)
     return;
   m_lastVsyncSeen = next;
 
-  // Synchronous: blits the offscreen framebuffer to the canvas on the main
-  // thread once every queued GL call before it has executed.
-  const EMSCRIPTEN_RESULT r = emscripten_webgl_commit_frame();
-  if (r != EMSCRIPTEN_RESULT_SUCCESS)
+  // Synchronous: the main thread runs every queued GL call, then blits the
+  // offscreen framebuffer to the canvas.
+  if (wasm_webgl_commit_frame() == 0)
   {
-    CLog::Log(LOGWARNING, "WASM: emscripten_webgl_commit_frame failed ({})", r);
+    CLog::Log(LOGWARNING, "WASM: no WebGL context to commit the frame to");
     return;
   }
   if (!m_firstFramePresented)
