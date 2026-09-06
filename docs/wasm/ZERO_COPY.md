@@ -1,8 +1,15 @@
 # Kodi WebAssembly — zero-copy video: WebCodecs frames as WebGL textures
 
-**Status: design, not implemented** (September 2026). This is the companion of
-[AVSYNC.md](AVSYNC.md), which describes the WebCodecs bridge and the clocks as
-they are today, and of [RENDERING.md](RENDERING.md), which describes the GUI
+**Status: implemented, TV validation pending** (September 2026). Steps 1 to
+5 of §7.1 are in the tree; the sysmem copy path stays as the fallback until
+the validation of §7.2 is done, then step 6 removes it. Verified so far in
+desktop Chrome on macOS: H.264 at 640×360 (software `I420` frames), 1080p60
+and 2160p30 (hardware `NV12` frames) play through the texture import at the
+source frame rate with no dropped frames, pause, frame step and seek behave,
+and the copy fallback, forced by hand, still plays through the YUV shader.
+The TV numbers of §7.2 and the answers to §7.3 are still open. This is
+the companion of [AVSYNC.md](AVSYNC.md), which describes the WebCodecs bridge
+and the clocks, and of [RENDERING.md](RENDERING.md), which describes the GUI
 presentation path and the threading rules the browser imposes. Their
 vocabulary is used here without being re-explained. RENDERING.md §9.3
 describes a video-plane design; this document replaces it as the next step and
@@ -17,10 +24,11 @@ the implementation plan and how to validate it on the TV.
 
 ## 1. The problem
 
-The decoder is a black box on the far side of the browser main thread and the
-renderer is Kodi's generic sysmem YUV renderer, so today a decoded frame is
-dragged through the CPU to get from one to the other. For a 1080p frame from
-the Samsung Tizen decoder, which outputs packed RGB (`RGBX`, 8.3 MB):
+The decoder is a black box on the far side of the browser main thread, and
+with Kodi's generic sysmem YUV renderer a decoded frame is dragged through
+the CPU to get from one to the other. That is the path this design replaced,
+and the one the fallback of §4.7 still takes. For a 1080p frame from the
+Samsung Tizen decoder, which outputs packed RGB (`RGBX`, 8.3 MB):
 
 ```
 VideoDecoder output                 VideoFrame, GPU- or CPU-backed, RGBX 1920×1080

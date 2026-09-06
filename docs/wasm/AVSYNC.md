@@ -362,7 +362,9 @@ the numbers the two previous sections provide.
 | Audio stutters, `worklet underrun` warnings | The sink thread is late filling the ring: main thread saturated (video copies, GL) or the pthread starved. Check that `AudioContext.state` is `running`. |
 | `large audio sync error` with a stable `sinkDelay` | Clock drift between `AudioContext` and the host counter; expected to be small. If `sinkDelay` jumps, `outputLatency` changed (device switch, HDMI re-negotiation): the pipeline latency is only sampled at sink initialisation. |
 | `dropped N queued WebCodecs frames` | The metadata ring is full (`WEBCODECS_FRAME_RING` frames produced and not taken); VideoPlayer is not pulling pictures — usually the render side is stalled. |
-| `frame copy did not complete within 500 ms` | `copyTo()` never resolved: main thread blocked or the frame was closed by a `reset()` racing the copy. |
+| `frame copy did not complete within 500 ms` | Copy fallback only: `copyTo()` never resolved, main thread blocked or the frame was closed by a `reset()` racing the copy. |
+| `texture upload failed` (`VC_ERROR` after a stream had been playing) | `texImage2D(videoFrame)` threw on the main thread although the probe at start accepted it; the browser console has the exception. |
+| Video frozen while the GUI runs, `OutputPicture - timeout waiting for buffer` | The tab is hidden or occluded: the browser stops `requestAnimationFrame`, the render thread presents nothing and the render manager's buffers stay full. Playback resumes when the tab is visible again. |
 | Lip-sync off by a constant | Compare `GetDisplayLatency()` (§4.4) with the measured present latency; adjust with the audio offset setting until a `CVideoSync`/latency override exists. |
 
 Enable `LOGAVTIMING` in the component logging settings to see
@@ -398,9 +400,10 @@ Ordered by expected impact on a two-core Tizen TV.
 |---|---|
 | Audio sink (`IAESink`) | `xbmc/cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.cpp` |
 | AudioContext / worklet / ring buffer | `xbmc/platform/wasm/WasmAudioWorkletManager.cpp` |
-| Video codec (`CDVDVideoCodec`) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp` |
-| Shared ABI: enums, `WebCodecsSharedState`, `WebCodecsFrameInfo` | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecsBridge.h` |
-| Main-thread `VideoDecoder` driver | `xbmc/cores/VideoPlayer/DVDCodecs/Video/webcodecs_bridge.js` |
+| Video codec (`CDVDVideoCodec`), `CVideoBufferWebCodecs` and its pool | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp`, `.h` |
+| Shared ABI: enums, `WebCodecsSharedState`, `WebCodecsFrameInfo`, the frame ring | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecsBridge.h` |
+| Main-thread `VideoDecoder` driver, frame map, texture import, copy fallback | `xbmc/cores/VideoPlayer/DVDCodecs/Video/webcodecs_bridge.js` |
+| Renderer drawing the imported textures | `xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererWebCodecs.cpp` |
 | Sync-error diagnostics | `xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp` |
 | Vsync pump shared with the GUI present path | `xbmc/windowing/wasm/WasmVsync.cpp` |
 | Video sync for `CVideoReferenceClock`, display latency | `xbmc/windowing/wasm/VideoSyncWasm.cpp`, `WinSystemWasmGLESContext.cpp` |
