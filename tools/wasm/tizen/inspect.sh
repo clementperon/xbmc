@@ -35,5 +35,6 @@ DevTools endpoint forwarded to http://localhost:$LOCAL_PORT/
     its bundled DevTools frontend is old and may render blank in a current
     Chrome; chrome://inspect uses Chrome's own frontend.
 Kodi is already running when the inspector attaches, so startup console
-output is missed. Filter the console on [KODI_DBG] for the debug ticks.
+output is missed. For CPU profiles of every Kodi thread from the command
+line see tools/wasm/tizen/profiling/.
 MSG
