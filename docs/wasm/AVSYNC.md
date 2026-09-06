@@ -169,10 +169,11 @@ the temporal unit for AV1. The decoder is configured with
 │     DecoderBusy()? → return false (VideoPlayer re-queues the packet)│
 │     webcodecs_push_packet(copy)          ── async proxy ──►  main   │
 │   GetPicture():                                                     │
-│     shared.queuedFrames == 0 → VC_BUFFER (futex wait ≤20 ms if busy)│
-│     DROP flag set? → webcodecs_discard_next_frame() ── sync ──► main │
-│     pool.Get() → CVideoBufferSysMem sized from shared.nextPayloadSize│
-│     webcodecs_copy_next_frame(dst, id)   ── async proxy ──►  main   │
+│     framesProduced == framesTaken → VC_BUFFER (futex wait ≤20 ms if busy)│
+│     copy ring[framesTaken % 32] out, publish framesTaken + 1        │
+│     DROP flag set? → webcodecs_release_frame(seq) ── async ──► main │
+│     pool.Get() → CVideoBufferSysMem sized from the slot's payloadSize│
+│     webcodecs_copy_frame(seq, dst, id)   ── async proxy ──►  main   │
 │     futex wait on shared.signal until shared.copyDone == id         │
 │     packed RGB? → sws_scale → YUV420P (see 3.5)                     │
 │     fill VideoPicture{pts, duration, colour metadata} → VC_PICTURE  │
@@ -181,33 +182,40 @@ the temporal unit for AV1. The decoder is configured with
 ┌─────────────────────────────▼──────────────────────────────────────┐
 │ Browser main thread                                                │
 │   VideoDecoder.decode(EncodedVideoChunk{type, timestamp µs, dur}) │
-│   output(frame) → state.frames.push({frame, layout, pts, ...})     │
-│   copy_next_frame: frames.shift(); frame.copyTo(HEAPU8 view) …     │
+│   output(frame) → frames.set(seq, frame); ring[seq % 32] = info;   │
+│                   publishState()                                    │
+│   copy_frame(seq): frames.delete(seq); frame.copyTo(HEAPU8 view) … │
 │     .finally → frame.close(); publishState()                       │
-│   publishState(): store every field, signal++, Atomics.notify      │
+│   publishState(): store every counter, signal++, Atomics.notify    │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-`WebCodecsSharedState` (36 bytes, layout asserted in
-`DVDVideoCodecWebCodecsBridge.h`) carries `signal`, `queuedFrames`,
-`inflight`, `failed`, `nextPayloadSize`, `nextPixelFormat`,
-`pushesProcessed`, `copyDone` and `copyResult`. The JS side rewrites all of
-them and bumps `signal` on every state change, so the C++ side reads them
-with acquire loads and only ever blocks in
-`emscripten_futex_wait(&signal, seen, timeout)`. The fields are stored one
-at a time with the signal last, so a reader that catches a publish half-way
-can see a frame count without its metadata; it treats that as "no frame
-yet" and asks again.
+Every output frame gets a per-decoder sequence number `seq`. The JS side
+keeps the `VideoFrame` in a `Map` under it and writes the frame's metadata,
+a `WebCodecsFrameInfo` (dimensions, pixel format, colour space, timestamps
+and the plane layout of a copy), into slot `seq % 32` of a ring inside
+`WebCodecsSharedState` (layout asserted in `DVDVideoCodecWebCodecsBridge.h`).
+The state also carries `signal`, `framesProduced`, `framesTaken`, `inflight`,
+`failed`, `pushesProcessed`, `copyDone` and `copyResult`. The JS side writes
+the slot before it publishes `framesProduced` and bumps `signal` on every
+change, so the C++ side reads the counters with acquire loads, sees a
+complete slot for every frame it is told about, and only ever blocks in
+`emscripten_futex_wait(&signal, seen, timeout)`. `framesTaken` is the one
+field the codec writes: `GetPicture()` copies the slot out, then publishes
+`framesTaken + 1`, after which the output callback may reuse that slot.
+Taking a frame involves no call into JS at all.
 
-The two calls made for every packet, `webcodecs_push_packet` and
-`webcodecs_copy_next_frame`, are asynchronous proxies: they return as soon
-as the call is queued for the main thread, so the video thread never waits
-for the main thread to be free. A push takes a `malloc`'d copy of the packet
-that the JS side frees, and is counted in `pushesProcessed` once it has run.
-A copy carries an id; the JS side writes the frame metadata, sets `copyDone`
-to that id and `copyResult` to the outcome, and the codec waits on the futex
-for exactly that id. The remaining calls (create, reset, destroy, discard,
-stats, error text) are synchronous and rare.
+The two calls made for every frame, `webcodecs_push_packet` and
+`webcodecs_copy_frame`, are asynchronous proxies: they return as soon as the
+call is queued for the main thread, so the video thread never waits for the
+main thread to be free. A push takes a `malloc`'d copy of the packet that
+the JS side frees, and is counted in `pushesProcessed` once it has run. A
+copy names the frame by sequence number and carries an id; the JS side sets
+`copyDone` to that id and `copyResult` to the outcome, and the codec waits
+on the futex for exactly that id. `webcodecs_release_frame(seq)`,
+asynchronous too, closes a frame that will not be copied. The remaining
+calls (create, reset, destroy, stats, error text, the texture-upload probe of
+ZERO_COPY.md §4.7) are synchronous and rare.
 
 ### 3.3 Backpressure
 
@@ -215,8 +223,8 @@ Two limits, both enforced on the main thread:
 
 | Limit | Value | Effect |
 |---|---|---|
-| `WEBCODECS_MAX_INFLIGHT` | 12 | The codec is busy when `pending pushes + inflight + queuedFrames` reaches it, where pending pushes are its own push count minus `pushesProcessed`. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
-| `FRAME_QUEUE_HIGH_WATER` | 24 | Safety valve in the output callback: frames beyond it are closed and counted as dropped. Not reached while `busy` works. |
+| `WEBCODECS_MAX_INFLIGHT` | 12 | The codec is busy when `pending pushes + inflight + (framesProduced - framesTaken)` reaches it, where pending pushes are its own push count minus `pushesProcessed`. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool and stall when too many `VideoFrame`s stay open. |
+| `WEBCODECS_FRAME_RING` | 32 | Size of the metadata ring. The output callback closes and counts as dropped a frame that would overwrite the slot of a frame the codec has not taken. Not reached while `busy` works. |
 
 Decoded frames stay open on the main thread until the codec asks for one,
 so the memory cost of a queued frame is the decoder's, not the wasm heap's.
@@ -255,11 +263,15 @@ RGB to 4:2:0 before the renderer turns it back into RGB; see §6.
 ### 3.6 Seek, flush and end of stream
 
 * **Seek / `Reset()`** → `webcodecs_reset_decoder`: `VideoDecoder.reset()`
-  drops everything, the JS state closes its queued frames, the decoder is
-  `configure()`d again (reset returns it to `unconfigured`), and the codec
-  goes back to skipping deltas until the next key packet. A copy still in
-  flight is waited for first (`ReleaseCopyBuffer`) so the browser never
-  writes into a buffer Kodi has recycled.
+  drops everything, the JS state closes the frames the codec has not taken
+  (sequence numbers from `framesTaken` up; the taken ones belong to Kodi
+  buffers and are closed when those are released), the decoder is
+  `configure()`d again (reset returns it to `unconfigured`), the codec sets
+  `framesTaken = framesProduced` and goes back to skipping deltas until the
+  next key packet. Sequence numbers keep counting across resets, so a stale
+  request can never name a new frame. A copy still in flight is waited for
+  first (`ReleaseCopyBuffer`) so the browser never writes into a buffer Kodi
+  has recycled.
 * **Drain** (`DVD_CODEC_CTRL_DRAIN`, sent at end of stream, on stream change
   and when VideoPlayerVideo detects a still frame) does not call
   `VideoDecoder.flush()`. A flushed decoder demands a key chunk, and
@@ -272,16 +284,16 @@ RGB to 4:2:0 before the renderer turns it back into RGB; see §6.
   the remaining in-flight count is logged. The cost is at a real end of
   stream: frames a decoder holds back until it sees more input are never
   emitted.
-* **Drop** (`DVD_CODEC_CTRL_DROP`, `DVD_CODEC_CTRL_DROP_ANY`) → the next
-  queued frame is closed without `copyTo()` through
-  `webcodecs_discard_next_frame`, and `GetPicture()` returns a picture flagged
+* **Drop** (`DVD_CODEC_CTRL_DROP`, `DVD_CODEC_CTRL_DROP_ANY`) → the frame is
+  taken from the ring and closed without `copyTo()` through the asynchronous
+  `webcodecs_release_frame`, and `GetPicture()` returns a picture flagged
   `DVP_FLAG_DROPPED`. VideoPlayerVideo still configures the renderer from such
   a picture, so it carries an uncopied buffer of the displayed format; it is
   never rendered. Skipping the copy saves the most exactly when the CPU is
   already behind.
-* **Destroy** → `webcodecs_destroy_decoder` closes frames and decoder and
-  zeroes the state pointer so a late `copyTo` completion cannot publish
-  into memory the codec has freed.
+* **Destroy** → `webcodecs_destroy_decoder` closes every frame, taken or
+  not, and the decoder, and zeroes the state pointer so a late `copyTo`
+  completion cannot publish into memory the codec has freed.
 
 ---
 
@@ -335,7 +347,7 @@ the numbers the two previous sections provide.
 |---|---|
 | Audio stutters, `worklet underrun` warnings | The sink thread is late filling the ring: main thread saturated (video copies, GL) or the pthread starved. Check that `AudioContext.state` is `running`. |
 | `large audio sync error` with a stable `sinkDelay` | Clock drift between `AudioContext` and the host counter; expected to be small. If `sinkDelay` jumps, `outputLatency` changed (device switch, HDMI re-negotiation): the pipeline latency is only sampled at sink initialisation. |
-| `dropped N queued WebCodecs frames` | The output queue hit `FRAME_QUEUE_HIGH_WATER`; VideoPlayer is not pulling pictures — usually the render side is stalled. |
+| `dropped N queued WebCodecs frames` | The metadata ring is full (`WEBCODECS_FRAME_RING` frames produced and not taken); VideoPlayer is not pulling pictures — usually the render side is stalled. |
 | `frame copy did not complete within 500 ms` | `copyTo()` never resolved: main thread blocked or the frame was closed by a `reset()` racing the copy. |
 | Lip-sync off by a constant | Compare `GetDisplayLatency()` (§4.4) with the measured present latency; adjust with the audio offset setting until a `CVideoSync`/latency override exists. |
 

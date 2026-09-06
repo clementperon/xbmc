@@ -10,8 +10,14 @@
 //
 // Every exported function carries a __proxy attribute so calls from any pthread
 // are marshalled to the main browser thread, where the VideoDecoder lives. The
-// per-packet calls are 'async' and report through WebCodecsSharedState, which
+// per-frame calls are 'async' and report through WebCodecsSharedState, which
 // the C++ side polls with Atomics instead of a round trip (see publishState).
+//
+// Output frames get a per-decoder sequence number. The VideoFrame stays in a
+// Map under that number and its metadata goes into the ring inside the shared
+// state, written before framesProduced is published, so the codec takes frames
+// without a call into JS and names them by number for upload, copy or release.
+// See docs/wasm/ZERO_COPY.md §4.
 //
 // Function signatures must match the C prototypes; mismatched __sig will
 // silently corrupt arguments on threaded builds.
@@ -25,19 +31,19 @@ mergeInto(LibraryManager.library, {
   // ---------------------------------------------------------------------------
   $WebCodecsBridge: {
     MICROSECONDS_PER_SECOND: 1000000.0,
-    FRAME_QUEUE_HIGH_WATER: 24,
+    FRAME_RING: 32,
 
-    // Enum values below are pulled from the C++-owned Embind registrations
-    // (Module.WebCodecsPixelFormat / Module.WebCodecsCopyResult) on first use
-    // by syncEnumsFromEmbind(). The C++ header (DVDVideoCodecWebCodecsBridge.h)
-    // is the single source of truth; do not hardcode these here.
-    PIXFMT_UNKNOWN: 0,
-    PIXFMT_YUV420P: 0,
-    PIXFMT_NV12: 0,
-    PIXFMT_RGBA: 0,
-    PIXFMT_RGBX: 0,
-    PIXFMT_BGRA: 0,
-    PIXFMT_BGRX: 0,
+    // Enum values below are pulled from the C++-owned Embind registrations on
+    // first use by syncEnumsFromEmbind(). The C++ header
+    // (DVDVideoCodecWebCodecsBridge.h) and FFmpeg's pixfmt.h are the source of
+    // truth; do not hardcode these here.
+    pixelFormats: null, // VideoFrame.format string -> WebCodecsPixelFormat
+    colorMatrix: null, // VideoColorSpace.matrix -> AVColorSpace
+    colorPrimaries: null,
+    colorTransfer: null,
+    colorMatrixUnspecified: 0,
+    colorPrimariesUnspecified: 0,
+    colorTransferUnspecified: 0,
     COPY_OK: 0,
     COPY_FAILED: 0,
     COPY_DST_TOO_SMALL: 0,
@@ -46,33 +52,44 @@ mergeInto(LibraryManager.library, {
 
     // Byte offsets inside struct WebCodecsFrameInfo (kept in sync with the
     // static_asserts in DVDVideoCodecWebCodecsBridge.h).
-    FI_PIXFMT: 0,
-    FI_WIDTH: 4,
-    FI_HEIGHT: 8,
-    FI_Y_STRIDE: 12,
-    FI_U_STRIDE: 16,
-    FI_V_STRIDE: 20,
-    FI_U_OFFSET: 24,
-    FI_V_OFFSET: 28,
-    FI_KEYFRAME: 32,
-    FI_PAYLOAD_SIZE: 36,
-    FI_PTS: 40,
-    FI_DURATION: 48,
+    FI_SIZE: 80,
+    FI_WIDTH: 0,
+    FI_HEIGHT: 4,
+    FI_DISPLAY_WIDTH: 8,
+    FI_DISPLAY_HEIGHT: 12,
+    FI_PIXFMT: 16,
+    FI_KEYFRAME: 20,
+    FI_COLOR_MATRIX: 24,
+    FI_COLOR_PRIMARIES: 28,
+    FI_COLOR_TRANSFER: 32,
+    FI_FULL_RANGE: 36,
+    FI_PAYLOAD_SIZE: 40,
+    FI_Y_STRIDE: 44,
+    FI_U_STRIDE: 48,
+    FI_V_STRIDE: 52,
+    FI_U_OFFSET: 56,
+    FI_V_OFFSET: 60,
+    FI_PTS: 64,
+    FI_DURATION: 72,
 
-    // Int32 indices inside struct WebCodecsSharedState (offsets / 4).
+    // Int32 indices inside struct WebCodecsSharedState (offsets / 4), and the
+    // byte offset of the ring.
     SS_SIGNAL: 0,
-    SS_QUEUED_FRAMES: 1,
-    SS_INFLIGHT: 2,
-    SS_FAILED: 3,
-    SS_NEXT_PAYLOAD_SIZE: 4,
-    SS_NEXT_PIXFMT: 5,
-    SS_PUSHES_PROCESSED: 6,
-    SS_COPY_DONE: 7,
-    SS_COPY_RESULT: 8,
+    SS_FRAMES_PRODUCED: 1,
+    SS_FRAMES_TAKEN: 2,
+    SS_INFLIGHT: 3,
+    SS_FAILED: 4,
+    SS_PUSHES_PROCESSED: 5,
+    SS_COPY_DONE: 6,
+    SS_COPY_RESULT: 7,
+    SS_RING_OFFSET: 32,
+
+    // Result of webcodecs_probe_texture_upload, null until it has run.
+    textureUpload: null,
 
     // Registry is lazily created on first decoder creation; this library file
     // is merged into both the main thread and every pthread module, but only
-    // the main thread ever touches the maps (__proxy:'sync' on every entry).
+    // the main thread ever touches the maps (every entry is proxied).
     registry: null,
     nextId: 1,
 
@@ -91,24 +108,47 @@ mergeInto(LibraryManager.library, {
         return;
       const pf = Module['WebCodecsPixelFormat'];
       const cr = Module['WebCodecsCopyResult'];
-      if (!pf || !cr)
+      const spc = Module['AVColorSpace'];
+      const pri = Module['AVColorPrimaries'];
+      const trc = Module['AVColorTransferCharacteristic'];
+      if (!pf || !cr || !spc || !pri || !trc)
         throw new Error('WebCodecs bridge enums missing from Module (Embind not linked?)');
-      this.PIXFMT_UNKNOWN = pf.UNKNOWN.value;
-      this.PIXFMT_YUV420P = pf.YUV420P.value;
-      this.PIXFMT_NV12 = pf.NV12.value;
-      this.PIXFMT_RGBA = pf.RGBA.value;
-      this.PIXFMT_RGBX = pf.RGBX.value;
-      this.PIXFMT_BGRA = pf.BGRA.value;
-      this.PIXFMT_BGRX = pf.BGRX.value;
+
+      this.pixelFormats = {};
+      for (const name of Object.keys(pf)) {
+        if (pf[name] && typeof pf[name].value === 'number')
+          this.pixelFormats[name] = pf[name].value;
+      }
       this.COPY_OK = cr.OK.value;
       this.COPY_FAILED = cr.FAILED.value;
       this.COPY_DST_TOO_SMALL = cr.DST_TOO_SMALL.value;
       this.COPY_NO_FRAME = cr.NO_FRAME.value;
+
+      // VideoColorSpace names on the left, FFmpeg's on the right.
+      this.colorMatrix = {
+        rgb: spc.RGB.value, bt709: spc.BT709.value, bt470bg: spc.BT470BG.value,
+        smpte170m: spc.SMPTE170M.value, 'bt2020-ncl': spc.BT2020_NCL.value,
+      };
+      this.colorMatrixUnspecified = spc.UNSPECIFIED.value;
+      this.colorPrimaries = {
+        bt709: pri.BT709.value, bt470bg: pri.BT470BG.value, smpte170m: pri.SMPTE170M.value,
+        bt2020: pri.BT2020.value, smpte432: pri.SMPTE432.value,
+      };
+      this.colorPrimariesUnspecified = pri.UNSPECIFIED.value;
+      this.colorTransfer = {
+        bt709: trc.BT709.value, smpte170m: trc.SMPTE170M.value, 'iec61966-2-1': trc.IEC61966_2_1.value,
+        linear: trc.LINEAR.value, pq: trc.SMPTE2084.value, hlg: trc.ARIB_STD_B67.value,
+      };
+      this.colorTransferUnspecified = trc.UNSPECIFIED.value;
       this._enumsReady = true;
     },
 
     getState: function(handle) {
       return this.registry ? this.registry.get(handle) : null;
+    },
+
+    framesTaken: function(state) {
+      return Atomics.load(HEAP32, (state.sharedPtr >> 2) + this.SS_FRAMES_TAKEN);
     },
 
     inflight: function(state) {
@@ -121,12 +161,9 @@ mergeInto(LibraryManager.library, {
       if (!state.sharedPtr)
         return;
       const base = state.sharedPtr >> 2;
-      const next = state.frames.length > 0 ? state.frames[0] : null;
-      Atomics.store(HEAP32, base + this.SS_QUEUED_FRAMES, state.frames.length);
+      Atomics.store(HEAP32, base + this.SS_FRAMES_PRODUCED, state.framesProduced);
       Atomics.store(HEAP32, base + this.SS_INFLIGHT, this.inflight(state));
       Atomics.store(HEAP32, base + this.SS_FAILED, state.failed ? 1 : 0);
-      Atomics.store(HEAP32, base + this.SS_NEXT_PAYLOAD_SIZE, next ? next.payloadSize : 0);
-      Atomics.store(HEAP32, base + this.SS_NEXT_PIXFMT, next ? next.pixelFormat : this.PIXFMT_UNKNOWN);
       Atomics.store(HEAP32, base + this.SS_PUSHES_PROCESSED, state.pushesProcessed);
       Atomics.store(HEAP32, base + this.SS_COPY_DONE, state.copyDone);
       Atomics.store(HEAP32, base + this.SS_COPY_RESULT, state.copyResult);
@@ -134,23 +171,16 @@ mergeInto(LibraryManager.library, {
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
 
-    // Plane layout for the formats we accept, with tightly packed strides.
-    // Some hardware decoders (Samsung Tizen) only hand out packed RGB frames.
-    describeFrame: function(frame, width, height) {
-      const format = frame.format || 'I420';
-
-      const rgbFormats = {
-        RGBA: this.PIXFMT_RGBA, RGBX: this.PIXFMT_RGBX,
-        BGRA: this.PIXFMT_BGRA, BGRX: this.PIXFMT_BGRX,
-      };
-      if (format in rgbFormats) {
+    // Tightly packed plane layout for the formats the sysmem copy path accepts;
+    // null for every other format.
+    copyLayout: function(format, width, height) {
+      if (format === 'RGBA' || format === 'RGBX' || format === 'BGRA' || format === 'BGRX') {
         const stride = width * 4;
         return {
-          pixelFormat: rgbFormats[format],
           payloadSize: stride * height,
           yStride: stride, uStride: 0, vStride: 0,
           uOffset: 0, vOffset: 0,
-          layout: [{ offset: 0, stride }],
+          planes: [{ offset: 0, stride }],
         };
       }
 
@@ -161,11 +191,10 @@ mergeInto(LibraryManager.library, {
       if (format === 'NV12') {
         const uvSize = yStride * uvHeight;
         return {
-          pixelFormat: this.PIXFMT_NV12,
           payloadSize: ySize + uvSize,
           yStride, uStride: yStride, vStride: 0,
           uOffset: ySize, vOffset: 0,
-          layout: [{ offset: 0, stride: yStride }, { offset: ySize, stride: yStride }],
+          planes: [{ offset: 0, stride: yStride }, { offset: ySize, stride: yStride }],
         };
       }
 
@@ -173,11 +202,10 @@ mergeInto(LibraryManager.library, {
         const uvStride = (width + 1) >> 1;
         const uvSize = uvStride * uvHeight;
         return {
-          pixelFormat: this.PIXFMT_YUV420P,
           payloadSize: ySize + uvSize * 2,
           yStride, uStride: uvStride, vStride: uvStride,
           uOffset: ySize, vOffset: ySize + uvSize,
-          layout: [
+          planes: [
             { offset: 0, stride: yStride },
             { offset: ySize, stride: uvStride },
             { offset: ySize + uvSize, stride: uvStride },
@@ -188,18 +216,85 @@ mergeInto(LibraryManager.library, {
       return null;
     },
 
+    // Everything the codec needs to know about an output frame, in the form
+    // writeFrameInfo() stores into a ring slot.
+    describeFrame: function(state, frame) {
+      const visibleRect = frame.visibleRect || null;
+      const width = visibleRect ? visibleRect.width : frame.codedWidth;
+      const height = visibleRect ? visibleRect.height : frame.codedHeight;
+      const timestampMicros = Number.isFinite(frame.timestamp) ? Number(frame.timestamp)
+                                                                : state.lastTimestamp;
+      const durationMicros = Number.isFinite(frame.duration) ? Number(frame.duration) : 0;
+      state.lastTimestamp = timestampMicros;
+
+      const format = frame.format || '';
+      const colorSpace = frame.colorSpace || {};
+      const lookup = (table, key, fallback) =>
+        key != null && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : fallback;
+
+      return {
+        frame,
+        visibleRect,
+        width,
+        height,
+        displayWidth: frame.displayWidth || width,
+        displayHeight: frame.displayHeight || height,
+        pixelFormat: lookup(this.pixelFormats, format, 0),
+        keyFrame: frame.type === 'key',
+        colorMatrix: lookup(this.colorMatrix, colorSpace.matrix, this.colorMatrixUnspecified),
+        colorPrimaries: lookup(this.colorPrimaries, colorSpace.primaries, this.colorPrimariesUnspecified),
+        colorTransfer: lookup(this.colorTransfer, colorSpace.transfer, this.colorTransferUnspecified),
+        fullRange: colorSpace.fullRange === true ? 1 : colorSpace.fullRange === false ? 0 : -1,
+        layout: this.copyLayout(format, width, height),
+        ptsSeconds: timestampMicros / this.MICROSECONDS_PER_SECOND,
+        durationSeconds: durationMicros / this.MICROSECONDS_PER_SECOND,
+      };
+    },
+
+    writeFrameInfo: function(slotPtr, entry) {
+      const layout = entry.layout;
+      HEAP32[(slotPtr + this.FI_WIDTH) >> 2] = entry.width | 0;
+      HEAP32[(slotPtr + this.FI_HEIGHT) >> 2] = entry.height | 0;
+      HEAP32[(slotPtr + this.FI_DISPLAY_WIDTH) >> 2] = entry.displayWidth | 0;
+      HEAP32[(slotPtr + this.FI_DISPLAY_HEIGHT) >> 2] = entry.displayHeight | 0;
+      HEAP32[(slotPtr + this.FI_PIXFMT) >> 2] = entry.pixelFormat | 0;
+      HEAP32[(slotPtr + this.FI_KEYFRAME) >> 2] = entry.keyFrame ? 1 : 0;
+      HEAP32[(slotPtr + this.FI_COLOR_MATRIX) >> 2] = entry.colorMatrix | 0;
+      HEAP32[(slotPtr + this.FI_COLOR_PRIMARIES) >> 2] = entry.colorPrimaries | 0;
+      HEAP32[(slotPtr + this.FI_COLOR_TRANSFER) >> 2] = entry.colorTransfer | 0;
+      HEAP32[(slotPtr + this.FI_FULL_RANGE) >> 2] = entry.fullRange | 0;
+      HEAP32[(slotPtr + this.FI_PAYLOAD_SIZE) >> 2] = layout ? layout.payloadSize | 0 : 0;
+      HEAP32[(slotPtr + this.FI_Y_STRIDE) >> 2] = layout ? layout.yStride | 0 : 0;
+      HEAP32[(slotPtr + this.FI_U_STRIDE) >> 2] = layout ? layout.uStride | 0 : 0;
+      HEAP32[(slotPtr + this.FI_V_STRIDE) >> 2] = layout ? layout.vStride | 0 : 0;
+      HEAP32[(slotPtr + this.FI_U_OFFSET) >> 2] = layout ? layout.uOffset | 0 : 0;
+      HEAP32[(slotPtr + this.FI_V_OFFSET) >> 2] = layout ? layout.vOffset | 0 : 0;
+      HEAPF64[(slotPtr + this.FI_PTS) >> 3] = entry.ptsSeconds;
+      HEAPF64[(slotPtr + this.FI_DURATION) >> 3] = entry.durationSeconds;
+    },
+
+    closeFrames: function(state, fromSequence) {
+      for (const [sequence, entry] of state.frames) {
+        if (sequence >= fromSequence) {
+          entry.frame.close();
+          state.frames.delete(sequence);
+        }
+      }
+    },
+
     // Copies straight into wasm memory: under pthreads the heap is a
     // SharedArrayBuffer and existing views stay valid across growth. Browsers
     // whose copyTo() still rejects shared views fall back to a scratch buffer
     // plus one memcpy.
     copyFrame: async function(state, entry, dstPtr) {
-      const options = { layout: entry.layout };
+      const size = entry.layout.payloadSize;
+      const options = { layout: entry.layout.planes };
       if (entry.visibleRect)
         options.rect = entry.visibleRect;
 
       if (state.directCopy) {
         try {
-          await entry.frame.copyTo(HEAPU8.subarray(dstPtr, dstPtr + entry.payloadSize), options);
+          await entry.frame.copyTo(HEAPU8.subarray(dstPtr, dstPtr + size), options);
           return;
         } catch (e) {
           if (!(e instanceof TypeError))
@@ -208,9 +303,9 @@ mergeInto(LibraryManager.library, {
         }
       }
 
-      if (!state.scratch || state.scratch.byteLength < entry.payloadSize)
-        state.scratch = new Uint8Array(entry.payloadSize);
-      const scratch = state.scratch.subarray(0, entry.payloadSize);
+      if (!state.scratch || state.scratch.byteLength < size)
+        state.scratch = new Uint8Array(size);
+      const scratch = state.scratch.subarray(0, size);
       await entry.frame.copyTo(scratch, options);
       HEAPU8.set(scratch, dstPtr);
     },
@@ -232,21 +327,46 @@ mergeInto(LibraryManager.library, {
         config.description = state.description;
       return config;
     },
+  },
 
-    writeFrameInfo: function(infoPtr, frame) {
-      HEAP32[(infoPtr + this.FI_PIXFMT) >> 2] = frame.pixelFormat | 0;
-      HEAP32[(infoPtr + this.FI_WIDTH) >> 2] = frame.width | 0;
-      HEAP32[(infoPtr + this.FI_HEIGHT) >> 2] = frame.height | 0;
-      HEAP32[(infoPtr + this.FI_Y_STRIDE) >> 2] = frame.yStride | 0;
-      HEAP32[(infoPtr + this.FI_U_STRIDE) >> 2] = frame.uStride | 0;
-      HEAP32[(infoPtr + this.FI_V_STRIDE) >> 2] = frame.vStride | 0;
-      HEAP32[(infoPtr + this.FI_U_OFFSET) >> 2] = frame.uOffset | 0;
-      HEAP32[(infoPtr + this.FI_V_OFFSET) >> 2] = frame.vOffset | 0;
-      HEAP32[(infoPtr + this.FI_KEYFRAME) >> 2] = frame.keyFrame ? 1 : 0;
-      HEAP32[(infoPtr + this.FI_PAYLOAD_SIZE) >> 2] = frame.payloadSize | 0;
-      HEAPF64[(infoPtr + this.FI_PTS) >> 3] = frame.ptsSeconds;
-      HEAPF64[(infoPtr + this.FI_DURATION) >> 3] = frame.durationSeconds;
-    },
+  // ---------------------------------------------------------------------------
+  // webcodecs_probe_texture_upload: does texImage2D take a VideoFrame here?
+  // Meant to run before the GL command stream has anything in it, so the
+  // texture binding it leaves behind (none) is the initial state.
+  // ---------------------------------------------------------------------------
+  webcodecs_probe_texture_upload__deps: ['$WebCodecsBridge', '$GL'],
+  webcodecs_probe_texture_upload__proxy: 'sync',
+  webcodecs_probe_texture_upload__sig: 'i',
+  webcodecs_probe_texture_upload: function() {
+    const B = WebCodecsBridge;
+    if (B.textureUpload !== null)
+      return B.textureUpload;
+    B.textureUpload = 0;
+
+    const gl = GL.currentContext ? GL.currentContext.GLctx : null;
+    if (!gl || typeof VideoFrame === 'undefined') {
+      console.info('WASM WebCodecs: no WebGL context or no VideoFrame, frames will be copied');
+      return 0;
+    }
+
+    let frame = null;
+    let texture = null;
+    try {
+      frame = new VideoFrame(new Uint8Array(2 * 2 * 4),
+                             { format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0 });
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+      B.textureUpload = gl.getError() === gl.NO_ERROR ? 1 : 0;
+    } catch (e) {
+      console.warn('WASM WebCodecs: texImage2D(VideoFrame) threw', e);
+    } finally {
+      if (frame) frame.close();
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      if (texture) gl.deleteTexture(texture);
+    }
+    console.info('WASM WebCodecs: texImage2D(VideoFrame)', B.textureUpload ? 'supported' : 'unsupported');
+    return B.textureUpload;
   },
 
   // ---------------------------------------------------------------------------
@@ -281,7 +401,8 @@ mergeInto(LibraryManager.library, {
       failed: false,
       errorMessage: '',
       lastTimestamp: 0,
-      frames: [],
+      frames: new Map(), // sequence -> describeFrame() entry
+      framesProduced: 0,
       copying: false,
       copyDone: 0,
       copyResult: 0,
@@ -291,6 +412,7 @@ mergeInto(LibraryManager.library, {
       generation: 0,
       droppedFrames: 0,
       highWaterMark: 0,
+      uploadFailed: false,
       decoder: null,
       description: null,
       configured: false,
@@ -304,43 +426,30 @@ mergeInto(LibraryManager.library, {
     };
 
     const outputCallback = (frame) => {
-      const visibleRect = frame.visibleRect || null;
-      const width = visibleRect ? visibleRect.width : frame.codedWidth;
-      const height = visibleRect ? visibleRect.height : frame.codedHeight;
-      const timestampMicros = Number.isFinite(frame.timestamp) ? Number(frame.timestamp)
-                                                                : state.lastTimestamp;
-      const durationMicros = Number.isFinite(frame.duration) ? Number(frame.duration) : 0;
-      state.lastTimestamp = timestampMicros;
-
-      const described = WebCodecsBridge.describeFrame(frame, width, height);
-      if (!described) {
-        state.failed = true;
-        state.errorMessage = 'unsupported frame format: ' + frame.format;
+      const B = WebCodecsBridge;
+      if (!state.sharedPtr) {
         frame.close();
-        WebCodecsBridge.publishState(state);
         return;
       }
 
-      // Safety valve: the codec's in-flight cap keeps the queue far below this.
-      if (state.frames.length >= WebCodecsBridge.FRAME_QUEUE_HIGH_WATER) {
+      // The codec's in-flight cap keeps the queue far below the ring size.
+      const taken = B.framesTaken(state);
+      if (state.framesProduced - taken >= B.FRAME_RING) {
         state.droppedFrames += 1;
         frame.close();
-        WebCodecsBridge.publishState(state);
+        B.publishState(state);
         return;
       }
 
-      state.frames.push(Object.assign({
-        frame,
-        visibleRect,
-        width,
-        height,
-        ptsSeconds: timestampMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
-        durationSeconds: durationMicros / WebCodecsBridge.MICROSECONDS_PER_SECOND,
-        keyFrame: frame.type === 'key',
-      }, described));
-      if (state.frames.length > state.highWaterMark)
-        state.highWaterMark = state.frames.length;
-      WebCodecsBridge.publishState(state);
+      const sequence = state.framesProduced;
+      const entry = B.describeFrame(state, frame);
+      B.writeFrameInfo(state.sharedPtr + B.SS_RING_OFFSET + (sequence % B.FRAME_RING) * B.FI_SIZE,
+                       entry);
+      state.frames.set(sequence, entry);
+      state.framesProduced = sequence + 1;
+      if (state.framesProduced - taken > state.highWaterMark)
+        state.highWaterMark = state.framesProduced - taken;
+      B.publishState(state);
     };
 
     try {
@@ -402,8 +511,7 @@ mergeInto(LibraryManager.library, {
     const state = WebCodecsBridge.getState(handle);
     if (!state) return;
     state.generation += 1;
-    for (const entry of state.frames) entry.frame.close();
-    state.frames.length = 0;
+    WebCodecsBridge.closeFrames(state, 0);
     try {
       if (state.decoder) state.decoder.close();
     } catch (e) {
@@ -416,29 +524,32 @@ mergeInto(LibraryManager.library, {
   },
 
   // ---------------------------------------------------------------------------
+  // Frames the codec has taken belong to Kodi buffers and are closed by their
+  // release; only the untaken ones are closed here. The codec sets
+  // framesTaken = framesProduced when this returns.
   webcodecs_reset_decoder__deps: ['$WebCodecsBridge'],
   webcodecs_reset_decoder__proxy: 'sync',
   webcodecs_reset_decoder__sig: 'ii',
   webcodecs_reset_decoder: function(handle) {
-    const state = WebCodecsBridge.getState(handle);
+    const B = WebCodecsBridge;
+    const state = B.getState(handle);
     if (!state || !state.decoder) return 0;
     try {
       state.decoder.reset();
       state.generation += 1;
-      for (const entry of state.frames) entry.frame.close();
-      state.frames.length = 0;
+      B.closeFrames(state, B.framesTaken(state));
       state.droppedFrames = 0;
       state.highWaterMark = 0;
       state.failed = false;
       state.errorMessage = '';
       // reset() returns the decoder to 'unconfigured'; we must configure again.
-      state.decoder.configure(WebCodecsBridge.buildConfig(state, 0, 0));
-      WebCodecsBridge.publishState(state);
+      state.decoder.configure(B.buildConfig(state, 0, 0));
+      B.publishState(state);
       return 1;
     } catch (e) {
       state.failed = true;
       state.errorMessage = 'reset failed: ' + String(e);
-      WebCodecsBridge.publishState(state);
+      B.publishState(state);
       return 0;
     }
   },
@@ -482,13 +593,60 @@ mergeInto(LibraryManager.library, {
   },
 
   // ---------------------------------------------------------------------------
-  // Asynchronous; the outcome lands in copyDone/copyResult. The head frame is
-  // the one the caller sized its buffer for: only its own calls remove frames,
-  // and they run in order.
-  webcodecs_copy_next_frame__deps: ['$WebCodecsBridge'],
-  webcodecs_copy_next_frame__proxy: 'async',
-  webcodecs_copy_next_frame__sig: 'viiiii',
-  webcodecs_copy_next_frame: function(handle, copyId, dstPtr, dstSize, infoPtr) {
+  // Asynchronous. Runs in the render thread's GL command stream: the caller
+  // enqueues it before the glBindTexture and draw that use the texture, and
+  // Emscripten's proxying queue keeps that order. Binds on whichever texture
+  // unit is active, as the caller's own glBindTexture would.
+  webcodecs_upload_frame__deps: ['$WebCodecsBridge', '$GL'],
+  webcodecs_upload_frame__proxy: 'async',
+  webcodecs_upload_frame__sig: 'viii',
+  webcodecs_upload_frame: function(handle, sequence, glTexture) {
+    const B = WebCodecsBridge;
+    const state = B.getState(handle);
+    if (!state) return;
+    const entry = state.frames.get(sequence);
+    if (!entry) return;
+    state.frames.delete(sequence);
+
+    try {
+      const gl = GL.currentContext ? GL.currentContext.GLctx : null;
+      const texture = GL.textures[glTexture];
+      if (gl && texture) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, entry.frame);
+      }
+    } catch (e) {
+      if (!state.uploadFailed) {
+        state.uploadFailed = true;
+        console.warn('WASM WebCodecs: texImage2D(VideoFrame) failed', e);
+      }
+      state.failed = true;
+      state.errorMessage = 'texture upload failed: ' + String(e);
+      B.publishState(state);
+    } finally {
+      entry.frame.close();
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  webcodecs_release_frame__deps: ['$WebCodecsBridge'],
+  webcodecs_release_frame__proxy: 'async',
+  webcodecs_release_frame__sig: 'vii',
+  webcodecs_release_frame: function(handle, sequence) {
+    const state = WebCodecsBridge.getState(handle);
+    if (!state) return;
+    const entry = state.frames.get(sequence);
+    if (!entry) return;
+    state.frames.delete(sequence);
+    entry.frame.close();
+  },
+
+  // ---------------------------------------------------------------------------
+  // Sysmem fallback. Asynchronous; the outcome lands in copyDone/copyResult.
+  webcodecs_copy_frame__deps: ['$WebCodecsBridge'],
+  webcodecs_copy_frame__proxy: 'async',
+  webcodecs_copy_frame__sig: 'viiiii',
+  webcodecs_copy_frame: function(handle, sequence, copyId, dstPtr, dstSize) {
     const B = WebCodecsBridge;
     const state = B.getState(handle);
     if (!state) return;
@@ -499,22 +657,15 @@ mergeInto(LibraryManager.library, {
       B.publishState(state);
     };
     if (state.failed || state.copying) return finish(B.COPY_FAILED);
-    if (state.frames.length === 0) return finish(B.COPY_NO_FRAME);
+    const entry = state.frames.get(sequence);
+    if (!entry) return finish(B.COPY_NO_FRAME);
+    if (!entry.layout || entry.layout.payloadSize > dstSize) return finish(B.COPY_DST_TOO_SMALL);
 
-    const entry = state.frames[0];
-    if (entry.payloadSize > dstSize) {
-      B.writeFrameInfo(infoPtr, entry);
-      return finish(B.COPY_DST_TOO_SMALL);
-    }
-
-    state.frames.shift();
+    state.frames.delete(sequence);
     state.copying = true;
     const generation = state.generation;
     let result = B.COPY_FAILED;
     B.copyFrame(state, entry, dstPtr).then(() => {
-      // The codec, and with it infoPtr, may be gone after a destroy.
-      if (state.sharedPtr)
-        B.writeFrameInfo(infoPtr, entry);
       result = B.COPY_OK;
     }, (e) => {
       if (state.generation === generation) {
@@ -526,22 +677,6 @@ mergeInto(LibraryManager.library, {
       state.copying = false;
       finish(result);
     });
-  },
-
-  // ---------------------------------------------------------------------------
-  webcodecs_discard_next_frame__deps: ['$WebCodecsBridge'],
-  webcodecs_discard_next_frame__proxy: 'sync',
-  webcodecs_discard_next_frame__sig: 'iii',
-  webcodecs_discard_next_frame: function(handle, infoPtr) {
-    const B = WebCodecsBridge;
-    const state = B.getState(handle);
-    if (!state || state.frames.length === 0) return 0;
-
-    const entry = state.frames.shift();
-    B.writeFrameInfo(infoPtr, entry);
-    entry.frame.close();
-    B.publishState(state);
-    return 1;
   },
 
   // ---------------------------------------------------------------------------

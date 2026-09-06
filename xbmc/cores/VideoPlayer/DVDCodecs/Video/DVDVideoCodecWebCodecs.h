@@ -39,13 +39,18 @@ private:
   bool BuildCodecConfiguration(const CDVDStreamInfo& hints);
   void PollDecoderStats();
   static int32_t SharedLoad(const int32_t& field);
+  int32_t QueuedFrames() const;
+  void PublishFramesTaken(int32_t sequence);
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
   bool DecoderBusy() const;
   bool WaitForDrain();
   int32_t WaitForCopy(int copyId);
-  VCReturn DiscardNextFrame(VideoPicture* pVideoPicture);
   void ReleaseCopyBuffer();
   void ReportPixelFormat(AVPixelFormat format);
+  VCReturn CopyFrame(int32_t sequence, const WebCodecsFrameInfo& info, VideoPicture* pVideoPicture);
+  VCReturn DroppedPicture(const WebCodecsFrameInfo& info,
+                          AVPixelFormat pixelFormat,
+                          VideoPicture* pVideoPicture);
   CVideoBuffer* AcquirePictureBuffer(CVideoBufferPoolSysMem& pool,
                                      AVPixelFormat pixelFormat,
                                      int bufferSize);
@@ -53,11 +58,7 @@ private:
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
                            AVPixelFormat pixelFormat,
-                           int width,
-                           int height,
-                           bool keyFrame,
-                           double ptsSeconds,
-                           double durationSeconds) const;
+                           const WebCodecsFrameInfo& info) const;
 
   std::string m_name{"webcodecs"};
   CDVDStreamInfo m_hints;
@@ -82,11 +83,11 @@ private:
   int m_lastLoggedDroppedFrames{0};
   int m_highWaterMark{0};
 
-  // Written by the JS bridge for the lifetime of m_decoderHandle.
+  // Written by the JS bridge for the lifetime of m_decoderHandle, except
+  // framesTaken, which this side publishes.
   WebCodecsSharedState m_shared{};
   // Handed to the JS bridge as copy destination; owned here until the copy settles.
   CVideoBuffer* m_copyBuffer{nullptr};
-  WebCodecsFrameInfo m_copyInfo{};
   int m_copyId{0};
   // Pushes issued; the bridge's pushesProcessed trails it by the calls the main
   // thread has not run yet.

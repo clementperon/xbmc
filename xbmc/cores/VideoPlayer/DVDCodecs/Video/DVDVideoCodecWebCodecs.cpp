@@ -32,25 +32,98 @@ extern "C"
 #include <libswscale/swscale.h>
 }
 
+namespace
+{
+// WebCodecs VideoPixelFormat values with their FFmpeg equivalent, or
+// AV_PIX_FMT_NONE where FFmpeg has none, and their bit depth. The names are
+// the WebCodecs strings and double as the Embind enumerator names.
+struct WebCodecsPixelFormatInfo
+{
+  WebCodecsPixelFormat id;
+  const char* name;
+  AVPixelFormat avFormat;
+  int bitDepth;
+};
+
+constexpr WebCodecsPixelFormatInfo PIXEL_FORMATS[] = {
+    {WEBCODECS_PIXFMT_I420, "I420", AV_PIX_FMT_YUV420P, 8},
+    {WEBCODECS_PIXFMT_I420P10, "I420P10", AV_PIX_FMT_YUV420P10, 10},
+    {WEBCODECS_PIXFMT_I420P12, "I420P12", AV_PIX_FMT_YUV420P12, 12},
+    {WEBCODECS_PIXFMT_I420A, "I420A", AV_PIX_FMT_YUVA420P, 8},
+    {WEBCODECS_PIXFMT_I420AP10, "I420AP10", AV_PIX_FMT_YUVA420P10, 10},
+    {WEBCODECS_PIXFMT_I420AP12, "I420AP12", AV_PIX_FMT_NONE, 12},
+    {WEBCODECS_PIXFMT_I422, "I422", AV_PIX_FMT_YUV422P, 8},
+    {WEBCODECS_PIXFMT_I422P10, "I422P10", AV_PIX_FMT_YUV422P10, 10},
+    {WEBCODECS_PIXFMT_I422P12, "I422P12", AV_PIX_FMT_YUV422P12, 12},
+    {WEBCODECS_PIXFMT_I422A, "I422A", AV_PIX_FMT_YUVA422P, 8},
+    {WEBCODECS_PIXFMT_I422AP10, "I422AP10", AV_PIX_FMT_YUVA422P10, 10},
+    {WEBCODECS_PIXFMT_I422AP12, "I422AP12", AV_PIX_FMT_YUVA422P12, 12},
+    {WEBCODECS_PIXFMT_I444, "I444", AV_PIX_FMT_YUV444P, 8},
+    {WEBCODECS_PIXFMT_I444P10, "I444P10", AV_PIX_FMT_YUV444P10, 10},
+    {WEBCODECS_PIXFMT_I444P12, "I444P12", AV_PIX_FMT_YUV444P12, 12},
+    {WEBCODECS_PIXFMT_I444A, "I444A", AV_PIX_FMT_YUVA444P, 8},
+    {WEBCODECS_PIXFMT_I444AP10, "I444AP10", AV_PIX_FMT_YUVA444P10, 10},
+    {WEBCODECS_PIXFMT_I444AP12, "I444AP12", AV_PIX_FMT_YUVA444P12, 12},
+    {WEBCODECS_PIXFMT_NV12, "NV12", AV_PIX_FMT_NV12, 8},
+    {WEBCODECS_PIXFMT_RGBA, "RGBA", AV_PIX_FMT_RGBA, 8},
+    {WEBCODECS_PIXFMT_RGBX, "RGBX", AV_PIX_FMT_RGB0, 8},
+    {WEBCODECS_PIXFMT_BGRA, "BGRA", AV_PIX_FMT_BGRA, 8},
+    {WEBCODECS_PIXFMT_BGRX, "BGRX", AV_PIX_FMT_BGR0, 8},
+};
+
+const WebCodecsPixelFormatInfo* FindPixelFormat(int pixelFormat)
+{
+  for (const auto& format : PIXEL_FORMATS)
+  {
+    if (format.id == pixelFormat)
+      return &format;
+  }
+  return nullptr;
+}
+} // namespace
+
 // Expose the bridge enums to JavaScript via Embind so the JS bridge can read
 // the canonical C++ values (Module.WebCodecsPixelFormat.NV12 etc.) instead of
 // duplicating them. Must live at global scope, hence outside any namespace.
 EMSCRIPTEN_BINDINGS(kodi_webcodecs_bridge)
 {
-  emscripten::enum_<WebCodecsPixelFormat>("WebCodecsPixelFormat")
-      .value("UNKNOWN", WEBCODECS_PIXFMT_UNKNOWN)
-      .value("YUV420P", WEBCODECS_PIXFMT_YUV420P)
-      .value("NV12", WEBCODECS_PIXFMT_NV12)
-      .value("RGBA", WEBCODECS_PIXFMT_RGBA)
-      .value("RGBX", WEBCODECS_PIXFMT_RGBX)
-      .value("BGRA", WEBCODECS_PIXFMT_BGRA)
-      .value("BGRX", WEBCODECS_PIXFMT_BGRX);
+  emscripten::enum_<WebCodecsPixelFormat> pixelFormats("WebCodecsPixelFormat");
+  pixelFormats.value("UNKNOWN", WEBCODECS_PIXFMT_UNKNOWN);
+  for (const auto& format : PIXEL_FORMATS)
+    pixelFormats.value(format.name, format.id);
 
   emscripten::enum_<WebCodecsCopyResult>("WebCodecsCopyResult")
       .value("OK", WEBCODECS_COPY_OK)
       .value("FAILED", WEBCODECS_COPY_FAILED)
       .value("DST_TOO_SMALL", WEBCODECS_COPY_DST_TOO_SMALL)
       .value("NO_FRAME", WEBCODECS_COPY_NO_FRAME);
+
+  // The VideoColorSpace values WebCodecs defines, as FFmpeg numbers the frame
+  // ring carries.
+  emscripten::enum_<AVColorSpace>("AVColorSpace")
+      .value("UNSPECIFIED", AVCOL_SPC_UNSPECIFIED)
+      .value("RGB", AVCOL_SPC_RGB)
+      .value("BT709", AVCOL_SPC_BT709)
+      .value("BT470BG", AVCOL_SPC_BT470BG)
+      .value("SMPTE170M", AVCOL_SPC_SMPTE170M)
+      .value("BT2020_NCL", AVCOL_SPC_BT2020_NCL);
+
+  emscripten::enum_<AVColorPrimaries>("AVColorPrimaries")
+      .value("UNSPECIFIED", AVCOL_PRI_UNSPECIFIED)
+      .value("BT709", AVCOL_PRI_BT709)
+      .value("BT470BG", AVCOL_PRI_BT470BG)
+      .value("SMPTE170M", AVCOL_PRI_SMPTE170M)
+      .value("BT2020", AVCOL_PRI_BT2020)
+      .value("SMPTE432", AVCOL_PRI_SMPTE432);
+
+  emscripten::enum_<AVColorTransferCharacteristic>("AVColorTransferCharacteristic")
+      .value("UNSPECIFIED", AVCOL_TRC_UNSPECIFIED)
+      .value("BT709", AVCOL_TRC_BT709)
+      .value("SMPTE170M", AVCOL_TRC_SMPTE170M)
+      .value("IEC61966_2_1", AVCOL_TRC_IEC61966_2_1)
+      .value("LINEAR", AVCOL_TRC_LINEAR)
+      .value("SMPTE2084", AVCOL_TRC_SMPTE2084)
+      .value("ARIB_STD_B67", AVCOL_TRC_ARIB_STD_B67);
 }
 
 namespace
@@ -486,25 +559,16 @@ std::string ReadDecoderError(int decoderHandle)
 
 AVPixelFormat PixelFormatFromWebCodecs(int pixelFormat)
 {
-  switch (pixelFormat)
-  {
-    case WEBCODECS_PIXFMT_YUV420P:
-      return AV_PIX_FMT_YUV420P;
-    case WEBCODECS_PIXFMT_NV12:
-      return AV_PIX_FMT_NV12;
-    case WEBCODECS_PIXFMT_RGBA:
-      return AV_PIX_FMT_RGBA;
-    case WEBCODECS_PIXFMT_RGBX:
-      return AV_PIX_FMT_RGB0;
-    case WEBCODECS_PIXFMT_BGRA:
-      return AV_PIX_FMT_BGRA;
-    case WEBCODECS_PIXFMT_BGRX:
-      return AV_PIX_FMT_BGR0;
-    case WEBCODECS_PIXFMT_UNKNOWN:
-    default:
-      return AV_PIX_FMT_NONE;
-  }
+  const WebCodecsPixelFormatInfo* format = FindPixelFormat(pixelFormat);
+  return format ? format->avFormat : AV_PIX_FMT_NONE;
 }
+
+const char* WebCodecsPixelFormatName(int pixelFormat)
+{
+  const WebCodecsPixelFormatInfo* format = FindPixelFormat(pixelFormat);
+  return format ? format->name : "unknown";
+}
+
 bool IsPackedRgb(AVPixelFormat format)
 {
   return format == AV_PIX_FMT_RGBA || format == AV_PIX_FMT_RGB0 || format == AV_PIX_FMT_BGRA ||
@@ -724,6 +788,8 @@ void CDVDVideoCodecWebCodecs::Reset()
 
   ReleaseCopyBuffer();
   webcodecs_reset_decoder(m_decoderHandle);
+  // The reset closed the frames not taken yet; sequence numbers keep counting.
+  PublishFramesTaken(SharedLoad(m_shared.framesProduced));
   m_waitingForKeyFrame = true;
   m_drained = false;
   m_lastLoggedDroppedFrames = 0;
@@ -764,13 +830,24 @@ int32_t CDVDVideoCodecWebCodecs::SharedLoad(const int32_t& field)
   return __atomic_load_n(&field, __ATOMIC_ACQUIRE);
 }
 
+int32_t CDVDVideoCodecWebCodecs::QueuedFrames() const
+{
+  return SharedLoad(m_shared.framesProduced) - SharedLoad(m_shared.framesTaken);
+}
+
+// Once published, the output callback may reuse the ring slot of every earlier
+// sequence number, so callers copy the slot out first.
+void CDVDVideoCodecWebCodecs::PublishFramesTaken(int32_t sequence)
+{
+  __atomic_store_n(&m_shared.framesTaken, sequence, __ATOMIC_RELEASE);
+}
+
 // Pushes the main thread has not run yet are invisible to the shared counters
 // and have to be counted here.
 bool CDVDVideoCodecWebCodecs::DecoderBusy() const
 {
   const int32_t pendingPushes = m_pushCount - SharedLoad(m_shared.pushesProcessed);
-  return pendingPushes + SharedLoad(m_shared.inflight) + SharedLoad(m_shared.queuedFrames) >=
-         WEBCODECS_MAX_INFLIGHT;
+  return pendingPushes + SharedLoad(m_shared.inflight) + QueuedFrames() >= WEBCODECS_MAX_INFLIGHT;
 }
 
 // Callers sample `seenSignal` before checking the shared state, so a change that
@@ -793,7 +870,7 @@ bool CDVDVideoCodecWebCodecs::WaitForDrain()
   while (true)
   {
     const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
-    if (SharedLoad(m_shared.queuedFrames) > 0 || SharedLoad(m_shared.failed))
+    if (QueuedFrames() > 0 || SharedLoad(m_shared.failed))
       return false;
 
     const auto now = std::chrono::steady_clock::now();
@@ -923,7 +1000,7 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
   sws_scale(m_swsContext, src, srcStride, 0, height, dstPlanes, dstStride);
   rgbBuffer->Release();
 
-  info.pixelFormat = WEBCODECS_PIXFMT_YUV420P;
+  info.pixelFormat = WEBCODECS_PIXFMT_I420;
   info.yStride = layout.yStride;
   info.uStride = layout.uvStride;
   info.vStride = layout.uvStride;
@@ -936,20 +1013,24 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
 void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
                                                   CVideoBuffer* videoBuffer,
                                                   AVPixelFormat pixelFormat,
-                                                  int width,
-                                                  int height,
-                                                  bool keyFrame,
-                                                  double ptsSeconds,
-                                                  double durationSeconds) const
+                                                  const WebCodecsFrameInfo& info) const
 {
+  const int width = info.width;
+  const int height = info.height;
+
   pVideoPicture->Reset();
   pVideoPicture->videoBuffer = videoBuffer;
   pVideoPicture->pixelFormat = pixelFormat;
   pVideoPicture->iWidth = width;
   pVideoPicture->iHeight = height;
 
-  double aspect = m_hints.aspect > 0.0 ? m_hints.aspect
-                                       : (height > 0 ? static_cast<double>(width) / height : 1.0);
+  // The container's aspect wins; without one the frame's own display size
+  // carries the decoder's sample aspect ratio.
+  double aspect = height > 0 ? static_cast<double>(width) / height : 1.0;
+  if (m_hints.aspect > 0.0)
+    aspect = m_hints.aspect;
+  else if (info.displayWidth > 0 && info.displayHeight > 0)
+    aspect = static_cast<double>(info.displayWidth) / info.displayHeight;
   pVideoPicture->iDisplayWidth =
       static_cast<int>(std::lrint(height * aspect)) & DISPLAY_WIDTH_ALIGN_MASK;
   pVideoPicture->iDisplayHeight = height;
@@ -961,12 +1042,14 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
   }
 
   // VideoPicture::pts / iDuration are in DVD_TIME_BASE units (microseconds).
-  pVideoPicture->pts = std::isfinite(ptsSeconds) ? ptsSeconds * DVD_TIME_BASE : DVD_NOPTS_VALUE;
+  pVideoPicture->pts =
+      std::isfinite(info.ptsSeconds) ? info.ptsSeconds * DVD_TIME_BASE : DVD_NOPTS_VALUE;
   pVideoPicture->dts = DVD_NOPTS_VALUE;
-  pVideoPicture->iDuration = durationSeconds > 0.0 ? durationSeconds * DVD_TIME_BASE : 0.0;
+  pVideoPicture->iDuration =
+      info.durationSeconds > 0.0 ? info.durationSeconds * DVD_TIME_BASE : 0.0;
   pVideoPicture->iRepeatPicture = 0.0;
   pVideoPicture->iFlags = 0;
-  pVideoPicture->iFrameType = keyFrame ? FRAME_TYPE_I : FRAME_TYPE_P;
+  pVideoPicture->iFrameType = info.keyFrame != 0 ? FRAME_TYPE_I : FRAME_TYPE_P;
 
   pVideoPicture->color_space = m_hints.colorSpace == AVCOL_SPC_UNSPECIFIED
                                    ? AVCOL_SPC_BT709
@@ -997,21 +1080,10 @@ void CDVDVideoCodecWebCodecs::ReportPixelFormat(AVPixelFormat format)
 // A picture flagged DVP_FLAG_DROPPED is never rendered, but VideoPlayerVideo
 // still configures the renderer from it, so it carries a buffer of the format the
 // displayed pictures have.
-CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::DiscardNextFrame(VideoPicture* pVideoPicture)
+CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::DroppedPicture(const WebCodecsFrameInfo& info,
+                                                                 AVPixelFormat pixelFormat,
+                                                                 VideoPicture* pVideoPicture)
 {
-  WebCodecsFrameInfo info{};
-  if (webcodecs_discard_next_frame(m_decoderHandle, &info) != 1)
-    return VC_BUFFER;
-
-  AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
-  if (pixelFormat == AV_PIX_FMT_NONE)
-  {
-    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
-              info.pixelFormat);
-    return VC_ERROR;
-  }
-  ReportPixelFormat(pixelFormat);
-
   int bufferSize = info.payloadSize;
   if (IsPackedRgb(pixelFormat))
   {
@@ -1024,65 +1096,49 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::DiscardNextFrame(VideoPicture*
     return VC_NOBUFFER;
   videoBuffer->SetPixelFormat(pixelFormat);
 
-  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info.width, info.height,
-                      info.keyFrame != 0, info.ptsSeconds, info.durationSeconds);
+  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info);
   pVideoPicture->iFlags |= DVP_FLAG_DROPPED;
   return VC_PICTURE;
 }
 
-CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVideoPicture)
+// Sysmem path: the frame is copied into a CVideoBuffer, converted to YUV420P
+// when the decoder emits packed RGB, and handed to the generic renderer.
+CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::CopyFrame(int32_t sequence,
+                                                            const WebCodecsFrameInfo& info,
+                                                            VideoPicture* pVideoPicture)
 {
-  if (!m_opened || m_decoderHandle == INVALID_DECODER_HANDLE)
-    return VC_ERROR;
-
-  const bool draining = (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN) != 0;
-  if (draining)
-  {
-    if (!m_drained)
-      m_drained = WaitForDrain();
-  }
-  else
-  {
-    m_drained = false;
-    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
-    if (SharedLoad(m_shared.queuedFrames) == 0 && DecoderBusy())
-      WaitForDecoderSignal(seen, FRAME_WAIT_MS);
-  }
-
-  if (SharedLoad(m_shared.failed))
-  {
-    const std::string error = ReadDecoderError(m_decoderHandle);
-    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - decoder entered failed state: {}",
-              error.empty() ? "<no js error>" : error);
-    return VC_ERROR;
-  }
-
-  if (SharedLoad(m_shared.queuedFrames) == 0)
-    return draining ? VC_EOF : VC_BUFFER;
-
-  if (m_codecControlFlags & (DVD_CODEC_CTRL_DROP | DVD_CODEC_CTRL_DROP_ANY))
-    return DiscardNextFrame(pVideoPicture);
-
-  const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(SharedLoad(m_shared.nextPixelFormat));
-  const int payloadSize = SharedLoad(m_shared.nextPayloadSize);
-  // The bridge stores the fields one at a time and bumps the signal last, so a
-  // publish caught half-way shows a frame count without its metadata yet.
-  if (pixelFormat == AV_PIX_FMT_NONE || payloadSize <= 0)
-    return VC_BUFFER;
-
   // A copy an earlier call gave up on has to settle before another starts.
   ReleaseCopyBuffer();
 
+  AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
+  if (pixelFormat == AV_PIX_FMT_NONE || info.payloadSize <= 0)
+  {
+    webcodecs_release_frame(m_decoderHandle, sequence);
+    PublishFramesTaken(sequence + 1);
+    CLog::Log(LOGERROR,
+              "CDVDVideoCodecWebCodecs::GetPicture - {} frames cannot be copied through the heap",
+              WebCodecsPixelFormatName(info.pixelFormat));
+    return VC_ERROR;
+  }
+  ReportPixelFormat(pixelFormat);
+
+  if (m_codecControlFlags & (DVD_CODEC_CTRL_DROP | DVD_CODEC_CTRL_DROP_ANY))
+  {
+    webcodecs_release_frame(m_decoderHandle, sequence);
+    PublishFramesTaken(sequence + 1);
+    return DroppedPicture(info, pixelFormat, pVideoPicture);
+  }
+
   const bool packedRgb = IsPackedRgb(pixelFormat);
   CVideoBuffer* videoBuffer = AcquirePictureBuffer(
-      packedRgb ? *m_rgbBufferPool : *m_videoBufferPool, pixelFormat, payloadSize);
+      packedRgb ? *m_rgbBufferPool : *m_videoBufferPool, pixelFormat, info.payloadSize);
   if (!videoBuffer)
     return VC_NOBUFFER;
 
-  m_copyInfo = {};
   m_copyBuffer = videoBuffer;
-  webcodecs_copy_next_frame(m_decoderHandle, ++m_copyId, videoBuffer->GetMemPtr(), payloadSize,
-                            &m_copyInfo);
+  webcodecs_copy_frame(m_decoderHandle, sequence, ++m_copyId, videoBuffer->GetMemPtr(),
+                       info.payloadSize);
+  PublishFramesTaken(sequence + 1);
   const int32_t copyResult = WaitForCopy(m_copyId);
   if (copyResult == 0)
   {
@@ -1102,37 +1158,61 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
     const std::string error = ReadDecoderError(m_decoderHandle);
     CLog::Log(LOGERROR,
               "CDVDVideoCodecWebCodecs::GetPicture - frame copy failed (result={}, "
-              "payloadSize={} vs published {}): {}",
-              copyResult, m_copyInfo.payloadSize, payloadSize,
+              "payloadSize={}): {}",
+              copyResult, info.payloadSize, error.empty() ? "<no js error>" : error);
+    return VC_ERROR;
+  }
+
+  WebCodecsFrameInfo layout = info;
+  if (packedRgb)
+  {
+    videoBuffer = ConvertToYuv420p(videoBuffer, layout);
+    if (!videoBuffer)
+      return VC_ERROR;
+    pixelFormat = AV_PIX_FMT_YUV420P;
+  }
+
+  const int strides[YuvImage::MAX_PLANES] = {layout.yStride, layout.uStride, layout.vStride};
+  const int planeOffsets[YuvImage::MAX_PLANES] = {0, layout.uOffset, layout.vOffset};
+  videoBuffer->SetPixelFormat(pixelFormat);
+  videoBuffer->SetDimensions(info.width, info.height, strides, planeOffsets);
+
+  FillPictureMetadata(pVideoPicture, videoBuffer, pixelFormat, info);
+  return VC_PICTURE;
+}
+
+CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVideoPicture)
+{
+  if (!m_opened || m_decoderHandle == INVALID_DECODER_HANDLE)
+    return VC_ERROR;
+
+  const bool draining = (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN) != 0;
+  if (draining)
+  {
+    if (!m_drained)
+      m_drained = WaitForDrain();
+  }
+  else
+  {
+    m_drained = false;
+    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
+    if (QueuedFrames() == 0 && DecoderBusy())
+      WaitForDecoderSignal(seen, FRAME_WAIT_MS);
+  }
+
+  if (SharedLoad(m_shared.failed))
+  {
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - decoder entered failed state: {}",
               error.empty() ? "<no js error>" : error);
     return VC_ERROR;
   }
 
-  WebCodecsFrameInfo& info = m_copyInfo;
-  AVPixelFormat framePixelFormat = PixelFormatFromWebCodecs(info.pixelFormat);
-  if (framePixelFormat == AV_PIX_FMT_NONE)
-  {
-    videoBuffer->Release();
-    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - unsupported pixel format id {}",
-              info.pixelFormat);
-    return VC_ERROR;
-  }
-  ReportPixelFormat(framePixelFormat);
+  if (QueuedFrames() <= 0)
+    return draining ? VC_EOF : VC_BUFFER;
 
-  if (IsPackedRgb(framePixelFormat))
-  {
-    videoBuffer = ConvertToYuv420p(videoBuffer, info);
-    if (!videoBuffer)
-      return VC_ERROR;
-    framePixelFormat = AV_PIX_FMT_YUV420P;
-  }
-
-  const int strides[YuvImage::MAX_PLANES] = {info.yStride, info.uStride, info.vStride};
-  const int planeOffsets[YuvImage::MAX_PLANES] = {0, info.uOffset, info.vOffset};
-  videoBuffer->SetPixelFormat(framePixelFormat);
-  videoBuffer->SetDimensions(info.width, info.height, strides, planeOffsets);
-
-  FillPictureMetadata(pVideoPicture, videoBuffer, framePixelFormat, info.width, info.height,
-                      info.keyFrame != 0, info.ptsSeconds, info.durationSeconds);
-  return VC_PICTURE;
+  // The slot is complete: the bridge writes it before it publishes framesProduced.
+  const int32_t sequence = SharedLoad(m_shared.framesTaken);
+  const WebCodecsFrameInfo info = m_shared.ring[sequence % WEBCODECS_FRAME_RING];
+  return CopyFrame(sequence, info, pVideoPicture);
 }

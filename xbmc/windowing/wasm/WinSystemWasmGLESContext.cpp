@@ -145,6 +145,11 @@ bool CWinSystemWasmGLESContext::InitWindowSystem()
     return false;
   }
 
+  // Probed here, before this thread has queued any GL call, so the probe's
+  // texture binding cannot land between two of Kodi's own.
+  CLog::Log(LOGINFO, "WASM: WebGL {} a VideoFrame as texture source",
+            webcodecs_probe_texture_upload() ? "accepts" : "rejects");
+
   VSYNC::InstallPump();
   if (IsTizenRuntime())
     CLog::Log(LOGINFO, "WASM: Tizen runtime detected");
