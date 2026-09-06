@@ -80,7 +80,8 @@ private:
   bool WaitForDrain();
   int32_t WaitForCopy(int copyId);
   void ReleaseCopyBuffer();
-  void ReportPixelFormat(AVPixelFormat format);
+  void ReportPixelFormat(const char* name);
+  VCReturn TakeFrame(int32_t sequence, const WebCodecsFrameInfo& info, VideoPicture* pVideoPicture);
   VCReturn CopyFrame(int32_t sequence, const WebCodecsFrameInfo& info, VideoPicture* pVideoPicture);
   VCReturn DroppedPicture(const WebCodecsFrameInfo& info,
                           AVPixelFormat pixelFormat,
@@ -92,10 +93,15 @@ private:
   void FillPictureMetadata(VideoPicture* pVideoPicture,
                            CVideoBuffer* videoBuffer,
                            AVPixelFormat pixelFormat,
-                           const WebCodecsFrameInfo& info) const;
+                           const WebCodecsFrameInfo& info,
+                           bool colourFromFrame) const;
 
   std::string m_name{"webcodecs"};
   CDVDStreamInfo m_hints;
+  // Frames stay on the browser side and are imported into the renderer's
+  // textures; false when the page's WebGL rejects a VideoFrame source.
+  bool m_textureUpload{false};
+  std::shared_ptr<CVideoBufferPoolWebCodecs> m_framePool;
   std::shared_ptr<CVideoBufferPoolSysMem> m_videoBufferPool;
   // Landing zone for packed RGB frames before ConvertToYuv420p().
   std::shared_ptr<CVideoBufferPoolSysMem> m_rgbBufferPool;
@@ -104,7 +110,7 @@ private:
   int m_swsHeight{0};
   AVPixelFormat m_swsFormat{AV_PIX_FMT_NONE};
   bool m_loggedRgbConversion{false};
-  AVPixelFormat m_reportedPixelFormat{AV_PIX_FMT_NONE};
+  std::string m_reportedPixelFormat;
 
   int m_decoderHandle{0};
   bool m_opened{false};

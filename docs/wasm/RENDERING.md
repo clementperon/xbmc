@@ -516,12 +516,12 @@ Relevant Emscripten source, for reference:
 
 ## 9. Video: current path and the video-plane design
 
-[ZERO_COPY.md](ZERO_COPY.md) describes the next step: importing the
-decoder's `VideoFrame`s straight into Kodi's WebGL textures on the main
-thread, which removes every CPU pass of §9.2 without a second canvas. The
-video plane of §9.3 stays the step after that, if a target turns out to be
-GPU-bound. The first bullet of §9.5 was written for the design of §4.9 and
-no longer holds with the proxied context.
+[ZERO_COPY.md](ZERO_COPY.md) describes the current path in full: the
+decoder's `VideoFrame`s are imported straight into Kodi's WebGL textures on
+the main thread, which removes every CPU pass of the earlier sysmem path
+without a second canvas. The video plane of §9.3 stays the step after that,
+if a target turns out to be GPU-bound. The first bullet of §9.5 was written
+for the design of §4.9 and no longer holds with the proxied context.
 
 ### 9.1 Target constraints
 
@@ -532,32 +532,35 @@ CPU. A 1080p YUV frame is ~3 MB; at 60 fps each CPU pass over it costs
 ~180 MB/s of memory bandwidth plus the cycles to drive it, and 4K is
 four times that.
 
-### 9.2 Current path (texture upload)
+### 9.2 Current path (texture import)
 
 `CDVDVideoCodecWebCodecs` drives a `VideoDecoder` that lives on the
 browser main thread through an Emscripten `--js-library`
-(`webcodecs_bridge.js`); every bridge call is `__proxy: 'sync'`. State
-the codec needs to poll — queued frames, in-flight work, backpressure,
-failure, the next frame's size — is mirrored by the JS side into a
-`WebCodecsSharedState` struct in wasm memory with `Atomics`, and a
-`signal` word is bumped and `Atomics.notify`'d on every change so the
-VideoPlayer thread can `emscripten_futex_wait` instead of polling
-through the proxy. Decoded `VideoFrame`s stay open in a JS queue until
-the codec asks for one; `copyTo()` then writes straight into the
-`CVideoBuffer`'s memory (the wasm heap is a `SharedArrayBuffer` under
-pthreads). The frame reaches the screen through `CLinuxRendererGLES` as
-a sysmem YUV420P/NV12 picture: `glTexImage2D` on the render pthread and
-the YUV→RGB shader.
+(`webcodecs_bridge.js`); the per-frame bridge calls are `__proxy: 'async'`,
+the rare ones `'sync'`. Decoded `VideoFrame`s stay on the main thread in a
+`Map` keyed by sequence number, and their metadata reaches the codec
+through a ring inside `WebCodecsSharedState` (AVSYNC.md §3.2), so
+`GetPicture` takes a frame without a call into JS and returns a
+`CVideoBufferWebCodecs` that only names it. `CRendererWebCodecs`, a
+`CLinuxRendererGLES` subclass on the HwDecRender hooks, owns one
+`GL_TEXTURE_2D` per render buffer: its `UploadTexture` queues
+`webcodecs_upload_frame`, which runs `texImage2D(…, videoFrame)` on the main
+thread in the render thread's own GL command order (§2.3: both go through
+Emscripten's system proxying queue), and `RenderHook` draws the texture
+with the GUI's RGBA shader into Kodi's framebuffer, so the OSD, subtitles
+and the capture path are unchanged. No pixel enters the wasm heap; the GPU
+copy and the colour conversion happen in the browser. ZERO_COPY.md is the
+full description, including what the render thread may and may not call.
 
-Per frame that is two CPU passes — the `copyTo` readback (GPU→CPU for a
-hardware decoder, memcpy for a software one) and the WebGL texture
-upload — plus one GPU pass for colour conversion. It is the cheapest a
-sysmem pipeline can be, and it is still the wrong pipeline for a
-two-core TV at 1080p60.
+Whether the page's WebGL accepts a `VideoFrame` source is probed once from
+`InitWindowSystem`, before this thread has queued any GL call. When it does
+not, the codec falls back to the sysmem path: `copyTo()` into a
+`CVideoBuffer`, `sws_scale` for packed RGB, and the generic YUV renderer,
+whose `LoadPlane` uploads in bands below 256 KB on this target so the
+uploads stay asynchronous (§2.3).
 
-Drain semantics follow the other Kodi codecs: `DVD_CODEC_CTRL_DRAIN`
-triggers `VideoDecoder.flush()`, which releases the reorder buffer, and
-the codec then skips delta packets until the next keyframe.
+Drain does not call `VideoDecoder.flush()`; AVSYNC.md §3.6 explains the
+settle-based drain and why.
 
 ### 9.3 Design: video plane under the GUI
 
