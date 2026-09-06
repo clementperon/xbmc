@@ -479,6 +479,11 @@ Relevant Emscripten source, for reference:
   `renderViaOffscreenBackBuffer` is still set in `CreateProxiedGLContext`
   and that nothing takes another context on, or clears, `#canvas`.
 
+- **Main-thread time in `ErrnoError` and `recvmsg`.** A Kodi thread is
+  polling a socket Emscripten cannot serve; every failed call is proxied
+  to main and throws. The event server was one such poller and is off on
+  this platform (`system/settings/wasm.xml`).
+
 - **Nothing renders.** `Module.ctx` must be set on main and Kodi's log
   must show `WASM: using main-thread WebGL2 context proxied to the Kodi
   thread`. A `bitmaprenderer` or `2d` context taken on `#canvas` before
