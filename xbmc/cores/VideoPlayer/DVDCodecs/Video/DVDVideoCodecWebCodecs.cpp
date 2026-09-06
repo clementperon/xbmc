@@ -591,6 +591,50 @@ int SwsColorspace(AVColorSpace colorSpace)
 }
 } // namespace
 
+CVideoBufferWebCodecs::CVideoBufferWebCodecs(int id) : CVideoBuffer(id)
+{
+}
+
+void CVideoBufferWebCodecs::SetFrame(int decoderHandle, int32_t sequence, AVPixelFormat format)
+{
+  m_decoderHandle = decoderHandle;
+  m_sequence = sequence;
+  m_pixFormat = format;
+}
+
+CVideoBuffer* CVideoBufferPoolWebCodecs::Get()
+{
+  std::unique_lock lock(m_critSection);
+
+  CVideoBufferWebCodecs* buffer;
+  if (!m_free.empty())
+  {
+    buffer = m_all[m_free.front()].get();
+    m_free.pop_front();
+  }
+  else
+  {
+    m_all.emplace_back(std::make_unique<CVideoBufferWebCodecs>(static_cast<int>(m_all.size())));
+    buffer = m_all.back().get();
+  }
+
+  buffer->Acquire(GetPtr());
+  return buffer;
+}
+
+// The last reference is gone, so the frame is either uploaded already or will
+// never be; the release is a no-op for a frame the bridge has closed.
+void CVideoBufferPoolWebCodecs::Return(int id)
+{
+  std::unique_lock lock(m_critSection);
+
+  CVideoBufferWebCodecs& buffer = *m_all[id];
+  if (buffer.GetSequence() >= 0)
+    webcodecs_release_frame(buffer.GetDecoderHandle(), buffer.GetSequence());
+  buffer.SetFrame(0, -1, AV_PIX_FMT_NONE);
+  m_free.push_back(id);
+}
+
 CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
   : CDVDVideoCodec(processInfo)
 {

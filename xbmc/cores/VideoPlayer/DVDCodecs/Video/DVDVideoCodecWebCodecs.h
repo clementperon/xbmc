@@ -7,14 +7,48 @@
 
 #include "DVDVideoCodec.h"
 #include "DVDVideoCodecWebCodecsBridge.h"
+#include "cores/VideoPlayer/Buffers/VideoBuffer.h"
 #include "cores/VideoPlayer/DVDStreamInfo.h"
+#include "threads/CriticalSection.h"
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 class CVideoBufferPoolSysMem;
 struct SwsContext;
+
+// A picture whose pixels never enter the wasm heap: it names a VideoFrame the
+// bridge holds on the browser main thread by decoder handle and sequence
+// number. CRendererWebCodecs uploads it into a GL texture by that number, and
+// returning the buffer to its pool closes the frame if nothing has yet.
+class CVideoBufferWebCodecs : public CVideoBuffer
+{
+public:
+  explicit CVideoBufferWebCodecs(int id);
+
+  void SetFrame(int decoderHandle, int32_t sequence, AVPixelFormat format);
+  int GetDecoderHandle() const { return m_decoderHandle; }
+  int32_t GetSequence() const { return m_sequence; }
+
+private:
+  int m_decoderHandle{0};
+  int32_t m_sequence{-1};
+};
+
+class CVideoBufferPoolWebCodecs : public IVideoBufferPool
+{
+public:
+  CVideoBuffer* Get() override;
+  void Return(int id) override;
+
+private:
+  CCriticalSection m_critSection;
+  std::vector<std::unique_ptr<CVideoBufferWebCodecs>> m_all;
+  std::deque<int> m_free;
+};
 
 class CDVDVideoCodecWebCodecs : public CDVDVideoCodec
 {
