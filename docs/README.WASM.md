@@ -365,7 +365,7 @@ If the launch reports `with debug 0` (`tz`) or answers `closed` (`sdb`), the TV 
 
 ## Audio and video playback
 
-Audio goes out through a Web Audio `AudioWorklet` (`-sAUDIO_WORKLET` and `-sWASM_WORKERS`, which need the same COOP/COEP headers as pthreads), video is decoded with WebCodecs `VideoDecoder` for H.264, HEVC, VP8, VP9 and AV1 and falls back to FFmpeg for everything else. Both paths, the buffering and timing numbers behind them and how they keep audio and video in sync are described in **[docs/wasm/AVSYNC.md](wasm/AVSYNC.md)**; GUI rendering is described in **[docs/wasm/RENDERING.md](wasm/RENDERING.md)**.
+Audio goes out through a Web Audio `AudioWorklet` (`-sAUDIO_WORKLET` and `-sWASM_WORKERS`, which need the same COOP/COEP headers as pthreads), video is decoded with WebCodecs `VideoDecoder` for H.264, HEVC, VP8, VP9 and AV1 and falls back to FFmpeg for everything else. Both paths, the buffering and timing numbers behind them and how they keep audio and video in sync are described in **[docs/wasm/AVSYNC.md](wasm/AVSYNC.md)**; GUI rendering is described in **[docs/wasm/RENDERING.md](wasm/RENDERING.md)**; the planned zero-copy path from the decoder to the GPU is designed in **[docs/wasm/ZERO_COPY.md](wasm/ZERO_COPY.md)**.
 
 Two browser rules show up as behaviour:
 
