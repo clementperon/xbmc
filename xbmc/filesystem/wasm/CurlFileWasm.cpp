@@ -10,7 +10,8 @@
 // a WebSocket relay that we do not run), so we reimplement CCurlFile on top
 // of the browser's XMLHttpRequest. Any cross-origin request is rewritten to
 // `/proxy?u=...` by the JS shim in xbmc/platform/wasm/kodi_pre.js so CORS is
-// also handled transparently.
+// also handled transparently. GET responses are read through ranged windows
+// so seeking in a large file does not download all of it.
 //
 // The public ABI (CCurlFile + CReadState) is preserved so DAVFile, Repository,
 // HTTPDirectory, ShoutcastFile, ... keep compiling unchanged. Curl-specific
@@ -32,7 +33,10 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
+#include <limits>
+#include <memory>
 
 #include <emscripten.h>
 
@@ -42,6 +46,11 @@ namespace
 {
 constexpr int DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
 constexpr double MAX_EAGER_RESPONSE_BYTES = 1024.0 * 1024.0 * 1024.0;
+constexpr int64_t RANGE_WINDOW_BYTES = 2 * 1024 * 1024;
+
+constexpr int8_t FILLBUFFER_OK = 0;
+constexpr int8_t FILLBUFFER_NO_DATA = 1;
+constexpr int8_t FILLBUFFER_FAIL = -1;
 
 int EffectiveTimeout(int timeoutSeconds)
 {
@@ -182,11 +191,112 @@ void ParseResponseHeaders(const std::string& raw, CHttpHeader& out)
       out.Parse(line + "\r\n");
   }
 }
+
+// Request parameters a CReadState needs to fetch further windows of the
+// resource it was opened on; CReadState::m_easyHandle points at it.
+struct RequestContext
+{
+  std::string url;
+  std::string headers;
+  std::string userAgent;
+  std::string referer;
+  int timeout{DEFAULT_REQUEST_TIMEOUT_SECONDS};
+};
+
+RequestContext* Context(const CCurlFile::CReadState& state)
+{
+  return static_cast<RequestContext*>(state.m_easyHandle);
+}
+
+struct WindowResponse
+{
+  int status{0};
+  std::string error;
+  std::string rawHeaders;
+  std::string responseUrl;
+  std::unique_ptr<char[]> body;
+  unsigned int bodySize{0};
+  // Set for a 206 whose Content-Range matches the body: first is the offset of
+  // body[0] in the resource, total the resource length.
+  bool partial{false};
+  int64_t first{0};
+  int64_t total{0};
+};
+
+// Content-Range: bytes <first>-<last>/<length>
+bool ParseContentRange(const std::string& value, int64_t& first, int64_t& last, int64_t& length)
+{
+  long long f = 0;
+  long long l = 0;
+  long long len = 0;
+  if (std::sscanf(value.c_str(), "bytes %lld-%lld/%lld", &f, &l, &len) != 3 || f < 0 || l < f ||
+      len <= l)
+    return false;
+  first = f;
+  last = l;
+  length = len;
+  return true;
+}
+
+// Fetches [rangeStart, rangeStart + rangeLength) of the resource, or all of it
+// when rangeLength is 0. A server that ignores the range answers 200 with the
+// whole body.
+WindowResponse RequestWindow(const RequestContext& ctx,
+                             const std::string& method,
+                             const std::string& body,
+                             int64_t rangeStart,
+                             int64_t rangeLength)
+{
+  std::string headers = ctx.headers;
+  if (rangeLength > 0)
+    headers += StringUtils::Format("Range:bytes={}-{}\n", rangeStart, rangeStart + rangeLength - 1);
+
+  WindowResponse out;
+  out.status = kodi_curl_wasm_request(
+      method.c_str(), ctx.url.c_str(), body.empty() ? nullptr : body.data(),
+      static_cast<int>(body.size()), headers.empty() ? nullptr : headers.c_str(),
+      ctx.userAgent.c_str(), ctx.referer.c_str(), ctx.timeout, 1);
+  if (out.status <= 0)
+  {
+    out.error = FetchString(3);
+    return out;
+  }
+
+  out.rawHeaders = FetchString(0);
+  out.responseUrl = FetchString(1);
+  const int bodySize = kodi_curl_wasm_body_size();
+  if (bodySize > MAX_EAGER_RESPONSE_BYTES)
+  {
+    out.status = 0;
+    out.error = StringUtils::Format("refusing to keep a {:.1f} MiB response in the WASM heap",
+                                    static_cast<double>(bodySize) / (1024.0 * 1024.0));
+    return out;
+  }
+  if (bodySize > 0)
+  {
+    out.body.reset(new char[bodySize]);
+    out.bodySize = static_cast<unsigned int>(bodySize);
+    kodi_curl_wasm_copy_body(out.body.get(), bodySize);
+  }
+  if (out.status == 206)
+  {
+    CHttpHeader header;
+    ParseResponseHeaders(out.rawHeaders, header);
+    int64_t last = 0;
+    out.partial = ParseContentRange(header.GetValue("content-range"), out.first, last, out.total) &&
+                  last - out.first + 1 == out.bodySize;
+  }
+  return out;
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
 // CReadState
 // ---------------------------------------------------------------------------
+// One window of the resource lives in m_overflowBuffer/m_overflowSize.
+// m_bufferSize is the read offset inside that window, m_filePos the absolute
+// position, and m_sendRange records that the server honours ranges so the
+// window can be moved.
 
 CCurlFile::CReadState::CReadState()
   : m_easyHandle(nullptr),
@@ -213,6 +323,7 @@ CCurlFile::CReadState::CReadState()
 
 CCurlFile::CReadState::~CReadState()
 {
+  delete Context(*this);
   delete[] m_overflowBuffer;
   m_overflowBuffer = nullptr;
 }
@@ -234,55 +345,114 @@ bool CCurlFile::CReadState::Seek(int64_t pos)
 {
   if (pos < 0 || pos > m_fileSize)
     return false;
+  const int64_t offset = pos - (m_filePos - m_bufferSize);
+  if (offset >= 0 && offset <= m_overflowSize)
+  {
+    m_bufferSize = static_cast<unsigned int>(offset);
+  }
+  else
+  {
+    delete[] m_overflowBuffer;
+    m_overflowBuffer = nullptr;
+    m_overflowSize = 0;
+    m_bufferSize = 0;
+  }
   m_filePos = pos;
   return true;
 }
 
 ssize_t CCurlFile::CReadState::Read(void* lpBuf, size_t uiBufSize)
 {
-  if (!lpBuf || uiBufSize == 0 || !m_overflowBuffer)
+  if (!lpBuf || uiBufSize == 0)
     return 0;
-  int64_t remaining = m_fileSize - m_filePos;
-  if (remaining <= 0)
-    return 0;
-  size_t n = std::min(uiBufSize, static_cast<size_t>(remaining));
-  std::memcpy(lpBuf, m_overflowBuffer + m_filePos, n);
+  if (m_bufferSize >= m_overflowSize)
+  {
+    const auto want = static_cast<unsigned int>(
+        std::min<size_t>(uiBufSize, std::numeric_limits<unsigned int>::max()));
+    const int8_t filled = FillBuffer(want);
+    if (filled != FILLBUFFER_OK)
+      return filled == FILLBUFFER_NO_DATA ? 0 : -1;
+  }
+  const size_t n = std::min(uiBufSize, static_cast<size_t>(m_overflowSize - m_bufferSize));
+  std::memcpy(lpBuf, m_overflowBuffer + m_bufferSize, n);
+  m_bufferSize += static_cast<unsigned int>(n);
   m_filePos += static_cast<int64_t>(n);
   return static_cast<ssize_t>(n);
 }
 
 IFile::ReadLineResult CCurlFile::CReadState::ReadLine(char* buffer, std::size_t bufferSize)
 {
-  if (!buffer || bufferSize == 0 || !m_overflowBuffer)
-    return {IFile::ReadLineResult::FAILURE, 0};
-  int64_t remaining = m_fileSize - m_filePos;
-  if (remaining <= 0)
+  if (!buffer || bufferSize == 0)
     return {IFile::ReadLineResult::FAILURE, 0};
 
-  size_t max = std::min(bufferSize - 1, static_cast<size_t>(remaining));
-  const char* src = m_overflowBuffer + m_filePos;
   size_t n = 0;
   bool sawNewline = false;
-  for (; n < max; ++n)
+  while (n < bufferSize - 1 && !sawNewline)
   {
-    buffer[n] = src[n];
-    if (src[n] == '\n')
+    if (m_bufferSize >= m_overflowSize)
     {
-      ++n;
-      sawNewline = true;
-      break;
+      const int8_t filled = FillBuffer(1);
+      if (filled == FILLBUFFER_FAIL && n == 0)
+        return {IFile::ReadLineResult::FAILURE, 0};
+      if (filled != FILLBUFFER_OK)
+        break;
     }
+    const char* src = m_overflowBuffer + m_bufferSize;
+    const size_t scan =
+        std::min(static_cast<size_t>(m_overflowSize - m_bufferSize), bufferSize - 1 - n);
+    const char* nl = static_cast<const char*>(std::memchr(src, '\n', scan));
+    const size_t take = nl ? static_cast<size_t>(nl - src) + 1 : scan;
+    std::memcpy(buffer + n, src, take);
+    n += take;
+    m_bufferSize += static_cast<unsigned int>(take);
+    m_filePos += static_cast<int64_t>(take);
+    sawNewline = nl != nullptr;
   }
   buffer[n] = '\0';
-  m_filePos += static_cast<int64_t>(n);
-  if (!sawNewline && n == max && static_cast<size_t>(remaining) > max)
+  if (n == 0)
+    return {IFile::ReadLineResult::FAILURE, 0};
+  if (!sawNewline && n == bufferSize - 1 && m_filePos < m_fileSize)
     return {IFile::ReadLineResult::TRUNCATED, n};
   return {IFile::ReadLineResult::OK, n};
 }
 
-int8_t CCurlFile::CReadState::FillBuffer(unsigned int)
+// Moves the window to m_filePos, covering at least `want` bytes.
+int8_t CCurlFile::CReadState::FillBuffer(unsigned int want)
 {
-  return 0;
+  if (m_filePos >= m_fileSize)
+    return FILLBUFFER_NO_DATA;
+  const RequestContext* ctx = Context(*this);
+  if (!ctx || !m_sendRange)
+    return FILLBUFFER_FAIL;
+
+  const int64_t length = std::max<int64_t>(want, RANGE_WINDOW_BYTES);
+  WindowResponse response = RequestWindow(*ctx, "GET", {}, m_filePos, length);
+  if (response.status == 416)
+    return FILLBUFFER_NO_DATA;
+  const bool usable =
+      response.status == 206 ? response.partial : response.status > 0 && response.status < 400;
+  const int64_t first = response.partial ? response.first : 0;
+  if (!usable || m_filePos < first || m_filePos >= first + response.bodySize)
+  {
+    CLog::Log(LOGERROR, "CCurlFile::{} - range {}+{} of <{}> failed: HTTP {} {}", __FUNCTION__,
+              m_filePos, length, CURL::GetRedacted(ctx->url), response.status, response.error);
+    return FILLBUFFER_FAIL;
+  }
+
+  if (response.partial)
+  {
+    m_fileSize = response.total;
+  }
+  else
+  {
+    m_fileSize = response.bodySize;
+    m_sendRange = false;
+  }
+  delete[] m_overflowBuffer;
+  m_overflowBuffer = response.body.release();
+  m_overflowSize = response.bodySize;
+  m_bufferSize = static_cast<unsigned int>(m_filePos - first);
+  return FILLBUFFER_OK;
 }
 void CCurlFile::CReadState::SetReadBuffer(const void*, int64_t) {}
 void CCurlFile::CReadState::SetResume() {}
@@ -353,6 +523,12 @@ std::string FlattenHeaders(const std::map<std::string, std::string>& headers,
     out += "Accept-Charset:" + acceptCharset + "\n";
   return out;
 }
+
+bool HasHeader(const std::map<std::string, std::string>& headers, const char* name)
+{
+  return std::any_of(headers.begin(), headers.end(),
+                     [name](const auto& kv) { return StringUtils::EqualsNoCase(kv.first, name); });
+}
 } // namespace
 
 bool CCurlFile::Service(const std::string& strURL, std::string& strHTML)
@@ -387,56 +563,47 @@ bool CCurlFile::Open(const CURL& url)
   const std::string method = m_customrequest.empty()
                                  ? (m_postdataset ? std::string("POST") : std::string("GET"))
                                  : m_customrequest;
-  const std::string headers = FlattenHeaders(m_requestheaders, m_cookie, m_acceptencoding,
-                                             m_acceptCharset);
   const std::string body = m_postdataset ? Base64::Decode(m_postdata) : std::string();
-  const int timeout = EffectiveTimeout(m_connecttimeout);
 
-  m_httpresponse = kodi_curl_wasm_request(
-      method.c_str(), m_url.c_str(),
-      body.empty() ? nullptr : body.data(), static_cast<int>(body.size()),
-      headers.empty() ? nullptr : headers.c_str(),
-      m_userAgent.c_str(), m_referer.c_str(), timeout, 1);
+  auto* ctx = new RequestContext{
+      m_url, FlattenHeaders(m_requestheaders, m_cookie, m_acceptencoding, m_acceptCharset),
+      m_userAgent, m_referer, EffectiveTimeout(m_connecttimeout)};
+  m_state->m_easyHandle = ctx;
+
+  // Only a plain GET is read in windows; other requests are taken whole.
+  const bool windowed = method == "GET" && !HasHeader(m_requestheaders, "Range");
+  WindowResponse response =
+      RequestWindow(*ctx, method, body, 0, windowed ? RANGE_WINDOW_BYTES : 0);
+  if (response.status == 206 && (!response.partial || response.first != 0))
+    response = RequestWindow(*ctx, method, body, 0, 0);
+  m_httpresponse = response.status;
 
   if (m_httpresponse <= 0)
   {
-    const std::string error = FetchString(3);
     CLog::Log(LOGERROR, "CCurlFile::{} - {} <{}> failed: {}", __FUNCTION__, method,
-              url.GetRedacted(), error);
+              url.GetRedacted(), response.error);
     // The TV has no console to read this from; with debug logging on, show it.
     if (CServiceBroker::GetLogging().IsLogLevelLogged(LOGDEBUG))
       CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, "HTTP " + method + " failed",
-                                            url.GetHostName() + ": " + error, 8000);
+                                            url.GetHostName() + ": " + response.error, 8000);
     m_inError = true;
     return false;
   }
 
-  const int bodySize = kodi_curl_wasm_body_size();
-  if (bodySize > MAX_EAGER_RESPONSE_BYTES)
+  ParseResponseHeaders(response.rawHeaders, m_state->m_httpheader);
+  if (!response.responseUrl.empty())
   {
-    CLog::Log(LOGERROR,
-              "CCurlFile::{} - refusing to keep {:.1f} MiB response from <{}> in WASM heap",
-              __FUNCTION__, static_cast<double>(bodySize) / (1024.0 * 1024.0), url.GetRedacted());
-    m_inError = true;
-    return false;
+    m_url = response.responseUrl;
+    ctx->url = m_url;
   }
 
-  delete[] m_state->m_overflowBuffer;
-  m_state->m_overflowBuffer = nullptr;
-  m_state->m_overflowSize = 0;
-  if (bodySize > 0)
-  {
-    m_state->m_overflowBuffer = new char[bodySize];
-    m_state->m_overflowSize = static_cast<unsigned int>(bodySize);
-    kodi_curl_wasm_copy_body(m_state->m_overflowBuffer, bodySize);
-  }
-  m_state->m_fileSize = bodySize;
+  m_state->m_sendRange = response.partial;
+  m_state->m_fileSize = response.partial ? response.total : response.bodySize;
   m_state->m_filePos = 0;
-
-  ParseResponseHeaders(FetchString(0), m_state->m_httpheader);
-  const std::string responseUrl = FetchString(1);
-  if (!responseUrl.empty())
-    m_url = responseUrl;
+  m_state->m_bufferSize = 0;
+  delete[] m_state->m_overflowBuffer;
+  m_state->m_overflowBuffer = response.body.release();
+  m_state->m_overflowSize = response.bodySize;
 
   if (m_httpresponse >= 400 && m_failOnError)
   {
@@ -552,11 +719,15 @@ void CCurlFile::Close()
 {
   if (m_state)
   {
+    delete Context(*m_state);
+    m_state->m_easyHandle = nullptr;
     delete[] m_state->m_overflowBuffer;
     m_state->m_overflowBuffer = nullptr;
     m_state->m_overflowSize = 0;
+    m_state->m_bufferSize = 0;
     m_state->m_fileSize = 0;
     m_state->m_filePos = 0;
+    m_state->m_sendRange = false;
     m_state->m_httpheader.Clear();
   }
   m_opened = false;
@@ -640,12 +811,24 @@ bool CCurlFile::ReadData(std::string& strHTML)
   strHTML.clear();
   if (!m_state)
     return false;
-  const size_t remaining = static_cast<size_t>(m_state->m_fileSize - m_state->m_filePos);
-  if (remaining == 0 || !m_state->m_overflowBuffer)
-    return m_httpresponse > 0;
-  strHTML.assign(m_state->m_overflowBuffer + m_state->m_filePos, remaining);
-  m_state->m_filePos = m_state->m_fileSize;
-  return true;
+  while (m_state->m_filePos < m_state->m_fileSize)
+  {
+    if (m_state->m_bufferSize >= m_state->m_overflowSize)
+    {
+      const int64_t remaining = m_state->m_fileSize - m_state->m_filePos;
+      const int8_t filled = m_state->FillBuffer(static_cast<unsigned int>(
+          std::min<int64_t>(remaining, std::numeric_limits<unsigned int>::max())));
+      if (filled == FILLBUFFER_FAIL)
+        return false;
+      if (filled == FILLBUFFER_NO_DATA)
+        break;
+    }
+    const size_t available = m_state->m_overflowSize - m_state->m_bufferSize;
+    strHTML.append(m_state->m_overflowBuffer + m_state->m_bufferSize, available);
+    m_state->m_bufferSize += static_cast<unsigned int>(available);
+    m_state->m_filePos += static_cast<int64_t>(available);
+  }
+  return m_httpresponse > 0;
 }
 
 bool CCurlFile::Download(const std::string& strURL,
