@@ -121,7 +121,7 @@ instance, `push_packet` asynchronous, `WebCodecsSharedState` mirrored with
 frame. Instead of being queued for a `copyTo`, it is stored in a `Map` keyed
 by a per-decoder sequence number, and its metadata is written into a ring of
 `WebCodecsFrameInfo` slots inside the shared state (§4.1). Two new calls
-replace `copy_next_frame` and `discard_next_frame`:
+take over from `copy_next_frame` and `discard_next_frame`:
 
 | Call | Proxy | Does |
 |---|---|---|
@@ -130,7 +130,11 @@ replace `copy_next_frame` and `discard_next_frame`:
 
 Neither returns anything, so the video and render threads never wait for
 the main thread. The synchronous calls stay what they are: create, reset,
-destroy, stats, error text.
+destroy, stats, error text, plus the one-off capability probe of §4.7.
+Until step 6 of §7.1 removes the sysmem fallback, the copy survives as
+`webcodecs_copy_frame(handle, seq, copyId, dst, dstSize)`: it copies the
+frame the codec has already taken from the ring, so `discard_next_frame` is
+gone in both paths and the drop path is the same for both.
 
 ### 3.2 `CVideoBufferWebCodecs`
 
@@ -156,18 +160,35 @@ use, modelled on `CRendererMediaCodec`:
 | `CreateTexture(index)` | `glGenTextures` one texture, filter and wrap parameters, no storage; `texwidth/texheight` = source size, `pixpertex` 1 |
 | `UploadTexture(index)` | `webcodecs_upload_frame(handle, seq, plane.id)`, `CalculateTextureSourceRects(index, 1)`; `loaded` then keeps it from repeating |
 | `RenderHook(index)` | bind the texture, `EnableGUIShader(SM_TEXTURE_RGBA)` with the brightness/contrast uniforms, draw the quad on `m_rotatedDestCoords`, `DisableGUIShader` |
-| `DeleteTexture(index)` | `glDeleteTextures` and `ReleaseBuffer(index)` |
+| `DeleteTexture(index)` | `glDeleteTextures` (synchronous under proxying, like `glGenTextures`; both happen per `Configure`/`Flush`, not per frame) and `ReleaseBuffer(index)` |
 | `GetRenderInfo()` | `max_buffer_size = 4` |
-| `Supports(ESCALINGMETHOD)` | `LINEAR`, `NEAREST`, `AUTO` |
+| `Supports(ESCALINGMETHOD)` | `LINEAR`, `NEAREST`, `AUTO`; a change of method mid-stream is applied to the textures from `RenderHook`, since the base class only refilters `RENDER_GLSL` renderers |
+| `Supports(ERENDERFEATURE)` | the base set minus `TONEMAP`, which the browser owns here |
 
 Everything the base class does with geometry, aspect, zoom, view modes,
 vertical shift, pixel ratio, rotation, stereo source rects, is inherited,
 and because the frame is drawn into Kodi's framebuffer, the OSD, subtitles,
 GUI blending and the capture path (`VideoBypassesFramebuffer()` is false)
-keep working unchanged. `CLinuxRendererGLES::Configure` currently refuses
-pixel formats without host planes; a `RENDER_CUSTOM` subclass has none, so
-that check needs a small hook (a virtual the subclass overrides, or running
-`LoadShadersHook` first).
+keep working unchanged.
+
+`CLinuxRendererGLES::Configure` refuses a picture whose
+`videoBuffer->GetFormat()` maps to `SHADER_NONE`, because the base class has
+no host planes to upload for it. A `RENDER_CUSTOM` subclass brings its own
+upload, so the gate becomes `m_renderMethod != RENDER_CUSTOM &&
+GetShaderFormat() == SHADER_NONE`, and `CRendererWebCodecs` sets
+`m_renderMethod = RENDER_CUSTOM` in its constructor (`LoadShadersHook` sets
+it again later, as `CRendererMediaCodec` does). That is the whole hook: no
+new virtual, and `GetShaderFormat()`, which logs an error for unknown
+formats, is not consulted for custom renderers. The buffer still reports the
+decoder's real format where FFmpeg has a name for it (`RGB0`, `NV12`,
+`YUV420P10`, …) so `ConfigChanged` reconfigures if the decoder switches
+output format mid-stream.
+
+One base-class cost to know about: `ValidateRenderTarget` runs
+`UpdateVideoFilter`, whose `SetTextureFilter` asks `glIsTexture` for every
+field, plane and buffer (36 synchronous round trips with four buffers) once
+per `Configure` or `Flush`. `CRendererMediaCodec` pays the same; it is not
+in the per-frame path.
 
 ### 3.4 Codec (`CDVDVideoCodecWebCodecs`)
 
@@ -175,11 +196,19 @@ that check needs a small hook (a virtual the subclass overrides, or running
 the error path are unchanged. `GetPicture` no longer allocates sysmem
 buffers, waits for a copy, or runs libswscale: it reads the next ring slot,
 takes a `CVideoBufferWebCodecs` from the pool and fills the `VideoPicture`.
-It makes no call into JS at all. The `SwsContext`, the RGB landing pool, the
-YUV pool, `WaitForCopy` and `DiscardNextFrame`'s synchronous call go away.
-The colour fields of the picture come from the frame's `colorSpace` instead
-of the stream hints, and the process-info pixel format becomes the
-`VideoFrame.format` string (`RGBX`, `NV12`, `I420P10`, …).
+It makes no call into JS at all. `DiscardNextFrame`'s synchronous call goes
+away now; the `SwsContext`, the RGB landing pool, the YUV pool and
+`WaitForCopy` stay behind the fallback flag until step 6 of §7.1. The colour
+fields of the picture come from the frame's `colorSpace` (§5.5), falling
+back to the stream hints for the fields the browser leaves `null` so a
+decoder that reports metadata on some frames only does not make
+`CRenderManager::Configure` reconfigure on every change, and the
+process-info pixel format becomes the `VideoFrame.format` string (`RGBX`,
+`NV12`, `I420P10`, …). The ring carries that format as a
+`WebCodecsPixelFormat` value whose enumerators are named exactly like the
+WebCodecs strings, so the JS side maps `frame.format` to it by name through
+the Embind table and the codec maps it back to the string, and to the
+`AVPixelFormat` the buffer reports.
 
 ### 3.5 Build
 
@@ -195,13 +224,15 @@ JS library and the ABI header are the existing files.
 ### 4.1 Shared state and the frame ring
 
 ```c
-struct WebCodecsFrameInfo            // one per output frame, 64 bytes
+struct WebCodecsFrameInfo            // one per output frame, 80 bytes
 {
   int32_t width, height;             // visibleRect
   int32_t displayWidth, displayHeight;
-  int32_t pixelFormat;               // VideoFrame.format, for logs and process info
+  int32_t pixelFormat;               // WebCodecsPixelFormat, named after VideoFrame.format
   int32_t keyFrame;
   int32_t colorMatrix, colorPrimaries, colorTransfer, fullRange;  // from frame.colorSpace
+  int32_t payloadSize;               // sysmem fallback only: tightly packed copy size
+  int32_t yStride, uStride, vStride, uOffset, vOffset;            // sysmem fallback only
   double ptsSeconds, durationSeconds;
 };
 
@@ -210,24 +241,35 @@ struct WebCodecsSharedState
   int32_t signal;                    // bumped + Atomics.notify on every change
   int32_t framesProduced;            // JS → C++: sequence number of the next output
   int32_t framesTaken;               // C++ → JS: sequence number GetPicture will read next
-  int32_t inflight;                  // decodeQueueSize
+  int32_t inflight;                  // decodeQueueSize (+1 while a fallback copy runs)
   int32_t failed;
   int32_t pushesProcessed;
+  int32_t copyDone, copyResult;      // sysmem fallback only
   struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];   // slot = seq % WEBCODECS_FRAME_RING
 };
 ```
 
 `queuedFrames` is `framesProduced - framesTaken`, computed by whichever side
-needs it. The fields `nextPayloadSize`, `nextPixelFormat`, `copyDone` and
-`copyResult` disappear with the copy, and with them the half-published
-metadata case AVSYNC.md §3.2 describes: the JS side writes the ring slot
-*before* it publishes `framesProduced`, so a frame count is never visible
-without its metadata.
+needs it. `nextPayloadSize` and `nextPixelFormat` disappear, and with them
+the half-published metadata case AVSYNC.md §3.2 describes: the JS side
+writes the ring slot *before* it publishes `framesProduced`, so a frame
+count is never visible without its metadata. The slot fields marked
+"sysmem fallback only", and `copyDone`/`copyResult`, leave with step 6 of
+§7.1. The colour fields use FFmpeg's `AVCOL_*` values, exported through the
+same Embind table as the other enums, with the `*_UNSPECIFIED` value for a
+`null` field; `AVCOL_SPC_RGB` is 0, so 0 cannot mean "unknown" there.
+
+The JS side writes the ring through `HEAP32`/`HEAPF64` directly. Under
+pthreads with memory growth Emscripten's link step rewrites every such
+access into `(growMemViews(), HEAP32)[…]`, so the view is current at each
+access; what must not happen is caching a view in a local across an `await`,
+which the existing bridge already avoids (its `copyTo` destination is a
+`subarray` of shared memory, which never detaches).
 
 The ring holds `WEBCODECS_FRAME_RING = 32` slots. A slot is rewritten only
 `WEBCODECS_FRAME_RING` outputs later, and the output callback refuses (closes
-and counts as dropped) a frame when `framesProduced - framesTaken` would
-reach the ring size, so a slot the codec has not read yet is never
+and counts as dropped) a frame while `framesProduced - framesTaken ==
+WEBCODECS_FRAME_RING`, so a slot the codec has not read yet is never
 overwritten. This replaces `FRAME_QUEUE_HIGH_WATER`; the codec's in-flight
 cap keeps the queue far below it in practice.
 
@@ -237,10 +279,11 @@ cap keeps the queue far below it in practice.
    the map, write `ring[seq % N]`, `Atomics.store(framesProduced, seq + 1)`,
    bump `signal`, notify.
 2. **Take.** `GetPicture()`: if `framesTaken == framesProduced`, `VC_BUFFER`
-   (with the existing futex wait when the decoder is busy). Otherwise read
-   `ring[framesTaken % N]`, get a buffer from the pool, record `(handle,
-   seq)` in it, `framesTaken++` and store it, fill the picture, return
-   `VC_PICTURE`. No proxied call.
+   (with the existing futex wait when the decoder is busy). Otherwise copy
+   `ring[framesTaken % N]` out, get a buffer from the pool, record `(handle,
+   seq)` in it, and only then publish `framesTaken + 1`: once it is
+   published the output callback may reuse the slot. Fill the picture from
+   the copy, return `VC_PICTURE`. No proxied call.
 3. **Upload.** The render manager picks the picture for a display frame,
    `CLinuxRendererGLES::Render` calls `UploadTexture(index)`, which queues
    `upload(seq, tex)`. On main: look the frame up, bind Kodi's texture,
@@ -269,8 +312,15 @@ enqueued, whichever thread enqueued it. Hence:
 
 - `upload(seq → T)` is enqueued by the render thread before its own
   `glBindTexture(T)` and draw, so it runs before them.
-- `release(seq)` can only be enqueued after the buffer's last user let go,
-  which is after the draw was enqueued, hence after the upload.
+- `release(seq)` can only be enqueued after the buffer's last user let go.
+  For a presented picture that user is `CRenderManager::FrameMove`, which
+  runs on the render thread at the start of the *next* GUI frame: it moves
+  the previous present source to `m_discard` and releases it in the same
+  call, before `Render` uploads the new one. The previous frame's commit was
+  synchronous, so the release is enqueued after its upload has *executed*,
+  not merely after it was enqueued. `Flush` and `UnInit` run on the same
+  thread and start with `glFinish`, a synchronous call, before they delete
+  textures and release buffers.
 - A synchronous call (`glGenTextures` in `CreateTexture`,
   `wasm_webgl_commit_frame`) waits for everything queued before it, so a
   frame's upload is on the GPU before its commit.
@@ -289,8 +339,12 @@ render buffer some frames later. Kodi never re-uploads a buffer: `loaded`
 stays set until `ReleaseBuffer`, and `DeleteTexture` releases the buffer
 along with the texture, so a closed frame is never needed again. Open frames
 are therefore bounded by pushed-but-not-run + decoding + queued (the
-existing `WEBCODECS_MAX_INFLIGHT = 12` rule, unchanged) plus the one or two
-between take and upload, and the render queue depth no longer adds to it.
+existing `WEBCODECS_MAX_INFLIGHT = 12` rule, unchanged) plus the frames
+taken but not yet uploaded: the render manager queues up to
+`max_buffer_size - 1 = 3` pictures behind the one on screen and
+VideoPlayerVideo can hold one more while it waits for a free slot, so up to
+16 decoder outputs can be open at once, and the on-screen one is already
+closed. The render queue depth no longer adds a second copy of each frame.
 
 Frames that never reach an upload, because the player dropped the picture,
 a seek flushed the queue or the stream ended, are closed by `release` from
@@ -305,12 +359,17 @@ reset are closed by the reset itself.
   buffer is released like any other. The synchronous
   `webcodecs_discard_next_frame` round trip disappears.
 - **Seek / `Reset()`** (synchronous, VideoPlayer thread): `VideoDecoder.reset()`
-  and reconfigure as today; the JS side closes every frame with
-  `seq >= framesTaken`; when the call returns the codec sets
-  `framesTaken = framesProduced` and stores it. Sequence numbers keep
-  counting across resets so a stale `upload`/`release` can never match a
-  new frame. Frames already taken belong to Kodi buffers and are closed by
-  their `Return`.
+  and reconfigure as today; the JS side reads `framesTaken` with
+  `Atomics.load` and closes every frame with `seq >= framesTaken`; when the
+  call returns the codec sets `framesTaken = framesProduced` and stores it.
+  `framesTaken` is written by the VideoPlayer thread only and read by the
+  main thread in the output callback (ring-full check) and in the reset;
+  the reset is a synchronous proxied call from the writing thread, so it
+  sees the latest value, and a stale value in the output callback only
+  makes the ring look fuller than it is. Atomics are all it needs. Sequence
+  numbers keep counting across resets so a stale `upload`/`release` can
+  never match a new frame. Frames already taken belong to Kodi buffers and
+  are closed by their `Return`.
 - **Drain / end of stream**: unchanged (settle-based, AVSYNC.md §3.6),
   reading `framesProduced - framesTaken` and `inflight`.
 - **Destroy**: closes every frame of that decoder, taken or not, so a
@@ -344,11 +403,18 @@ reset are closed by the reset itself.
 
 ### 4.7 Capability probe and fallback
 
-Whether a browser's WebGL accepts a `VideoFrame` source is probed once, at
-the first `webcodecs_create_decoder` (synchronous, at open time, when a
-`getError` round trip is affordable): construct a 2×2 `RGBA` `VideoFrame`
-from an `ArrayBuffer`, `texImage2D` it into a scratch texture, check
-`gl.getError()`, close both. The result is reported to the codec, which then
+Whether a browser's WebGL accepts a `VideoFrame` source is probed once:
+construct a 2×2 `RGBA` `VideoFrame` from an `ArrayBuffer`, `texImage2D` it
+into a scratch texture, check `gl.getError()`, delete and close both. The
+probe runs from `CWinSystemWasmGLESContext::InitWindowSystem`, on the render
+thread right after the context is made current
+(`webcodecs_probe_texture_upload`, synchronous). Run there it is ordered
+inside the render thread's own GL stream while that stream is still empty,
+so it needs no `getParameter` to save and restore the texture binding. Run
+from the codec's `Open` on the VideoPlayer thread instead, it would land at
+an arbitrary point between two of the render thread's queued GL calls, the
+same interleaving the upload avoids by being enqueued by the render thread
+itself. The JS side caches the answer; the codec asks for it at `Open` and
 chooses between `CVideoBufferWebCodecs` and the sysmem copy path. The copy
 path stays in the tree for that fallback until the TV and the desktop
 browsers have validated the new one; removing it afterwards is a separate
@@ -434,8 +500,25 @@ same `texImage2D`. That removes AVSYNC.md §6 items 1 (the swscale pass) and
 3 (10-bit rejected) at once. Colour metadata becomes authoritative instead of
 inferred: `frame.colorSpace` carries matrix, primaries, transfer and range as
 the decoder saw them, and the picture's fields are filled from it for the
-info dialogs. HDR frames are tone-mapped by the browser to the sRGB canvas;
-how that looks on the TV is one of the things to verify (§7.3).
+info dialogs. `VideoColorSpace` uses the WebCodecs names; each field may be
+`null`, in which case the stream hint is used as today:
+
+| `colorSpace.matrix` | `color_space` | `colorSpace.primaries` | `color_primaries` | `colorSpace.transfer` | `color_transfer` |
+|---|---|---|---|---|---|
+| `rgb` | `AVCOL_SPC_RGB` | `bt709` | `AVCOL_PRI_BT709` | `bt709` | `AVCOL_TRC_BT709` |
+| `bt709` | `AVCOL_SPC_BT709` | `bt470bg` | `AVCOL_PRI_BT470BG` | `smpte170m` | `AVCOL_TRC_SMPTE170M` |
+| `bt470bg` | `AVCOL_SPC_BT470BG` | `smpte170m` | `AVCOL_PRI_SMPTE170M` | `iec61966-2-1` | `AVCOL_TRC_IEC61966_2_1` |
+| `smpte170m` | `AVCOL_SPC_SMPTE170M` | `bt2020` | `AVCOL_PRI_BT2020` | `linear` | `AVCOL_TRC_LINEAR` |
+| `bt2020-ncl` | `AVCOL_SPC_BT2020_NCL` | `smpte432` | `AVCOL_PRI_SMPTE432` | `pq` | `AVCOL_TRC_SMPTE2084` |
+| | | | | `hlg` | `AVCOL_TRC_ARIB_STD_B67` |
+
+`fullRange` maps to `color_range`, and `colorBits` comes from the format
+name (`P10` → 10, `P12` → 12, else 8). For the TV's `RGBX` frames the
+matrix is `rgb`, which no Kodi consumer on this path interprets: the
+renderer does not convert, `GetColorimetry` falls back to its size rule for
+the log line, and `IsSameParams` compares primaries and transfer only. HDR
+frames are tone-mapped by the browser to the sRGB canvas; how that looks on
+the TV is one of the things to verify (§7.3).
 
 ### 5.6 Browser support
 
@@ -453,8 +536,9 @@ covers a negative answer.
   four and off Kodi's threads, and the profiler shows it directly as
   `texImage2D` self time on main (§7.2).
 - **Decoder pool size.** Unknown on Tizen. Closing at upload keeps open
-  frames at the in-flight cap plus one or two; if the decoder still stalls
-  with all outputs open, `WEBCODECS_MAX_INFLIGHT` is the knob.
+  frames at the in-flight cap plus the taken-but-not-uploaded ones, 16 at
+  most (§4.4); if the decoder still stalls with all outputs open,
+  `WEBCODECS_MAX_INFLIGHT` is the knob.
 - **HDR appearance** differs from Kodi's tone mapping and is not
   user-tunable. Acceptable for a first version; the video-plane design has
   the same property.
@@ -503,13 +587,15 @@ the code depends on it:
 
 1. **ABI and bridge**: new `WebCodecsSharedState` and `WebCodecsFrameInfo`,
    `webcodecs_upload_frame`, `webcodecs_release_frame`, the frame map and
-   ring in `webcodecs_bridge.js`, the capability probe. The copy functions
-   stay for the fallback.
+   ring in `webcodecs_bridge.js`, the capability probe and its call from
+   `InitWindowSystem`. The copy stays for the fallback, keyed by sequence
+   number.
 2. **Buffer and pool**: `CVideoBufferWebCodecs` in
    `DVDVideoCodecWebCodecs.h`, pool `Return` → release.
-3. **Renderer**: `HwDecRender/RendererWebCodecs.{h,cpp}`, the `Configure`
-   format-gate hook in `CLinuxRendererGLES`, CMake for `wasm`, registration
-   in `WinSystemWasmGLESContext::InitWindowSystem`.
+3. **Renderer**: `HwDecRender/RendererWebCodecs.{h,cpp}`, the
+   `RENDER_CUSTOM` condition on the `Configure` format gate in
+   `CLinuxRendererGLES`, CMake for `wasm`, registration in
+   `WinSystemWasmGLESContext::InitWindowSystem`.
 4. **Codec**: `GetPicture` on the ring, drop path, reset bookkeeping,
    colour metadata from the frame, process-info format string; the sysmem
    path selected only when the probe fails.
