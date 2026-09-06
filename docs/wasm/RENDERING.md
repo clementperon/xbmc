@@ -92,8 +92,8 @@ emulated back buffer to the canvas.
 │         the Kodi pthread (proxyContextToMainThread = ALWAYS)     │
 │         renders into Emscripten's offscreen framebuffer          │
 │   Proxied GL queue: executes the gl* calls the Kodi pthread      │
-│     enqueued; emscripten_webgl_commit_frame() blits the          │
-│     offscreen framebuffer to the canvas                          │
+│     enqueued; wasm_webgl_commit_frame() blits the offscreen      │
+│     framebuffer to the canvas                                    │
 │   requestAnimationFrame pump                                     │
 │     └─► Atomics.add(vsyncTick, 1) + Atomics.notify               │
 │   Input event listeners registered by Emscripten for the         │
@@ -109,7 +109,7 @@ emulated back buffer to the canvas.
 │   Kodi GUI / RenderSystemGLES issue gl* calls as usual           │
 │   PresentRenderImpl(rendered):                                   │
 │     1. emscripten_futex_wait(&vsyncTick, last, 100 ms)           │
-│     2. emscripten_webgl_commit_frame()   (synchronous)           │
+│     2. wasm_webgl_commit_frame()         (synchronous)           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -190,12 +190,17 @@ they become synchronous, which is one more reason those flags are off.
    dropped and the function returns, which is what happens while the
    tab is hidden: the browser stops `requestAnimationFrame`, Kodi keeps
    running at ~10 iterations/s and presents nothing.
-3. **`emscripten_webgl_commit_frame()`.** Synchronous: the main thread
-   executes every GL call still queued, then blits the offscreen
-   framebuffer to the canvas. The compositor presents the canvas like
-   any other; there is no hand-off object. The synchronous return is
+3. **`wasm_webgl_commit_frame()`** (`webgl_commit.js`). Synchronous: the
+   main thread executes every GL call still queued, then blits the
+   offscreen framebuffer to the canvas. The compositor presents the canvas
+   like any other; there is no hand-off object. The synchronous return is
    also the backpressure: the Kodi thread cannot get more than one frame
-   ahead of main.
+   ahead of main. Emscripten's own `emscripten_webgl_commit_frame()` does
+   the same blit but brackets it with `gl.getParameter` calls to save and
+   restore state, and each of those is a synchronous round trip to the GPU
+   process; on the Samsung TV they took a quarter of the main thread. Kodi
+   keeps the scissor test enabled and the default framebuffer bound at
+   present time, so the commit restores exactly that without asking.
 4. The first successful commit calls `Module.onKodiFirstFramePresented`
    on the main thread so the HTML shell can drop its loading overlay.
 
@@ -407,7 +412,7 @@ Set in `cmake/scripts/wasm/ArchSetup.cmake`:
 |---|---|
 | `-pthread`, `-sPTHREAD_POOL_SIZE=4` | Kodi is multi-threaded. The pool only pre-spawns Workers; threads created past it are started by the main thread on demand. |
 | `-sPROXY_TO_PTHREAD` | `main()` must not run on the browser main thread (1.4, 1.5, 4.3). |
-| `-sOFFSCREEN_FRAMEBUFFER=1` | Enables proxied WebGL contexts and the emulated back buffer that `emscripten_webgl_commit_frame()` blits (§2). |
+| `-sOFFSCREEN_FRAMEBUFFER=1` | Enables proxied WebGL contexts and the emulated back buffer that the commit blits (§2). |
 | `-sGL_SUPPORT_EXPLICIT_SWAP_CONTROL=1` | Allows `explicitSwapControl`; without it Emscripten only commits at main-loop iterations, which a modal loop never reaches. |
 | `-sMIN_WEBGL_VERSION=2`, `-sMAX_WEBGL_VERSION=2` | Kodi's GLES renderer targets GLES 3 on other platforms. |
 | `--pre-js xbmc/platform/wasm/kodi_pre.js` | Main-thread canvas focus, clipboard paste, worker log forwarding, HTTP-proxy shim. |
@@ -435,6 +440,7 @@ These flags are deliberately **not** set:
 | HTML shell | `tools/wasm/kodi.html` |
 | Main-thread glue: canvas focus, paste, worker log forwarding | `xbmc/platform/wasm/kodi_pre.js` |
 | Proxied context creation, `PresentRenderImpl`, display latency | `xbmc/windowing/wasm/WinSystemWasmGLESContext.cpp` |
+| Frame commit without GL state queries | `xbmc/windowing/wasm/webgl_commit.js` |
 | Vsync pump: tick count, tick time, refresh rate in shared memory | `xbmc/windowing/wasm/WasmVsync.cpp` |
 | Reference-clock video sync fed by the pump | `xbmc/windowing/wasm/VideoSyncWasm.cpp` |
 | Input events (keyboard / mouse / resize) | `xbmc/windowing/wasm/WinEventsWasm.cpp` |

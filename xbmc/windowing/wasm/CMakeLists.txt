@@ -10,7 +10,8 @@ set(HEADERS OSScreenSaverWasm.h
             WinEventsWasm.h
             WasmClipboard.h
             WasmKeyboard.h
-            WasmVsync.h)
+            WasmVsync.h
+            WebGLCommit.h)
 
 if(TARGET ${APP_NAME_LC}::OpenGLES)
   list(APPEND SOURCES WinSystemWasmGLESContext.cpp)
