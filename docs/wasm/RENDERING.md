@@ -509,11 +509,18 @@ Relevant Emscripten source, for reference:
 - **HiDPI.** Render at `cssSize * devicePixelRatio`; rescale mouse
   input by `devicePixelRatio` in `TranslateMousePosition`.
 
-- **Video.** See §9.
+- **Video.** See §9 and [ZERO_COPY.md](ZERO_COPY.md).
 
 ---
 
 ## 9. Video: current path and the video-plane design
+
+[ZERO_COPY.md](ZERO_COPY.md) describes the next step: importing the
+decoder's `VideoFrame`s straight into Kodi's WebGL textures on the main
+thread, which removes every CPU pass of §9.2 without a second canvas. The
+video plane of §9.3 stays the step after that, if a target turns out to be
+GPU-bound. The first bullet of §9.5 was written for the design of §4.9 and
+no longer holds with the proxied context.
 
 ### 9.1 Target constraints
 

@@ -346,7 +346,9 @@ Enable `LOGAVTIMING` in the component logging settings to see
 
 ## 6. Known limitations and planned improvements
 
-Ordered by expected impact on a two-core Tizen TV.
+Ordered by expected impact on a two-core Tizen TV. Items 1 and 3 are both
+removed by the zero-copy design in [ZERO_COPY.md](ZERO_COPY.md), which hands
+the decoder's frames to WebGL without a pass through the wasm heap.
 
 1. **Packed-RGB frames go through a software RGB→YUV pass.** The renderer
    only takes planar YUV, so a decoder that outputs RGBA costs a 1080p
