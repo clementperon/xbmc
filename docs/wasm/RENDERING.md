@@ -447,6 +447,7 @@ These flags are deliberately **not** set:
 | WASM `main()` + `WasmRunIteration` | `xbmc/platform/wasm/ApplicationWasm.cpp`, `xbmc/application/Application.cpp` |
 | Link flags | `cmake/scripts/wasm/ArchSetup.cmake` |
 | WebCodecs video decoder + JS bridge (§9) | `xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecWebCodecs.cpp`, `webcodecs_bridge.js`, `DVDVideoCodecWebCodecsBridge.h` |
+| Renderer drawing WebCodecs frames imported as textures (§9) | `xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererWebCodecs.cpp` |
 | Audio sink + AudioWorklet ring | `xbmc/cores/AudioEngine/Sinks/AESinkWasmAudioWorklet.cpp`, `xbmc/platform/wasm/WasmAudioWorkletManager.cpp` |
 
 Relevant Emscripten source, for reference:
