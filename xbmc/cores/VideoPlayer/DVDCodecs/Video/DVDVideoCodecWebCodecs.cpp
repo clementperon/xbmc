@@ -537,7 +537,6 @@ CDVDVideoCodecWebCodecs::CDVDVideoCodecWebCodecs(CProcessInfo& processInfo)
 CDVDVideoCodecWebCodecs::~CDVDVideoCodecWebCodecs()
 {
   Dispose();
-  sws_freeContext(m_swsContext);
 }
 
 std::unique_ptr<CDVDVideoCodec> CDVDVideoCodecWebCodecs::Create(CProcessInfo& processInfo)
@@ -629,6 +628,9 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
 void CDVDVideoCodecWebCodecs::Dispose()
 {
   ReleaseCopyBuffer();
+  sws_freeContext(m_swsContext);
+  m_swsContext = nullptr;
+  m_swsFormat = AV_PIX_FMT_NONE;
   if (m_decoderHandle != INVALID_DECODER_HANDLE)
   {
     webcodecs_destroy_decoder(m_decoderHandle);
@@ -879,21 +881,31 @@ CVideoBuffer* CDVDVideoCodecWebCodecs::ConvertToYuv420p(CVideoBuffer* rgbBuffer,
               av_get_pix_fmt_name(srcFormat));
   }
 
-  m_swsContext = sws_getCachedContext(m_swsContext, width, height, srcFormat, width, height,
-                                      AV_PIX_FMT_YUV420P, SWS_POINT, nullptr, nullptr, nullptr);
-  if (!m_swsContext)
+  // sws_getCachedContext() would rebuild the context every frame, because the
+  // range set by sws_setColorspaceDetails() differs from what it derives from
+  // the formats.
+  if (!m_swsContext || width != m_swsWidth || height != m_swsHeight || srcFormat != m_swsFormat)
   {
-    rgbBuffer->Release();
-    CLog::Log(LOGERROR, "CDVDVideoCodecWebCodecs::GetPicture - cannot create swscale context "
-                        "for {}x{} {}",
-              width, height, av_get_pix_fmt_name(srcFormat));
-    return nullptr;
-  }
+    sws_freeContext(m_swsContext);
+    m_swsContext = sws_getContext(width, height, srcFormat, width, height, AV_PIX_FMT_YUV420P,
+                                  SWS_POINT, nullptr, nullptr, nullptr);
+    if (!m_swsContext)
+    {
+      rgbBuffer->Release();
+      CLog::Log(LOGERROR,
+                "CDVDVideoCodecWebCodecs::GetPicture - cannot create swscale context for {}x{} {}",
+                width, height, av_get_pix_fmt_name(srcFormat));
+      return nullptr;
+    }
 
-  const int fullRange = m_hints.colorRange == AVCOL_RANGE_JPEG ? 1 : 0;
-  sws_setColorspaceDetails(m_swsContext, sws_getCoefficients(SWS_CS_DEFAULT), 1,
-                           sws_getCoefficients(SwsColorspace(m_hints.colorSpace)), fullRange, 0,
-                           1 << 16, 1 << 16);
+    const int fullRange = m_hints.colorRange == AVCOL_RANGE_JPEG ? 1 : 0;
+    sws_setColorspaceDetails(m_swsContext, sws_getCoefficients(SWS_CS_DEFAULT), 1,
+                             sws_getCoefficients(SwsColorspace(m_hints.colorSpace)), fullRange, 0,
+                             1 << 16, 1 << 16);
+    m_swsWidth = width;
+    m_swsHeight = height;
+    m_swsFormat = srcFormat;
+  }
 
   CVideoBuffer* yuvBuffer =
       AcquirePictureBuffer(*m_videoBufferPool, AV_PIX_FMT_YUV420P, layout.Size());
@@ -1053,14 +1065,10 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecWebCodecs::GetPicture(VideoPicture* pVide
 
   const AVPixelFormat pixelFormat = PixelFormatFromWebCodecs(SharedLoad(m_shared.nextPixelFormat));
   const int payloadSize = SharedLoad(m_shared.nextPayloadSize);
+  // The bridge stores the fields one at a time and bumps the signal last, so a
+  // publish caught half-way shows a frame count without its metadata yet.
   if (pixelFormat == AV_PIX_FMT_NONE || payloadSize <= 0)
-  {
-    CLog::Log(LOGERROR,
-              "CDVDVideoCodecWebCodecs::GetPicture - invalid queued frame metadata "
-              "(pixelFormat={}, payloadSize={})",
-              SharedLoad(m_shared.nextPixelFormat), payloadSize);
-    return VC_ERROR;
-  }
+    return VC_BUFFER;
 
   // A copy an earlier call gave up on has to settle before another starts.
   ReleaseCopyBuffer();

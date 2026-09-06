@@ -65,6 +65,9 @@ private:
   // Landing zone for packed RGB frames before ConvertToYuv420p().
   std::shared_ptr<CVideoBufferPoolSysMem> m_rgbBufferPool;
   SwsContext* m_swsContext{nullptr};
+  int m_swsWidth{0};
+  int m_swsHeight{0};
+  AVPixelFormat m_swsFormat{AV_PIX_FMT_NONE};
   bool m_loggedRgbConversion{false};
   AVPixelFormat m_reportedPixelFormat{AV_PIX_FMT_NONE};
 
