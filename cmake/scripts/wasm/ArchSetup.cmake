@@ -32,7 +32,7 @@ set(USE_INTERNAL_LIBS ON)
 set(APP_BINARY_SUFFIX ".js")
 
 # Optional: emcc --profiling keeps readable function names and debug-friendly
-option(ENABLE_WASM_PROFILING "Enable Emscripten --profiling (CPU profiling in browser DevTools)" OFF)
+option(ENABLE_WASM_PROFILING "Keep wasm function names for CPU profiling in browser DevTools" OFF)
 
 # Threading + memory (COOP/COEP headers required in HTML for pthreads).
 # Rendering flags are documented in docs/wasm/RENDERING.md §5.
@@ -95,9 +95,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   endif()
 
   if(ENABLE_WASM_PROFILING)
-    add_compile_options(--profiling)
-    add_link_options(--profiling)
-    message(STATUS "WASM: Emscripten --profiling enabled (ENABLE_WASM_PROFILING=ON)")
+    add_link_options(--profiling-funcs)
+    message(STATUS "WASM: keeping wasm function names for profiling (ENABLE_WASM_PROFILING=ON)")
   endif()
 endif()
 
