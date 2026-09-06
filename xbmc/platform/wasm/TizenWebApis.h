@@ -73,6 +73,13 @@ class CTizenWebApis
 public:
   static TizenNetworkInfo GetNetworkInfo();
   static TizenDeviceInfo GetDeviceInfo();
+
+  /*!
+   * \brief Allow or suppress the TV screensaver while this application runs
+   * (webapis.appcommon.setScreenSaver).
+   * \return false when the runtime has no AppCommon API.
+   */
+  static bool SetScreenSaverEnabled(bool enabled);
 };
 
 } // namespace KODI::PLATFORM::WASM

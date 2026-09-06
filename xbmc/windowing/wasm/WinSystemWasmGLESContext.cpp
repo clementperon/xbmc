@@ -5,6 +5,7 @@
 
 #include "WinSystemWasmGLESContext.h"
 
+#include "OSScreenSaverWasm.h"
 #include "VideoSyncWasm.h"
 #include "WasmClipboard.h"
 #include "WasmVsync.h"
@@ -298,4 +299,9 @@ std::unique_ptr<CVideoSync> CWinSystemWasmGLESContext::GetVideoSync(CVideoRefere
 std::string CWinSystemWasmGLESContext::GetClipboardText()
 {
   return WASM_CLIPBOARD::ConsumePendingPasteText();
+}
+
+std::unique_ptr<KODI::WINDOWING::IOSScreenSaver> CWinSystemWasmGLESContext::GetOSScreenSaverImpl()
+{
+  return std::make_unique<COSScreenSaverWasm>();
 }
