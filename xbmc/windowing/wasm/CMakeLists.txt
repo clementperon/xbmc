@@ -1,10 +1,12 @@
-set(SOURCES VideoSyncWasm.cpp
+set(SOURCES OSScreenSaverWasm.cpp
+            VideoSyncWasm.cpp
             WinEventsWasm.cpp
             WasmClipboard.cpp
             WasmKeyboard.cpp
             WasmVsync.cpp)
 
-set(HEADERS VideoSyncWasm.h
+set(HEADERS OSScreenSaverWasm.h
+            VideoSyncWasm.h
             WinEventsWasm.h
             WasmClipboard.h
             WasmKeyboard.h

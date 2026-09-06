@@ -209,4 +209,24 @@ TizenDeviceInfo CTizenWebApis::GetDeviceInfo()
   return info;
 }
 
+bool CTizenWebApis::SetScreenSaverEnabled(bool enabled)
+{
+  // clang-format off
+  return MAIN_THREAD_EM_ASM_INT(({
+    try {
+      if (typeof webapis === 'undefined' || !webapis.appcommon)
+        return 0;
+      const states = webapis.appcommon.AppCommonScreenSaverState;
+      webapis.appcommon.setScreenSaver(
+          $0 ? states.SCREEN_SAVER_ON : states.SCREEN_SAVER_OFF, () => {},
+          (e) => console.warn('[kodi] webapis.appcommon.setScreenSaver:', e));
+      return 1;
+    } catch (e) {
+      console.warn('[kodi] webapis.appcommon.setScreenSaver failed:', e);
+      return 0;
+    }
+  }), enabled ? 1 : 0) != 0;
+  // clang-format on
+}
+
 } // namespace KODI::PLATFORM::WASM
