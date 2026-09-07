@@ -194,9 +194,9 @@ output format mid-stream.
 
 The synchronous GL calls left in the base class happen once per `Configure`
 or `Flush`, not per frame: `glFinish`, `glGenTextures` and
-`glDeleteTextures`. The base class used to ask `glIsTexture` before it
-touched any texture, which made `SetTextureFilter` alone 36 round trips per
-seek with four buffers; it tests the id it owns instead.
+`glDeleteTextures`. It tests the texture ids it owns rather than asking
+`glIsTexture`, which would add one round trip per field, plane and buffer
+to every seek.
 
 ### 3.4 Codec (`CDVDVideoCodecWebCodecs`)
 

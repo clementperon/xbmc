@@ -247,7 +247,8 @@ mergeInto(LibraryManager.library, {
         colorPrimaries: lookup(this.colorPrimaries, colorSpace.primaries, this.colorPrimariesUnspecified),
         colorTransfer: lookup(this.colorTransfer, colorSpace.transfer, this.colorTransferUnspecified),
         fullRange: colorSpace.fullRange === true ? 1 : colorSpace.fullRange === false ? 0 : -1,
-        layout: this.copyLayout(format, width, height),
+        // Only the copy path reads the layout; the texture path is spared the allocation.
+        layout: this.textureUpload === 1 ? null : this.copyLayout(format, width, height),
         ptsSeconds: timestampMicros / this.MICROSECONDS_PER_SECOND,
         durationSeconds: durationMicros / this.MICROSECONDS_PER_SECOND,
       };
