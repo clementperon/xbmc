@@ -212,15 +212,9 @@ TizenDeviceInfo CTizenWebApis::GetDeviceInfo()
   return info;
 }
 
-// Runs on the browser main thread from the setScreenSaver callbacks.
-extern "C" EMSCRIPTEN_KEEPALIVE void kodi_wasm_tizen_screensaver_result(int enabled,
-                                                                        int ok,
-                                                                        const char* error)
+// Runs on the browser main thread from the screensaver bridge's JS callbacks.
+extern "C" EMSCRIPTEN_KEEPALIVE void kodi_wasm_screensaver_report(const char* message, int ok)
 {
-  const char* state = enabled ? "on" : "off";
-  std::string message =
-      ok ? StringUtils::Format("TV confirmed screensaver {}", state)
-         : StringUtils::Format("TV refused screensaver {}: {}", state, error ? error : "");
   CLog::Log(ok ? LOGINFO : LOGWARNING, "Tizen screensaver: {}", message);
   // The TV has no console to read this from; with debug logging on, show it.
   if (CServiceBroker::GetLogging().IsLogLevelLogged(LOGDEBUG))
@@ -237,13 +231,37 @@ bool CTizenWebApis::SetScreenSaverEnabled(bool enabled)
       if (typeof webapis === 'undefined' || !webapis.appcommon)
         return 0;
       const kodi = (Module.kodi = Module.kodi || {});
+      const report = (ok, message) =>
+          Module.ccall('kodi_wasm_screensaver_report', null, ['string', 'number'], [message, ok ? 1 : 0]);
+      const describe = (e) => e ? String(e.name || "") + " " + String(e.message || e.code || "") : "";
+      // The OLED panel protection ignores setScreenSaver and only stands down
+      // while a media element plays, so a silent clip loops for as long as the
+      // screensaver is off.
+      const keepAlive = (on) => {
+        let v = document.getElementById('kodiKeepAliveVideo');
+        if (!on) {
+          if (v) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
+          return;
+        }
+        if (!v) {
+          v = document.createElement('video');
+          v.id = 'kodiKeepAliveVideo';
+          v.muted = true; v.loop = true; v.playsInline = true; v.setAttribute('playsinline', "");
+          v.style.cssText = 'position:fixed;left:0;bottom:0;width:8px;height:8px;opacity:0.05;z-index:0;pointer-events:none';
+          v.src = 'keepalive.mp4';
+          v.addEventListener('error', () => report(false, 'keep-alive clip failed: ' +
+              (v.error ? v.error.code + " " + v.error.message : 'unknown')), { once: true });
+          document.body.insertBefore(v, document.body.firstChild);
+        }
+        const p = v.play();
+        if (p && p.catch) p.catch((e) => report(false, 'keep-alive clip did not start: ' + describe(e)));
+      };
       const apply = (on) => {
         const states = webapis.appcommon.AppCommonScreenSaverState;
-        const report = (ok, e) => Module.ccall('kodi_wasm_tizen_screensaver_result', null,
-            ['number', 'number', 'string'],
-            [on ? 1 : 0, ok ? 1 : 0, e ? String(e.name || "") + " " + String(e.message || e.code || "") : ""]);
         webapis.appcommon.setScreenSaver(on ? states.SCREEN_SAVER_ON : states.SCREEN_SAVER_OFF,
-                                         () => report(true), (e) => report(false, e));
+            () => report(true, 'TV confirmed screensaver ' + (on ? 'on' : 'off')),
+            (e) => report(false, 'TV refused screensaver ' + (on ? 'on' : 'off') + ': ' + describe(e)));
+        keepAlive(!on);
       };
       kodi.screenSaverOn = !!$0;
       if (!kodi.screenSaverHook) {

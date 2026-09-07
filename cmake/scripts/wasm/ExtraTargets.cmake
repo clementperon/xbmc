@@ -66,6 +66,9 @@ add_custom_target(package_tizen
           "${CMAKE_SOURCE_DIR}/media/splash.jpg"
           "${WASM_TIZEN_STAGE_DIR}/splash.jpg"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/tools/wasm/keepalive.mp4"
+          "${WASM_TIZEN_STAGE_DIR}/keepalive.mp4"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.js"
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.wasm"
           "${CMAKE_BINARY_DIR}/${APP_NAME_LC}.data"

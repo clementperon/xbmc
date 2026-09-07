@@ -29,6 +29,7 @@ trust_anchor: []
 files:
   - index.html
   - splash.jpg
+  - keepalive.mp4
   - kodi.js
   - kodi.wasm
   - kodi.data
