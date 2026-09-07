@@ -70,8 +70,9 @@ extern "C"
   enum
   {
     // Cap on decoder frames alive at once: pushed but not yet run by the main
-    // thread, queued for decode, or produced and not yet taken. Hardware
-    // decoders stall when too many output frames stay open.
+    // thread, queued for decode, or output and not yet closed, taken or not.
+    // Hardware decoders stall, or reuse the buffer of an open frame, when too
+    // many outputs stay open.
     WEBCODECS_MAX_INFLIGHT = 12,
     // Slots in WebCodecsSharedState::ring. The output callback drops a frame
     // rather than overwrite a slot the codec has not taken.
@@ -106,23 +107,25 @@ extern "C"
     double durationSeconds;
   };
 
-// Decoder state mirrored into wasm memory by the JS side with Atomics so the
-// codec can poll it without a main-thread round trip. `signal` is incremented
-// and Atomics.notify'd on every change, so callers can futex-wait on it.
-// framesTaken is the one field the codec writes: the sequence number
-// GetPicture will read next. Queued frames are framesProduced - framesTaken.
-struct WebCodecsSharedState
-{
-  int32_t signal;
-  int32_t framesProduced; // sequence number of the next output frame
-  int32_t framesTaken;
-  int32_t inflight; // decodeQueueSize + frame copies still in progress
-  int32_t failed;
-  int32_t pushesProcessed; // webcodecs_push_packet calls the main thread has run
-  int32_t copyDone; // copyId of the last finished webcodecs_copy_frame
-  int32_t copyResult; // WebCodecsCopyResult of that copy
-  struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];
-};
+  // Decoder state mirrored into wasm memory by the JS side with Atomics so the
+  // codec can poll it without a main-thread round trip. `signal` is incremented
+  // and Atomics.notify'd on every change, so callers can futex-wait on it.
+  // framesTaken is the one field the codec writes: the sequence number
+  // GetPicture will read next. Queued frames are framesProduced - framesTaken.
+  struct WebCodecsSharedState
+  {
+    int32_t signal;
+    int32_t framesProduced; // sequence number of the next output frame
+    int32_t framesTaken;
+    int32_t inflight; // decodeQueueSize + frame copies still in progress
+    int32_t failed;
+    int32_t pushesProcessed; // webcodecs_push_packet calls the main thread has run
+    int32_t copyDone; // copyId of the last finished webcodecs_copy_frame
+    int32_t copyResult; // WebCodecsCopyResult of that copy
+    int32_t openFrames; // output frames not yet closed, taken by the codec or not
+    int32_t reserved; // keeps the ring 8-byte aligned
+    struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];
+  };
 
 #ifdef __cplusplus
 } // extern "C"
@@ -149,7 +152,7 @@ static_assert(offsetof(WebCodecsFrameInfo, vOffset) == 60, "vOffset offset");
 static_assert(offsetof(WebCodecsFrameInfo, ptsSeconds) == 64, "ptsSeconds offset");
 static_assert(offsetof(WebCodecsFrameInfo, durationSeconds) == 72, "durationSeconds offset");
 
-static_assert(sizeof(WebCodecsSharedState) == 32 + WEBCODECS_FRAME_RING * 80,
+static_assert(sizeof(WebCodecsSharedState) == 40 + WEBCODECS_FRAME_RING * 80,
               "WebCodecsSharedState size");
 static_assert(offsetof(WebCodecsSharedState, signal) == 0, "signal offset");
 static_assert(offsetof(WebCodecsSharedState, framesProduced) == 4, "framesProduced offset");
@@ -159,7 +162,8 @@ static_assert(offsetof(WebCodecsSharedState, failed) == 16, "failed offset");
 static_assert(offsetof(WebCodecsSharedState, pushesProcessed) == 20, "pushesProcessed offset");
 static_assert(offsetof(WebCodecsSharedState, copyDone) == 24, "copyDone offset");
 static_assert(offsetof(WebCodecsSharedState, copyResult) == 28, "copyResult offset");
-static_assert(offsetof(WebCodecsSharedState, ring) == 32, "ring offset");
+static_assert(offsetof(WebCodecsSharedState, openFrames) == 32, "openFrames offset");
+static_assert(offsetof(WebCodecsSharedState, ring) == 40, "ring offset");
 
 extern "C"
 {

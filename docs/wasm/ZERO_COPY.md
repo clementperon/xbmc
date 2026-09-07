@@ -255,6 +255,8 @@ struct WebCodecsSharedState
   int32_t failed;
   int32_t pushesProcessed;
   int32_t copyDone, copyResult;      // sysmem fallback only
+  int32_t openFrames;                // JS → C++: frames not yet closed, taken or not
+  int32_t reserved;                  // keeps the ring 8-byte aligned
   struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];   // slot = seq % WEBCODECS_FRAME_RING
 };
 ```
@@ -359,9 +361,13 @@ is due. Kodi never re-uploads a buffer: `loaded` stays set until
 `ReleaseBuffer`, and `DeleteTexture` releases the buffer along with the
 texture, so a closed frame is never needed again. Open frames are therefore
 bounded by pushed-but-not-run + decoding + queued (the existing
-`WEBCODECS_MAX_INFLIGHT = 12` rule, unchanged) plus the one or two taken in
-the last display period, the same bound the copy path had. The render queue
-depth adds neither open frames nor a second copy of each frame.
+`WEBCODECS_MAX_INFLIGHT = 12` rule), and the taken-but-not-yet-imported
+frames count against that cap too: the JS side publishes `openFrames`, the
+size of its frame map, and the codec is busy when pending pushes, the
+decoder's queue and the open frames reach the cap. Decoder buffers in use are
+therefore bounded by 12 exactly as on the copy path, whatever the render
+queue does. The render queue depth adds neither open frames nor a second
+copy of each frame.
 
 Frames that never reach an upload, because the player dropped the picture,
 a seek flushed the queue or the stream ended, are closed by `release` from

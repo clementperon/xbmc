@@ -82,7 +82,8 @@ mergeInto(LibraryManager.library, {
     SS_PUSHES_PROCESSED: 5,
     SS_COPY_DONE: 6,
     SS_COPY_RESULT: 7,
-    SS_RING_OFFSET: 32,
+    SS_OPEN_FRAMES: 8,
+    SS_RING_OFFSET: 40,
 
     // Result of webcodecs_probe_texture_upload, null until it has run.
     textureUpload: null,
@@ -167,6 +168,7 @@ mergeInto(LibraryManager.library, {
       Atomics.store(HEAP32, base + this.SS_PUSHES_PROCESSED, state.pushesProcessed);
       Atomics.store(HEAP32, base + this.SS_COPY_DONE, state.copyDone);
       Atomics.store(HEAP32, base + this.SS_COPY_RESULT, state.copyResult);
+      Atomics.store(HEAP32, base + this.SS_OPEN_FRAMES, state.frames.size);
       Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
@@ -630,9 +632,9 @@ mergeInto(LibraryManager.library, {
       }
       state.failed = true;
       state.errorMessage = 'texture upload failed: ' + String(e);
-      B.publishState(state);
     } finally {
       entry.frame.close();
+      B.publishState(state);
     }
   },
 
@@ -647,6 +649,7 @@ mergeInto(LibraryManager.library, {
     if (!entry) return;
     state.frames.delete(sequence);
     entry.frame.close();
+    WebCodecsBridge.publishState(state);
   },
 
   // ---------------------------------------------------------------------------
