@@ -20,7 +20,9 @@
 #include "utils/MemUtils.h"
 #include "utils/log.h"
 
+#include <array>
 #include <memory>
+#include <vector>
 
 namespace
 {
@@ -170,6 +172,107 @@ constexpr auto SwizzleMapGLES = make_map<KD_TEX_SWIZ, TextureSwizzle>(
   {KD_TEX_SWIZ_GGGG, {GL_GREEN, GL_GREEN, GL_GREEN, GL_GREEN}},
 });
 // clang-format on
+
+#if defined(TARGET_WASM)
+// Byte offset of R, G, B and A inside a source pixel, or -1 when the format has
+// no such channel and the sampler substitutes a constant instead.
+struct ChannelLayout
+{
+  uint32_t bytesPerPixel{0};
+  std::array<int, 4> offset{-1, -1, -1, -1};
+};
+
+bool GetChannelLayout(KD_TEX_FMT textureFormat, ChannelLayout& layout)
+{
+  switch (textureFormat)
+  {
+    case KD_TEX_FMT_SDR_R8:
+      layout = {1, {0, -1, -1, -1}};
+      return true;
+    case KD_TEX_FMT_SDR_RG8:
+      layout = {2, {0, 1, -1, -1}};
+      return true;
+    case KD_TEX_FMT_SDR_RGB8:
+      layout = {3, {0, 1, 2, -1}};
+      return true;
+    case KD_TEX_FMT_SDR_RGBA8:
+      layout = {4, {0, 1, 2, 3}};
+      return true;
+    case KD_TEX_FMT_SDR_BGRA8:
+      layout = {4, {2, 1, 0, 3}};
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Applies the swizzle and the BGRA channel order up front, so the upload needs no
+// GL_TEXTURE_SWIZZLE_* state. Returns false for the compressed, packed and HDR
+// formats, which cannot be expanded this way.
+bool SwizzleToRGBA8(const uint8_t* src,
+                    uint32_t width,
+                    uint32_t height,
+                    uint32_t pitch,
+                    KD_TEX_FMT textureFormat,
+                    KD_TEX_SWIZ textureSwizzle,
+                    std::vector<uint8_t>& out)
+{
+  ChannelLayout layout;
+  if (!src || width == 0 || height == 0 || !GetChannelLayout(textureFormat, layout))
+    return false;
+
+  TextureSwizzle swiz;
+  if (const auto it = SwizzleMapGLES.find(textureSwizzle); it != SwizzleMapGLES.cend())
+    swiz = it->second;
+
+  // A channel the format does not carry resolves to the constant a sampler would
+  // have returned for it.
+  const std::array<GLint, 4> components{swiz.r, swiz.g, swiz.b, swiz.a};
+  std::array<int, 4> offset{};
+  std::array<uint8_t, 4> constant{};
+  for (size_t i = 0; i < components.size(); ++i)
+  {
+    int channel = -1;
+    switch (components[i])
+    {
+      case GL_RED:
+        channel = 0;
+        break;
+      case GL_GREEN:
+        channel = 1;
+        break;
+      case GL_BLUE:
+        channel = 2;
+        break;
+      case GL_ALPHA:
+        channel = 3;
+        break;
+      default:
+        break;
+    }
+
+    offset[i] = channel >= 0 ? layout.offset[channel] : -1;
+    constant[i] = (components[i] == GL_ONE || components[i] == GL_ALPHA) ? 255 : 0;
+  }
+
+  out.resize(static_cast<size_t>(width) * height * 4);
+  for (uint32_t y = 0; y < height; ++y)
+  {
+    const uint8_t* srcPixel = src + static_cast<size_t>(y) * pitch;
+    uint8_t* dstPixel = out.data() + static_cast<size_t>(y) * width * 4;
+    for (uint32_t x = 0; x < width; ++x)
+    {
+      for (size_t i = 0; i < offset.size(); ++i)
+        dstPixel[i] = offset[i] >= 0 ? srcPixel[offset[i]] : constant[i];
+
+      srcPixel += layout.bytesPerPixel;
+      dstPixel += 4;
+    }
+  }
+
+  return true;
+}
+#endif
 } // namespace
 
 std::unique_ptr<CTexture> CTexture::CreateTexture(unsigned int width,
@@ -250,6 +353,13 @@ void CGLESTexture::LoadToGPU()
   }
 #endif
 
+#if defined(TARGET_WASM)
+  // The CPU swizzle below reads full source rows, so remember the geometry the
+  // pixels were allocated with before the size clamp truncates it.
+  const unsigned int sourceWidth = m_textureWidth;
+  const unsigned int sourcePitch = GetPitch();
+#endif
+
   unsigned int maxSize = CServiceBroker::GetRenderSystem()->GetMaxTextureSize();
 
   if (m_textureHeight > maxSize)
@@ -288,6 +398,10 @@ void CGLESTexture::LoadToGPU()
     glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
 
   TextureFormat glesFormat;
+  const uint8_t* uploadPixels = m_pixels;
+#if defined(TARGET_WASM)
+  std::vector<uint8_t> swizzledPixels;
+#endif
   if (m_isGLESVersion30orNewer)
   {
     KD_TEX_FMT textureFormat = m_textureFormat;
@@ -298,6 +412,23 @@ void CGLESTexture::LoadToGPU()
       textureFormat = KD_TEX_FMT_SDR_RGBA8;
       swapRB = true;
     }
+#if defined(TARGET_WASM)
+    if (swapRB || m_textureSwizzle != KD_TEX_SWIZ_RGBA)
+    {
+      if (SwizzleToRGBA8(m_pixels, sourceWidth, m_textureHeight, sourcePitch, m_textureFormat,
+                         m_textureSwizzle, swizzledPixels))
+      {
+        uploadPixels = swizzledPixels.data();
+        textureFormat = KD_TEX_FMT_SDR_RGBA8;
+        swapRB = false;
+      }
+      else
+      {
+        CLog::LogF(LOGERROR, "Format {} cannot carry swizzle {} on WebGL 2.0", m_textureFormat,
+                   m_textureSwizzle);
+      }
+    }
+#endif
     SetSwizzle(swapRB);
     glesFormat = GetFormatGLES30(textureFormat);
   }
@@ -317,7 +448,7 @@ void CGLESTexture::LoadToGPU()
   if (formatType == KD_TEX_FMT_SDR || formatType == KD_TEX_FMT_HDR)
   {
     glTexImage2D(GL_TEXTURE_2D, 0, glesFormat.internalFormat, m_textureWidth, m_textureHeight, 0,
-                 glesFormat.format, glesFormat.type, m_pixels);
+                 glesFormat.format, glesFormat.type, uploadPixels);
   }
   else
   {
@@ -374,7 +505,10 @@ bool CGLESTexture::SupportsFormat(KD_TEX_FMT textureFormat, KD_TEX_SWIZ textureS
 
 void CGLESTexture::SetSwizzle(bool swapRB)
 {
-#if defined(GL_ES_VERSION_3_0)
+#if defined(GL_ES_VERSION_3_0) && !defined(TARGET_WASM)
+  // WebGL 2.0 removes GL_TEXTURE_SWIZZLE_R/G/B/A, so any call with these pnames
+  // raises INVALID_ENUM there. LoadToGPU bakes the swizzle into the pixels for
+  // that target instead.
   TextureSwizzle swiz;
 
   const auto it = SwizzleMapGLES.find(m_textureSwizzle);

@@ -30,6 +30,7 @@
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
 
+#include <algorithm>
 #include <mutex>
 
 using namespace Shaders;
@@ -177,8 +178,9 @@ bool CLinuxRendererGLES::Configure(const VideoPicture &picture, float fps, unsig
             picture.color_range == 1 ? "full" : "limited");
   m_format = picture.videoBuffer->GetFormat();
 
-  // CPU-upload renderer: HWACCEL pix_fmts (e.g. AV_PIX_FMT_DRM_PRIME) have no host planes.
-  if (GetShaderFormat() == SHADER_NONE)
+  // HWACCEL pix_fmts (e.g. AV_PIX_FMT_DRM_PRIME) have no host planes to upload;
+  // a RENDER_CUSTOM subclass brings its own upload path.
+  if (m_renderMethod != RENDER_CUSTOM && GetShaderFormat() == SHADER_NONE)
   {
     CLog::Log(LOGDEBUG, "LinuxRendererGLES::Configure: refusing unsupported pix_fmt {}",
               m_format == AV_PIX_FMT_NONE ? "none" : av_get_pix_fmt_name(m_format));
@@ -389,7 +391,22 @@ void CLinuxRendererGLES::LoadPlane(CYuvPlane& plane, int type,
     }
   }
   GLenum datatype = (bpp == 2) ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+#if defined(TARGET_WASM)
+  // Emscripten proxies GL calls to the browser main thread and turns uploads of
+  // 256 KB or more into synchronous round trips, while smaller ones are copied
+  // and queued. Uploading in bands below that size keeps the render thread from
+  // waiting on the main thread once per plane.
+  const size_t rowBytes =
+      pixelStoreChanged ? static_cast<size_t>(stride) : static_cast<size_t>(width) * bps;
+  const unsigned int bandRows = std::max(1u, (256u * 1024u - 1u) / (width * bps));
+  for (unsigned int row = 0; row < height; row += bandRows)
+  {
+    glTexSubImage2D(m_textureTarget, 0, 0, row, width, std::min(bandRows, height - row), type,
+                    datatype, static_cast<const unsigned char*>(pixelData) + row * rowBytes);
+  }
+#else
   glTexSubImage2D(m_textureTarget, 0, 0, 0, width, height, type, datatype, pixelData);
+#endif
 
   if (m_pixelStoreKey > 0 && pixelStoreChanged)
     glPixelStorei(m_pixelStoreKey, 0);
@@ -478,10 +495,7 @@ void CLinuxRendererGLES::ClearBackBufferQuad()
   glUniform4f(uniCol, 0.0f, 0.0f, 0.0f, 1.0f);
   glUniform1f(depthLoc, -1);
 
-  GLuint vertexVBO;
-  glGenBuffers(1, &vertexVBO);
-  glBindBuffer(GL_ARRAY_BUFFER, vertexVBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(Svertex) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+  m_clearQuadVBO.SetData(vertices.data(), vertices.size(), GL_STREAM_DRAW);
 
   glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, sizeof(Svertex), 0);
   glEnableVertexAttribArray(posLoc);
@@ -490,7 +504,6 @@ void CLinuxRendererGLES::ClearBackBufferQuad()
 
   glDisableVertexAttribArray(posLoc);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glDeleteBuffers(1, &vertexVBO);
 
   m_renderSystem->DisableGUIShader();
 }
@@ -542,10 +555,7 @@ void CLinuxRendererGLES::DrawBlackBars()
   glUniform4f(uniCol, 0.0f, 0.0f, 0.0f, 1.0f);
   glUniform1f(depthLoc, -1);
 
-  GLuint vertexVBO;
-  glGenBuffers(1, &vertexVBO);
-  glBindBuffer(GL_ARRAY_BUFFER, vertexVBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(Svertex) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+  m_blackBarsVBO.SetData(vertices.data(), vertices.size(), GL_STREAM_DRAW);
 
   glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, sizeof(Svertex), 0);
   glEnableVertexAttribArray(posLoc);
@@ -554,7 +564,6 @@ void CLinuxRendererGLES::DrawBlackBars()
 
   glDisableVertexAttribArray(posLoc);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glDeleteBuffers(1, &vertexVBO);
 
   renderSystem->DisableGUIShader();
 }
@@ -1644,11 +1653,7 @@ void CLinuxRendererGLES::DeletePlanarYUVTexture(int index)
     {
       if (m_buffers[index].fields[f][p].id)
       {
-        if (glIsTexture(m_buffers[index].fields[f][p].id))
-        {
-          glDeleteTextures(1, &m_buffers[index].fields[f][p].id);
-        }
-
+        glDeleteTextures(1, &m_buffers[index].fields[f][p].id);
         m_buffers[index].fields[f][p].id = 0;
       }
     }
@@ -1698,7 +1703,7 @@ bool CLinuxRendererGLES::CreatePlanarYUVTexture(int index)
   {
     for(p = 0; p < YuvImage::MAX_PLANES; p++)
     {
-      if (!glIsTexture(m_buffers[index].fields[f][p].id))
+      if (!m_buffers[index].fields[f][p].id)
       {
         glGenTextures(1, &m_buffers[index].fields[f][p].id);
         VerifyGLState();
@@ -1872,7 +1877,7 @@ bool CLinuxRendererGLES::CreateNV12Texture(int index)
   {
     for(int p = 0; p < 2; p++)
     {
-      if (!glIsTexture(buf.fields[f][p].id))
+      if (!buf.fields[f][p].id)
       {
         glGenTextures(1, &buf.fields[f][p].id);
         VerifyGLState();
@@ -1949,11 +1954,7 @@ void CLinuxRendererGLES::DeleteNV12Texture(int index)
     {
       if (buf.fields[f][p].id)
       {
-        if (glIsTexture(buf.fields[f][p].id))
-        {
-          glDeleteTextures(1, &buf.fields[f][p].id);
-        }
-
+        glDeleteTextures(1, &buf.fields[f][p].id);
         buf.fields[f][p].id = 0;
       }
     }
@@ -2003,10 +2004,7 @@ void CLinuxRendererGLES::DeletePackedYUVTexture(int index)
   {
     if (buf.fields[f][0].id)
     {
-      if (glIsTexture(buf.fields[f][0].id))
-      {
-        glDeleteTextures(1, &buf.fields[f][0].id);
-      }
+      glDeleteTextures(1, &buf.fields[f][0].id);
       buf.fields[f][0].id = 0;
     }
     buf.fields[f][1].id = 0;
@@ -2052,7 +2050,7 @@ bool CLinuxRendererGLES::CreatePackedYUVTexture(int index)
 
   for (int f = 0; f < MAX_FIELDS; f++)
   {
-    if (!glIsTexture(buf.fields[f][0].id))
+    if (!buf.fields[f][0].id)
     {
       glGenTextures(1, &buf.fields[f][0].id);
       VerifyGLState();
@@ -2112,7 +2110,7 @@ void CLinuxRendererGLES::SetTextureFilter(GLenum method)
     {
       for (int p = 0; p < 3; p++)
       {
-        if(glIsTexture(buf.fields[f][p].id))
+        if (buf.fields[f][p].id)
         {
           glBindTexture(m_textureTarget, buf.fields[f][p].id);
           glTexParameteri(m_textureTarget, GL_TEXTURE_MIN_FILTER, method);

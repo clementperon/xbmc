@@ -118,30 +118,43 @@ public:
     FT_Face face;
 
     // ok, now load the font face
-    CURL realFile(CSpecialProtocol::TranslatePath(filename));
+    const std::string translatedFilename = CSpecialProtocol::TranslatePath(filename);
+    CURL realFile(translatedFilename);
     if (realFile.GetFileName().empty())
       return nullptr;
 
     memoryBuf.clear();
-#ifndef TARGET_WINDOWS
-    if (!realFile.GetProtocol().empty())
-#endif // ! TARGET_WINDOWS
+    const bool loadIntoMemory =
+#if defined(TARGET_WINDOWS) || defined(TARGET_WASM)
+        true;
+#else
+        !realFile.GetProtocol().empty();
+#endif
+
+    if (loadIntoMemory)
     {
       // load file into memory if it is not on local drive
       // in case of win32: always load file into memory as filename is in UTF-8,
       //                   but freetype expect filename in ANSI encoding
       XFILE::CFile f;
-      if (f.LoadFile(realFile, memoryBuf) <= 0)
+      const ssize_t bytesRead = f.LoadFile(realFile, memoryBuf);
+      if (bytesRead <= 0)
         return nullptr;
 
-      if (FT_New_Memory_Face(m_library, reinterpret_cast<const FT_Byte*>(memoryBuf.data()),
-                             memoryBuf.size(), 0, &face) != 0)
+      const FT_Error faceErr =
+          FT_New_Memory_Face(m_library, reinterpret_cast<const FT_Byte*>(memoryBuf.data()),
+                             memoryBuf.size(), 0, &face);
+      if (faceErr != 0)
         return nullptr;
     }
-#ifndef TARGET_WINDOWS
-    else if (FT_New_Face(m_library, realFile.GetFileName().c_str(), 0, &face))
-      return nullptr;
-#endif // ! TARGET_WINDOWS
+#if !defined(TARGET_WINDOWS) && !defined(TARGET_WASM)
+    else
+    {
+      const FT_Error faceErr = FT_New_Face(m_library, realFile.GetFileName().c_str(), 0, &face);
+      if (faceErr != 0)
+        return nullptr;
+    }
+#endif // !defined(TARGET_WINDOWS) && !defined(TARGET_WASM)
 
     unsigned int ydpi = 72; // 72 points to the inch is the freetype default
     unsigned int xdpi =
@@ -151,7 +164,9 @@ public:
     // we cache our characters (for rendering speed) so it's probably
     // not a good idea to allow free scaling of fonts - rather, just
     // scaling to pixel ratio on screen perhaps?
-    if (FT_Set_Char_Size(face, 0, static_cast<int>(size * 64 + 0.5f), xdpi, ydpi))
+    const FT_Error sizeErr =
+        FT_Set_Char_Size(face, 0, static_cast<int>(size * 64 + 0.5f), xdpi, ydpi);
+    if (sizeErr != 0)
     {
       FT_Done_Face(face);
       return nullptr;
@@ -268,7 +283,7 @@ bool CGUIFontTTF::Load(
   if (!m_face)
     return false;
 
-  m_hbFont = hb_ft_font_create(m_face, 0);
+  m_hbFont = hb_ft_font_create_referenced(m_face);
   if (!m_hbFont)
     return false;
   /*

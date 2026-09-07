@@ -19,6 +19,7 @@
 #include "windowing/GraphicContext.h"
 #include "windowing/WinSystem.h"
 
+#include <array>
 #include <cstddef>
 
 void CGUITextureGLES::Register(CGUIQuadDrawerGLES& quadDrawer)
@@ -151,7 +152,7 @@ void CGUITextureGLES::Begin(KODI::UTILS::COLOR::Color color)
                           GL_ONE_MINUS_SRC_ALPHA);
     else
       glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
-    glEnable( GL_BLEND );
+    glEnable(GL_BLEND);
   }
   else
   {

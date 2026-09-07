@@ -72,6 +72,7 @@ protected:
   void OnDeinitWindow(int nextWindowID) override;
 
   void ProcessRenderLoop(bool renderOnly = false);
+  void PumpPlatformEvents();
 
   bool m_wasRunning; ///< \brief true if we were running during the last DoProcess()
   bool m_autoClosing;

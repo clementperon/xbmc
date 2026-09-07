@@ -663,6 +663,11 @@ bool CInputManager::HandleKey(const CKey& key)
 #elif defined(TARGET_DARWIN_OSX)
           // In OSX paste is cmd-V
           if (key.GetVKey() == XBMCVK_V && key.GetModifiers() == CKey::MODIFIER_META)
+#elif defined(TARGET_WASM)
+          // Browser: clipboard text is supplied with the DOM "paste" event; map shortcuts so
+          // keymaps match desktop (see windowing/wasm/WasmClipboard.cpp).
+          if ((key.GetVKey() == XBMCVK_V && key.GetModifiers() == CKey::MODIFIER_CTRL) ||
+              (key.GetVKey() == XBMCVK_V && key.GetModifiers() == CKey::MODIFIER_META))
 #else
           // Placeholder for other operating systems
           if (false)
