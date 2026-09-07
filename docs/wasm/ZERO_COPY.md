@@ -256,7 +256,7 @@ struct WebCodecsSharedState
   int32_t pushesProcessed;
   int32_t copyDone, copyResult;      // sysmem fallback only
   int32_t openFrames;                // JS → C++: frames not yet closed, taken or not
-  int32_t reserved;                  // keeps the ring 8-byte aligned
+  int32_t decoding;                  // JS → C++: chunks accepted by decode() and not output yet
   struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];   // slot = seq % WEBCODECS_FRAME_RING
 };
 ```
@@ -359,15 +359,17 @@ first pass after the render manager queued it, within one display period of
 the take, and closed there; the texture keeps the pixels until the picture
 is due. Kodi never re-uploads a buffer: `loaded` stays set until
 `ReleaseBuffer`, and `DeleteTexture` releases the buffer along with the
-texture, so a closed frame is never needed again. Open frames are therefore
-bounded by pushed-but-not-run + decoding + queued (the existing
-`WEBCODECS_MAX_INFLIGHT = 12` rule), and the taken-but-not-yet-imported
-frames count against that cap too: the JS side publishes `openFrames`, the
-size of its frame map, and the codec is busy when pending pushes, the
-decoder's queue and the open frames reach the cap. Decoder buffers in use are
-therefore bounded by 12 exactly as on the copy path, whatever the render
-queue does. The render queue depth adds neither open frames nor a second
-copy of each frame.
+texture, so a closed frame is never needed again. The in-flight rule counts
+what occupies a decoder buffer: `decoding`, the chunks `decode()` accepted
+and has not output yet, and `openFrames`, the size of the JS frame map,
+taken or not. The codec is busy when pending pushes, `decoding` and
+`openFrames` reach `WEBCODECS_MAX_INFLIGHT = 16`, so at most 16 decoder
+buffers are in use, whatever the render queue does. `decodeQueueSize` cannot
+provide that bound: the TV decoder empties its queue into an internal
+pipeline of about ten chunks and then outputs them in one batch, so the
+queue reads zero while ten buffers are spoken for. The copy path ran on the
+TV with up to 19 open frames without harm, and a cap of 16 leaves the render
+queue its four pictures while the pipeline stays fed.
 
 Frames that never reach an upload, because the player dropped the picture,
 a seek flushed the queue or the stream ended, are closed by `release` from
@@ -560,9 +562,9 @@ covers a negative answer.
   `texImage2D` self time on main (§7.2).
 - **Decoder buffer reuse.** The Samsung decoder recycles output buffers
   under open `VideoFrame`s (§4.4). Importing at the first render pass after
-  the take keeps the open count at the copy path's level, which the TV
-  handled; if a newer frame ever flashes again, `WEBCODECS_MAX_INFLIGHT` is
-  the knob that shortens the queue in front of the take.
+  the take, and counting every open frame and every chunk in the decoder
+  against the cap, kept the picture clean on the TV; if a newer frame ever
+  flashes again, `WEBCODECS_MAX_INFLIGHT` is the knob.
 - **HDR appearance** differs from Kodi's tone mapping and is not
   user-tunable. Acceptable for a first version; the video-plane design has
   the same property.
@@ -663,9 +665,11 @@ Pass criteria, compared with the profiles taken before the change:
 1. Is `texImage2D(VideoFrame)` from the TV's `RGBX` frames a GPU copy?
    (`texImage2D` self time on main.)
 2. How many output frames does the Tizen hardware decoder allow open before
-   `decode()` stalls? (`inflight` growth with `WEBCODECS_MAX_INFLIGHT` open
-   frames.) Partly answered: it does not stall, it reuses the oldest buffer
-   (§4.4); the pool size itself is still unknown.
+   `decode()` stalls? Answered on the TV: it does not stall, it reuses the
+   oldest buffer (§4.4). It ran with 19 open frames on the copy path and
+   showed wrong frames with 16 open plus a pipeline of about ten chunks, so
+   the pool is somewhere between 19 and 26 buffers; the cap of 16 stays
+   under it.
 3. Does the TV populate `VideoFrame.colorSpace`, and what does an HDR
    sample look like after the browser's conversion?
 4. Does the frame's `visibleRect` match the coded size on this decoder
