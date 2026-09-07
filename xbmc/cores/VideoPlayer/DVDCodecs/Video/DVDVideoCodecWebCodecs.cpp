@@ -891,11 +891,13 @@ void CDVDVideoCodecWebCodecs::PublishFramesTaken(int32_t sequence)
 }
 
 // Pushes the main thread has not run yet are invisible to the shared counters
-// and have to be counted here.
+// and have to be counted here. openFrames covers the frames taken but not yet
+// imported as well as the queued ones: all of them hold a decoder buffer.
 bool CDVDVideoCodecWebCodecs::DecoderBusy() const
 {
   const int32_t pendingPushes = m_pushCount - SharedLoad(m_shared.pushesProcessed);
-  return pendingPushes + SharedLoad(m_shared.inflight) + QueuedFrames() >= WEBCODECS_MAX_INFLIGHT;
+  return pendingPushes + SharedLoad(m_shared.inflight) + SharedLoad(m_shared.openFrames) >=
+         WEBCODECS_MAX_INFLIGHT;
 }
 
 // Callers sample `seenSignal` before checking the shared state, so a change that
