@@ -162,6 +162,45 @@ bool CRendererWebCodecs::UploadTexture(int index)
   return true;
 }
 
+void CRendererWebCodecs::AddVideoPicture(const VideoPicture& picture, int index)
+{
+  CLinuxRendererGLES::AddVideoPicture(picture, index);
+  m_pendingUploads.fetch_or(1u << index, std::memory_order_release);
+}
+
+// The Samsung decoder reuses its oldest output buffer for a new frame while a
+// VideoFrame still refers to it, so a frame is imported as soon as it is
+// queued; the texture keeps the pixels until the picture is due.
+void CRendererWebCodecs::UploadPendingFrames()
+{
+  uint32_t pending = m_pendingUploads.exchange(0, std::memory_order_acquire);
+  for (int index = 0; pending != 0; ++index, pending >>= 1)
+  {
+    if (!(pending & 1u))
+      continue;
+
+    const CPictureBuffer& buf = m_buffers[index];
+    if (!buf.videoBuffer || buf.loaded)
+      continue;
+
+    // No texture yet: ValidateRenderTarget creates them on the first pass.
+    if (!buf.fields[FIELD_FULL][0].id)
+    {
+      m_pendingUploads.fetch_or(1u << index, std::memory_order_relaxed);
+      continue;
+    }
+
+    UploadTexture(index);
+  }
+}
+
+void CRendererWebCodecs::RenderUpdate(
+    int index, int index2, bool clear, unsigned int flags, unsigned int alpha)
+{
+  UploadPendingFrames();
+  CLinuxRendererGLES::RenderUpdate(index, index2, clear, flags, alpha);
+}
+
 bool CRendererWebCodecs::RenderHook(int index)
 {
   if (m_appliedScalingMethod != m_videoSettings.m_ScalingMethod)
