@@ -5,6 +5,8 @@
 
 #include "OSScreenSaverWasm.h"
 
+#include "utils/log.h"
+
 #include "platform/wasm/TizenWebApis.h"
 
 #include <emscripten.h>
@@ -66,12 +68,21 @@ void SetWakeLockWanted(bool wanted)
 
 void COSScreenSaverWasm::Inhibit()
 {
-  if (!CTizenWebApis::SetScreenSaverEnabled(false))
-    SetWakeLockWanted(true);
+  if (CTizenWebApis::SetScreenSaverEnabled(false))
+  {
+    CLog::Log(LOGINFO, "OS screensaver: asked the TV to turn its screensaver off");
+    return;
+  }
+  CLog::Log(LOGINFO, "OS screensaver: no Samsung AppCommon API, requesting a screen wake lock");
+  SetWakeLockWanted(true);
 }
 
 void COSScreenSaverWasm::Uninhibit()
 {
-  if (!CTizenWebApis::SetScreenSaverEnabled(true))
-    SetWakeLockWanted(false);
+  if (CTizenWebApis::SetScreenSaverEnabled(true))
+  {
+    CLog::Log(LOGINFO, "OS screensaver: asked the TV to turn its screensaver back on");
+    return;
+  }
+  SetWakeLockWanted(false);
 }
