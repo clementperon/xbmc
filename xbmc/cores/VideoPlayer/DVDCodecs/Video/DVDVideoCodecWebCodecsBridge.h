@@ -96,7 +96,7 @@ extern "C"
     int32_t colorPrimaries;
     int32_t colorTransfer;
     int32_t fullRange;
-    int32_t payloadSize; // tightly packed copy size, 0 when the format is not copyable
+    int32_t payloadSize; // tightly packed copy size; 0 on the texture path or if not copyable
     int32_t yStride;
     int32_t uStride;
     int32_t vStride;

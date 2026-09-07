@@ -172,8 +172,9 @@ texture or buffer is first created, and for large texture uploads. Video
 planes would be such uploads, so `CLinuxRendererGLES::LoadPlane` sends them
 in bands below 256 KB on this target (AVSYNC.md §4). For the same reason the
 black bars and the clearing quad that renderer draws around the video each
-frame come from buffer objects it keeps, refilled with an asynchronous
-`glBufferData`, rather than from a buffer generated and deleted per draw.
+frame come from buffer objects it keeps and refills with an asynchronous
+`glBufferData`; generating and deleting a buffer per draw would be two more
+round trips per frame.
 `VerifyGLState()` (a `glGetError` per draw) is compiled out unless
 `GL_DEBUGGING` is defined. Without `-sFULL_ES2`/`-sFULL_ES3`,
 `glDrawElements` and `glVertexAttribPointer` stay asynchronous; with them
