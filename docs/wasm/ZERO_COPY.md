@@ -214,7 +214,8 @@ back to the stream hints for the fields the browser leaves `null` so a
 decoder that reports metadata on some frames only does not make
 `CRenderManager::Configure` reconfigure on every change, and the
 process-info pixel format becomes the `VideoFrame.format` string (`RGBX`,
-`NV12`, `I420P10`, …). The ring carries that format as a
+`NV12`, `I420P10`, …), or `opaque` for a GPU frame whose format is `null`,
+as Chrome's 10-bit HEVC output is. The ring carries that format as a
 `WebCodecsPixelFormat` value whose enumerators are named exactly like the
 WebCodecs strings, so the JS side maps `frame.format` to it by name through
 the Embind table and the codec maps it back to the string, and to the
@@ -257,6 +258,8 @@ struct WebCodecsSharedState
   int32_t copyDone, copyResult;      // sysmem fallback only
   int32_t openFrames;                // JS → C++: frames not yet closed, taken or not
   int32_t decoding;                  // JS → C++: chunks accepted by decode() and not output yet
+  int32_t configured;                // JS → C++: configure() has run; Open() waits for it or failed
+  int32_t hardware;                  // JS → C++: 'prefer-hardware' was accepted
   struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];   // slot = seq % WEBCODECS_FRAME_RING
 };
 ```

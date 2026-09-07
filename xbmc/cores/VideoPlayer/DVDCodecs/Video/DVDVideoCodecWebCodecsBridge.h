@@ -28,7 +28,9 @@ extern "C"
 
   // VideoFrame.format values, named exactly like the WebCodecs strings so the JS
   // side maps a frame by name through the Embind table. Must stay in sync with
-  // the table in DVDVideoCodecWebCodecs.cpp.
+  // the table in DVDVideoCodecWebCodecs.cpp. OPAQUE is a frame whose format is
+  // null: GPU memory in a layout WebCodecs has no name for (P010, for one),
+  // which texImage2D still accepts but copyTo() cannot read.
   enum WebCodecsPixelFormat
   {
     WEBCODECS_PIXFMT_UNKNOWN = 0,
@@ -55,6 +57,7 @@ extern "C"
     WEBCODECS_PIXFMT_RGBX,
     WEBCODECS_PIXFMT_BGRA,
     WEBCODECS_PIXFMT_BGRX,
+    WEBCODECS_PIXFMT_OPAQUE,
   };
 
   // Outcome of a webcodecs_copy_frame request, published in
@@ -125,6 +128,8 @@ extern "C"
     int32_t copyResult; // WebCodecsCopyResult of that copy
     int32_t openFrames; // output frames not yet closed, taken by the codec or not
     int32_t decoding; // chunks decode() accepted and has not output yet, plus a copy in progress
+    int32_t configured; // 1 once configure() has run; until then failed says whether it ever will
+    int32_t hardware; // 1 when the browser accepted 'prefer-hardware', 0 when it chose the decoder
     struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];
   };
 
@@ -153,7 +158,7 @@ static_assert(offsetof(WebCodecsFrameInfo, vOffset) == 60, "vOffset offset");
 static_assert(offsetof(WebCodecsFrameInfo, ptsSeconds) == 64, "ptsSeconds offset");
 static_assert(offsetof(WebCodecsFrameInfo, durationSeconds) == 72, "durationSeconds offset");
 
-static_assert(sizeof(WebCodecsSharedState) == 40 + WEBCODECS_FRAME_RING * 80,
+static_assert(sizeof(WebCodecsSharedState) == 48 + WEBCODECS_FRAME_RING * 80,
               "WebCodecsSharedState size");
 static_assert(offsetof(WebCodecsSharedState, signal) == 0, "signal offset");
 static_assert(offsetof(WebCodecsSharedState, framesProduced) == 4, "framesProduced offset");
@@ -165,7 +170,9 @@ static_assert(offsetof(WebCodecsSharedState, copyDone) == 24, "copyDone offset")
 static_assert(offsetof(WebCodecsSharedState, copyResult) == 28, "copyResult offset");
 static_assert(offsetof(WebCodecsSharedState, openFrames) == 32, "openFrames offset");
 static_assert(offsetof(WebCodecsSharedState, decoding) == 36, "decoding offset");
-static_assert(offsetof(WebCodecsSharedState, ring) == 40, "ring offset");
+static_assert(offsetof(WebCodecsSharedState, configured) == 40, "configured offset");
+static_assert(offsetof(WebCodecsSharedState, hardware) == 44, "hardware offset");
+static_assert(offsetof(WebCodecsSharedState, ring) == 48, "ring offset");
 
 extern "C"
 {
@@ -182,6 +189,11 @@ extern "C"
   // the AVC or HEVC decoder configuration record when the stream has one, and
   // `annexB` selects the Annex B bitstream format for those two codecs. `shared`
   // must stay valid until webcodecs_destroy_decoder.
+  //
+  // The decoder is configured asynchronously: the bridge asks isConfigSupported()
+  // for hardware decoding first and settles for whatever the browser offers when
+  // that is refused. Callers wait on `shared` until either configured or failed
+  // is set before pushing packets.
   int webcodecs_create_decoder(const char* codec,
                                int codedWidth,
                                int codedHeight,

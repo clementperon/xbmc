@@ -69,6 +69,7 @@ constexpr WebCodecsPixelFormatInfo PIXEL_FORMATS[] = {
     {WEBCODECS_PIXFMT_RGBX, "RGBX", AV_PIX_FMT_RGB0, 8},
     {WEBCODECS_PIXFMT_BGRA, "BGRA", AV_PIX_FMT_BGRA, 8},
     {WEBCODECS_PIXFMT_BGRX, "BGRX", AV_PIX_FMT_BGR0, 8},
+    {WEBCODECS_PIXFMT_OPAQUE, "opaque", AV_PIX_FMT_NONE, 0},
 };
 
 const WebCodecsPixelFormatInfo* FindPixelFormat(int pixelFormat)
@@ -136,6 +137,7 @@ constexpr double FRAME_WAIT_MS = 20.0;
 constexpr auto DRAIN_TIMEOUT = std::chrono::milliseconds(1000);
 constexpr auto DRAIN_SETTLE_TIME = std::chrono::milliseconds(100);
 constexpr auto COPY_TIMEOUT = std::chrono::milliseconds(500);
+constexpr auto CONFIGURE_TIMEOUT = std::chrono::milliseconds(5000);
 constexpr int DROPPED_FRAMES_LOG_THRESHOLD = 8;
 constexpr int PICTURE_COLOR_BITS = 8;
 constexpr int YUV_STRIDE_ALIGNMENT = 32;
@@ -724,14 +726,50 @@ bool CDVDVideoCodecWebCodecs::CreateDecoder()
   if (m_decoderHandle == INVALID_DECODER_HANDLE)
   {
     CLog::Log(LOGDEBUG,
+              "CDVDVideoCodecWebCodecs::CreateDecoder - VideoDecoder unavailable for {}",
+              m_codecString);
+    return false;
+  }
+
+  if (!WaitForConfigured())
+  {
+    const std::string error = ReadDecoderError(m_decoderHandle);
+    CLog::Log(LOGINFO,
               "CDVDVideoCodecWebCodecs::CreateDecoder - unable to configure decoder for {} "
-              "(annexB={}, descriptionSize={}, {}x{}): check that VideoDecoder is available and "
-              "that the codec/description match the stream",
-              m_codecString, m_annexB, descriptionSize, m_hints.width, m_hints.height);
+              "(annexB={}, descriptionSize={}, {}x{}): {}",
+              m_codecString, m_annexB, descriptionSize, m_hints.width, m_hints.height,
+              error.empty() ? "<no js error>" : error);
+    webcodecs_destroy_decoder(m_decoderHandle);
+    m_decoderHandle = INVALID_DECODER_HANDLE;
     return false;
   }
 
   return true;
+}
+
+// The bridge configures the decoder once isConfigSupported() has answered;
+// true when it did, false when no configuration was accepted or the answer
+// never came.
+bool CDVDVideoCodecWebCodecs::WaitForConfigured()
+{
+  const auto deadline = std::chrono::steady_clock::now() + CONFIGURE_TIMEOUT;
+  while (true)
+  {
+    const auto seen = static_cast<uint32_t>(SharedLoad(m_shared.signal));
+    if (SharedLoad(m_shared.configured))
+      return true;
+    if (SharedLoad(m_shared.failed))
+      return false;
+    if (std::chrono::steady_clock::now() >= deadline)
+    {
+      CLog::Log(LOGWARNING,
+                "CDVDVideoCodecWebCodecs::WaitForConfigured - no answer from the browser within "
+                "{} ms",
+                CONFIGURE_TIMEOUT.count());
+      return false;
+    }
+    WaitForDecoderSignal(seen, FRAME_WAIT_MS);
+  }
 }
 
 void CDVDVideoCodecWebCodecs::Dispose()
@@ -768,6 +806,7 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
     return false;
 
   m_name = "webcodecs-" + m_codecString;
+  m_hardware = SharedLoad(m_shared.hardware) != 0;
   m_opened = true;
   m_waitingForKeyFrame = true;
   m_drained = false;
@@ -776,13 +815,14 @@ bool CDVDVideoCodecWebCodecs::Open(CDVDStreamInfo& hints, CDVDCodecOptions& opti
   m_highWaterMark = 0;
   m_reportedPixelFormat.clear();
   m_textureUpload = webcodecs_probe_texture_upload() != 0;
-  m_processInfo.SetVideoDecoderName(m_name, true);
+  m_processInfo.SetVideoDecoderName(m_name, m_hardware);
   m_processInfo.SetVideoDeintMethod("none");
   m_processInfo.SetVideoDimensions(hints.width, hints.height);
   CLog::Log(LOGINFO,
             "CDVDVideoCodecWebCodecs::Open - Using WebCodecs for video decoding: {} ({}x{}, "
-            "annexB={}, frames {})",
+            "annexB={}, {} decoder, frames {})",
             m_codecString, hints.width, hints.height, m_annexB,
+            m_hardware ? "hardware" : "browser-chosen",
             m_textureUpload ? "imported as textures" : "copied through the heap");
   return true;
 }
@@ -1129,8 +1169,11 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
           static_cast<AVColorTransferCharacteristic>(info.colorTransfer);
     if (info.fullRange >= 0)
       pVideoPicture->color_range = info.fullRange == 1;
-    if (const WebCodecsPixelFormatInfo* format = FindPixelFormat(info.pixelFormat))
+    const WebCodecsPixelFormatInfo* format = FindPixelFormat(info.pixelFormat);
+    if (format && format->bitDepth > 0)
       pVideoPicture->colorBits = format->bitDepth;
+    else if (m_hints.bitdepth > 0)
+      pVideoPicture->colorBits = m_hints.bitdepth;
   }
 
   pVideoPicture->m_originalColorPrimaries = pVideoPicture->color_primaries;
