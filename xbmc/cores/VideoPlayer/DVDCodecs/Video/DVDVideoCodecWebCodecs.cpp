@@ -1133,6 +1133,18 @@ void CDVDVideoCodecWebCodecs::FillPictureMetadata(VideoPicture* pVideoPicture,
 
   pVideoPicture->m_originalColorPrimaries = pVideoPicture->color_primaries;
   pVideoPicture->chroma_position = AVCHROMA_LOC_LEFT;
+
+  pVideoPicture->hdrType = m_hints.hdrType;
+  if (m_hints.masteringMetadata)
+  {
+    pVideoPicture->displayMetadata = *m_hints.masteringMetadata;
+    pVideoPicture->hasDisplayMetadata = true;
+  }
+  if (m_hints.contentLightMetadata)
+  {
+    pVideoPicture->lightMetadata = *m_hints.contentLightMetadata;
+    pVideoPicture->hasLightMetadata = true;
+  }
 }
 
 void CDVDVideoCodecWebCodecs::ReportPixelFormat(const char* name)
