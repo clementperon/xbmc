@@ -166,8 +166,10 @@ use, modelled on `CRendererMediaCodec`:
 | `Create(CVideoBuffer*)` / `Register()` | returns a renderer only for a `CVideoBufferWebCodecs`; registered under `"webcodecs"` from `InitWindowSystem` next to the codec; `CLinuxRendererGLES` stays the `"default"` for FFmpeg pictures |
 | `LoadShadersHook()` | `m_textureTarget = GL_TEXTURE_2D`, `m_renderMethod = RENDER_CUSTOM`; no YUV shaders are compiled |
 | `CreateTexture(index)` | `glGenTextures` one texture, filter and wrap parameters, no storage; `texwidth/texheight` = source size, `pixpertex` 1 |
-| `UploadTexture(index)` | `webcodecs_upload_frame(handle, seq, plane.id)`, `CalculateTextureSourceRects(index, 1)`; `loaded` then keeps it from repeating |
-| `RenderHook(index)` | bind the texture, `EnableGUIShader(SM_TEXTURE_RGBA)` with the brightness/contrast uniforms, draw the quad on `m_rotatedDestCoords`, `DisableGUIShader` |
+| `AddVideoPicture(picture, index)` | the base bookkeeping, then a bit in an atomic mask so the render thread imports this buffer on its next pass, before the picture is due (§4.4) |
+| `UploadTexture(index)` | `webcodecs_upload_frame(handle, seq, plane.id)`; `loaded` then keeps it from repeating |
+| `RenderUpdate(…)` | imports every pending buffer, then the base class draws the one that is due |
+| `RenderHook(index)` | `CalculateTextureSourceRects(index, 1)`, bind the texture, `EnableGUIShader(SM_TEXTURE_RGBA)` with the brightness/contrast uniforms, draw the quad on `m_rotatedDestCoords`, `DisableGUIShader` |
 | `DeleteTexture(index)` | `glDeleteTextures` (synchronous under proxying, like `glGenTextures`; both happen per `Configure`/`Flush`, not per frame) and `ReleaseBuffer(index)` |
 | `GetRenderInfo()` | `max_buffer_size = 4` |
 | `Supports(ESCALINGMETHOD)` | `LINEAR`, `NEAREST`, `AUTO`; a change of method mid-stream is applied to the textures from `RenderHook`, since the base class only refilters `RENDER_GLSL` renderers |
@@ -292,15 +294,20 @@ cap keeps the queue far below it in practice.
    seq)` in it, and only then publish `framesTaken + 1`: once it is
    published the output callback may reuse the slot. Fill the picture from
    the copy, return `VC_PICTURE`. No proxied call.
-3. **Upload.** The render manager picks the picture for a display frame,
-   `CLinuxRendererGLES::Render` calls `UploadTexture(index)`, which queues
-   `upload(seq, tex)`. On main: look the frame up, bind Kodi's texture,
-   `texImage2D`, `close()`, drop it from the map. A frame that is no longer
-   in the map (closed by a reset that overtook it) leaves the texture as it
-   was; the render manager is discarding that buffer anyway.
-4. **Draw.** `RenderHook` binds the same texture and draws. The commit blit
-   at `PresentRenderImpl` is synchronous, so by the time the render thread
-   continues, upload and draw have executed on main.
+3. **Upload.** VideoPlayerVideo queues the picture with
+   `AddVideoPicture(picture, index)`, which marks the buffer pending. On its
+   next `RenderUpdate`, the render thread calls `UploadTexture(index)` for
+   every pending buffer, which queues `upload(seq, tex)`. On main: look the
+   frame up, bind Kodi's texture, `texImage2D`, `close()`, drop it from the
+   map. A frame that is no longer in the map (closed by a reset that overtook
+   it) leaves the texture as it was; the render manager is discarding that
+   buffer anyway. The upload therefore happens within one display period of
+   the picture being queued, usually several frames before it is due, and
+   the texture holds the pixels until then.
+4. **Draw.** When the render manager picks the picture, `RenderHook` binds
+   its texture and draws. The commit blit at `PresentRenderImpl` is
+   synchronous, so by the time the render thread continues, upload and draw
+   have executed on main.
 5. **Release.** When the last reference to the `CVideoBufferWebCodecs`
    goes, `Return(id)` queues `release(seq)`; on main it closes the frame if
    the upload has not already done so (it normally has), and is a no-op
@@ -341,18 +348,20 @@ ring's publish order (§4.1).
 
 A `VideoFrame` holds a decoder output buffer, and hardware decoders have a
 small fixed pool of them; Chromium's `VideoDecoder` stops producing output
-while too many frames stay open. The design closes a frame at the earliest
-moment its pixels are safe, the upload, rather than when Kodi recycles the
-render buffer some frames later. Kodi never re-uploads a buffer: `loaded`
-stays set until `ReleaseBuffer`, and `DeleteTexture` releases the buffer
-along with the texture, so a closed frame is never needed again. Open frames
-are therefore bounded by pushed-but-not-run + decoding + queued (the
-existing `WEBCODECS_MAX_INFLIGHT = 12` rule, unchanged) plus the frames
-taken but not yet uploaded: the render manager queues up to
-`max_buffer_size - 1 = 3` pictures behind the one on screen and
-VideoPlayerVideo can hold one more while it waits for a free slot, so up to
-16 decoder outputs can be open at once, and the on-screen one is already
-closed. The render queue depth no longer adds a second copy of each frame.
+while too many frames stay open. The Samsung decoder goes further: it reuses
+the oldest output buffer for a new frame whether or not a `VideoFrame` still
+refers to it. A frame kept open until its display time is exactly that
+oldest buffer, and on the TV it showed a newer frame in its place about once
+a second. So a frame is imported into its texture on the render thread's
+first pass after the render manager queued it, within one display period of
+the take, and closed there; the texture keeps the pixels until the picture
+is due. Kodi never re-uploads a buffer: `loaded` stays set until
+`ReleaseBuffer`, and `DeleteTexture` releases the buffer along with the
+texture, so a closed frame is never needed again. Open frames are therefore
+bounded by pushed-but-not-run + decoding + queued (the existing
+`WEBCODECS_MAX_INFLIGHT = 12` rule, unchanged) plus the one or two taken in
+the last display period, the same bound the copy path had. The render queue
+depth adds neither open frames nor a second copy of each frame.
 
 Frames that never reach an upload, because the player dropped the picture,
 a seek flushed the queue or the stream ended, are closed by `release` from
@@ -543,10 +552,11 @@ covers a negative answer.
   browser rather than disappearing. It would still be one pass instead of
   four and off Kodi's threads, and the profiler shows it directly as
   `texImage2D` self time on main (§7.2).
-- **Decoder pool size.** Unknown on Tizen. Closing at upload keeps open
-  frames at the in-flight cap plus the taken-but-not-uploaded ones, 16 at
-  most (§4.4); if the decoder still stalls with all outputs open,
-  `WEBCODECS_MAX_INFLIGHT` is the knob.
+- **Decoder buffer reuse.** The Samsung decoder recycles output buffers
+  under open `VideoFrame`s (§4.4). Importing at the first render pass after
+  the take keeps the open count at the copy path's level, which the TV
+  handled; if a newer frame ever flashes again, `WEBCODECS_MAX_INFLIGHT` is
+  the knob that shortens the queue in front of the take.
 - **HDR appearance** differs from Kodi's tone mapping and is not
   user-tunable. Acceptable for a first version; the video-plane design has
   the same property.
@@ -648,7 +658,8 @@ Pass criteria, compared with the profiles taken before the change:
    (`texImage2D` self time on main.)
 2. How many output frames does the Tizen hardware decoder allow open before
    `decode()` stalls? (`inflight` growth with `WEBCODECS_MAX_INFLIGHT` open
-   frames.)
+   frames.) Partly answered: it does not stall, it reuses the oldest buffer
+   (§4.4); the pool size itself is still unknown.
 3. Does the TV populate `VideoFrame.colorSpace`, and what does an HDR
    sample look like after the browser's conversion?
 4. Does the frame's `visibleRect` match the coded size on this decoder
