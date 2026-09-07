@@ -196,8 +196,8 @@ a `WebCodecsFrameInfo` (dimensions, pixel format, colour space, timestamps
 and the plane layout of a copy), into slot `seq % 32` of a ring inside
 `WebCodecsSharedState` (layout asserted in `DVDVideoCodecWebCodecsBridge.h`).
 The state also carries `signal`, `framesProduced`, `framesTaken`, `inflight`,
-`openFrames`, `failed`, `pushesProcessed`, `copyDone` and `copyResult`. The
-JS side writes
+`openFrames`, `decoding`, `failed`, `pushesProcessed`, `copyDone` and
+`copyResult`. The JS side writes
 the slot before it publishes `framesProduced` and bumps `signal` on every
 change, so the C++ side reads the counters with acquire loads, sees a
 complete slot for every frame it is told about, and only ever blocks in
@@ -224,7 +224,7 @@ Two limits, both enforced on the main thread:
 
 | Limit | Value | Effect |
 |---|---|---|
-| `WEBCODECS_MAX_INFLIGHT` | 12 | The codec is busy when `pending pushes + inflight + openFrames` reaches it, where pending pushes are its own push count minus `pushesProcessed` and `openFrames` counts every `VideoFrame` not yet closed, queued for the codec or taken and awaiting its import. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool; the Samsung one reuses the buffer of an open frame when it runs out (ZERO_COPY.md §4.4). |
+| `WEBCODECS_MAX_INFLIGHT` | 16 | The codec is busy when `pending pushes + decoding + openFrames` reaches it: pending pushes are its own push count minus `pushesProcessed`, `decoding` the chunks `decode()` accepted and has not output yet, and `openFrames` every `VideoFrame` not yet closed, queued for the codec or taken and awaiting its import. `AddData` then returns `false` and VideoPlayerVideo re-queues the packet as a priority message; `GetPicture` waits up to 20 ms on the futex for the next output instead of returning `VC_BUFFER` immediately. Hardware decoders have a fixed output pool; the Samsung one reuses the buffer of an open frame when it runs out (ZERO_COPY.md §4.4). |
 | `WEBCODECS_FRAME_RING` | 32 | Size of the metadata ring. The output callback closes and counts as dropped a frame that would overwrite the slot of a frame the codec has not taken. Not reached while `busy` works. |
 
 Decoded frames stay open on the main thread until the codec asks for one,

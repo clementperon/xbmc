@@ -69,11 +69,12 @@ extern "C"
 
   enum
   {
-    // Cap on decoder frames alive at once: pushed but not yet run by the main
-    // thread, queued for decode, or output and not yet closed, taken or not.
-    // Hardware decoders stall, or reuse the buffer of an open frame, when too
-    // many outputs stay open.
-    WEBCODECS_MAX_INFLIGHT = 12,
+    // Cap on decoder buffers in use at once: chunks pushed but not yet output
+    // and output frames not yet closed, taken or not. The Samsung decoder
+    // reuses the buffer of an open frame when it runs out; it ran the copy path
+    // with 19 open without harm, and it holds about ten chunks before it
+    // outputs anything.
+    WEBCODECS_MAX_INFLIGHT = 16,
     // Slots in WebCodecsSharedState::ring. The output callback drops a frame
     // rather than overwrite a slot the codec has not taken.
     WEBCODECS_FRAME_RING = 32,
@@ -123,7 +124,7 @@ extern "C"
     int32_t copyDone; // copyId of the last finished webcodecs_copy_frame
     int32_t copyResult; // WebCodecsCopyResult of that copy
     int32_t openFrames; // output frames not yet closed, taken by the codec or not
-    int32_t reserved; // keeps the ring 8-byte aligned
+    int32_t decoding; // chunks decode() accepted and has not output yet, plus a copy in progress
     struct WebCodecsFrameInfo ring[WEBCODECS_FRAME_RING];
   };
 
@@ -163,6 +164,7 @@ static_assert(offsetof(WebCodecsSharedState, pushesProcessed) == 20, "pushesProc
 static_assert(offsetof(WebCodecsSharedState, copyDone) == 24, "copyDone offset");
 static_assert(offsetof(WebCodecsSharedState, copyResult) == 28, "copyResult offset");
 static_assert(offsetof(WebCodecsSharedState, openFrames) == 32, "openFrames offset");
+static_assert(offsetof(WebCodecsSharedState, decoding) == 36, "decoding offset");
 static_assert(offsetof(WebCodecsSharedState, ring) == 40, "ring offset");
 
 extern "C"

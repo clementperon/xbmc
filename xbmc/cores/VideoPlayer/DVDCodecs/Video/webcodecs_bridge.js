@@ -83,6 +83,7 @@ mergeInto(LibraryManager.library, {
     SS_COPY_DONE: 6,
     SS_COPY_RESULT: 7,
     SS_OPEN_FRAMES: 8,
+    SS_DECODING: 9,
     SS_RING_OFFSET: 40,
 
     // Result of webcodecs_probe_texture_upload, null until it has run.
@@ -169,6 +170,8 @@ mergeInto(LibraryManager.library, {
       Atomics.store(HEAP32, base + this.SS_COPY_DONE, state.copyDone);
       Atomics.store(HEAP32, base + this.SS_COPY_RESULT, state.copyResult);
       Atomics.store(HEAP32, base + this.SS_OPEN_FRAMES, state.frames.size);
+      Atomics.store(HEAP32, base + this.SS_DECODING,
+                    state.chunksDecoded - state.framesOutput + (state.copying ? 1 : 0));
       Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
@@ -409,6 +412,8 @@ mergeInto(LibraryManager.library, {
       keyTimestamps: new Set(), // timestamps of key chunks not yet output
       frames: new Map(), // sequence -> describeFrame() entry
       framesProduced: 0,
+      chunksDecoded: 0, // chunks decode() accepted since the last reset
+      framesOutput: 0, // output callbacks since the last reset, dropped ones included
       copying: false,
       copyDone: 0,
       copyResult: 0,
@@ -437,6 +442,7 @@ mergeInto(LibraryManager.library, {
         frame.close();
         return;
       }
+      state.framesOutput += 1;
 
       // The codec's in-flight cap keeps the queue far below the ring size.
       const taken = B.framesTaken(state);
@@ -545,6 +551,7 @@ mergeInto(LibraryManager.library, {
       state.decoder.reset();
       state.generation += 1;
       state.keyTimestamps.clear();
+      state.chunksDecoded = state.framesOutput;
       B.closeFrames(state, B.framesTaken(state));
       state.droppedFrames = 0;
       state.highWaterMark = 0;
@@ -593,6 +600,7 @@ mergeInto(LibraryManager.library, {
             duration: durMicros > 0 ? durMicros : undefined,
             data: payload,
           }));
+          state.chunksDecoded += 1;
         } catch (e) {
           state.failed = true;
           state.errorMessage = 'decode threw: ' + String(e);
