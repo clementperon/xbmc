@@ -11,6 +11,7 @@
 //   node kodiprof.mjs close                         close the page so inspect.sh can relaunch Kodi
 //
 // KODI_CDP_HTTP overrides the DevTools HTTP endpoint (default http://localhost:7011).
+// KODI_CDP_PLAYBACK_WAIT is how many seconds cpu-onplay waits for playback (default 480).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 
@@ -18,7 +19,9 @@ const BASE = process.env.KODI_CDP_HTTP || 'http://localhost:7011';
 const SAMPLING_INTERVAL_US = 500;
 const PLAYBACK_STARTED = /Using WebCodecs for video decoding/;
 const PLAYBACK_SETTLE_MS = 12000;
-const PLAYBACK_WAIT_MS = 8 * 60 * 1000;
+const playbackWaitSeconds = Number(process.env.KODI_CDP_PLAYBACK_WAIT);
+const PLAYBACK_WAIT_MS =
+  (Number.isFinite(playbackWaitSeconds) && playbackWaitSeconds > 0 ? playbackWaitSeconds : 8 * 60) * 1000;
 
 const [, , mode, arg1, arg2] = process.argv;
 
@@ -320,7 +323,7 @@ switch (mode) {
   case 'cpu-onplay': {
     const sessions = await attachWorkers(cdp, (sid) => cdp.send('Runtime.enable', {}, sid));
     await cdp.send('Runtime.enable');
-    console.log(`attached ${sessions.size} workers, waiting for Kodi to log ${PLAYBACK_STARTED}`);
+    console.log(`attached ${sessions.size} workers, waiting up to ${PLAYBACK_WAIT_MS / 1000}s for Kodi to log ${PLAYBACK_STARTED}`);
     let playing = false;
     cdp.on((m) => {
       if (m.method !== 'Runtime.consoleAPICalled') return;
