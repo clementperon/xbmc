@@ -240,7 +240,9 @@ mergeInto(LibraryManager.library, {
         displayWidth: frame.displayWidth || width,
         displayHeight: frame.displayHeight || height,
         pixelFormat: lookup(this.pixelFormats, format, 0),
-        keyFrame: frame.type === 'key',
+        // A VideoFrame carries no frame type; the chunk it came from does, and
+        // the output keeps the chunk's timestamp.
+        keyFrame: state.keyTimestamps.delete(timestampMicros),
         colorMatrix: lookup(this.colorMatrix, colorSpace.matrix, this.colorMatrixUnspecified),
         colorPrimaries: lookup(this.colorPrimaries, colorSpace.primaries, this.colorPrimariesUnspecified),
         colorTransfer: lookup(this.colorTransfer, colorSpace.transfer, this.colorTransferUnspecified),
@@ -401,6 +403,7 @@ mergeInto(LibraryManager.library, {
       failed: false,
       errorMessage: '',
       lastTimestamp: 0,
+      keyTimestamps: new Set(), // timestamps of key chunks not yet output
       frames: new Map(), // sequence -> describeFrame() entry
       framesProduced: 0,
       copying: false,
@@ -511,6 +514,7 @@ mergeInto(LibraryManager.library, {
     const state = WebCodecsBridge.getState(handle);
     if (!state) return;
     state.generation += 1;
+    state.keyTimestamps.clear();
     WebCodecsBridge.closeFrames(state, 0);
     try {
       if (state.decoder) state.decoder.close();
@@ -537,6 +541,7 @@ mergeInto(LibraryManager.library, {
     try {
       state.decoder.reset();
       state.generation += 1;
+      state.keyTimestamps.clear();
       B.closeFrames(state, B.framesTaken(state));
       state.droppedFrames = 0;
       state.highWaterMark = 0;
@@ -576,6 +581,8 @@ mergeInto(LibraryManager.library, {
       } else {
         const tsMicros = Math.round(ptsSeconds * B.MICROSECONDS_PER_SECOND);
         const durMicros = Math.max(0, Math.round(durationSeconds * B.MICROSECONDS_PER_SECOND));
+        if (keyFrame)
+          state.keyTimestamps.add(tsMicros);
         try {
           state.decoder.decode(new EncodedVideoChunk({
             type: keyFrame ? 'key' : 'delta',
