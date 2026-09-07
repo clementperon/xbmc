@@ -1653,11 +1653,7 @@ void CLinuxRendererGLES::DeletePlanarYUVTexture(int index)
     {
       if (m_buffers[index].fields[f][p].id)
       {
-        if (glIsTexture(m_buffers[index].fields[f][p].id))
-        {
-          glDeleteTextures(1, &m_buffers[index].fields[f][p].id);
-        }
-
+        glDeleteTextures(1, &m_buffers[index].fields[f][p].id);
         m_buffers[index].fields[f][p].id = 0;
       }
     }
@@ -1707,7 +1703,7 @@ bool CLinuxRendererGLES::CreatePlanarYUVTexture(int index)
   {
     for(p = 0; p < YuvImage::MAX_PLANES; p++)
     {
-      if (!glIsTexture(m_buffers[index].fields[f][p].id))
+      if (!m_buffers[index].fields[f][p].id)
       {
         glGenTextures(1, &m_buffers[index].fields[f][p].id);
         VerifyGLState();
@@ -1881,7 +1877,7 @@ bool CLinuxRendererGLES::CreateNV12Texture(int index)
   {
     for(int p = 0; p < 2; p++)
     {
-      if (!glIsTexture(buf.fields[f][p].id))
+      if (!buf.fields[f][p].id)
       {
         glGenTextures(1, &buf.fields[f][p].id);
         VerifyGLState();
@@ -1958,11 +1954,7 @@ void CLinuxRendererGLES::DeleteNV12Texture(int index)
     {
       if (buf.fields[f][p].id)
       {
-        if (glIsTexture(buf.fields[f][p].id))
-        {
-          glDeleteTextures(1, &buf.fields[f][p].id);
-        }
-
+        glDeleteTextures(1, &buf.fields[f][p].id);
         buf.fields[f][p].id = 0;
       }
     }
@@ -2012,10 +2004,7 @@ void CLinuxRendererGLES::DeletePackedYUVTexture(int index)
   {
     if (buf.fields[f][0].id)
     {
-      if (glIsTexture(buf.fields[f][0].id))
-      {
-        glDeleteTextures(1, &buf.fields[f][0].id);
-      }
+      glDeleteTextures(1, &buf.fields[f][0].id);
       buf.fields[f][0].id = 0;
     }
     buf.fields[f][1].id = 0;
@@ -2061,7 +2050,7 @@ bool CLinuxRendererGLES::CreatePackedYUVTexture(int index)
 
   for (int f = 0; f < MAX_FIELDS; f++)
   {
-    if (!glIsTexture(buf.fields[f][0].id))
+    if (!buf.fields[f][0].id)
     {
       glGenTextures(1, &buf.fields[f][0].id);
       VerifyGLState();
@@ -2121,7 +2110,7 @@ void CLinuxRendererGLES::SetTextureFilter(GLenum method)
     {
       for (int p = 0; p < 3; p++)
       {
-        if(glIsTexture(buf.fields[f][p].id))
+        if (buf.fields[f][p].id)
         {
           glBindTexture(m_textureTarget, buf.fields[f][p].id);
           glTexParameteri(m_textureTarget, GL_TEXTURE_MIN_FILTER, method);
