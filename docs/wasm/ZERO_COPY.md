@@ -192,11 +192,11 @@ decoder's real format where FFmpeg has a name for it (`RGB0`, `NV12`,
 `YUV420P10`, …) so `ConfigChanged` reconfigures if the decoder switches
 output format mid-stream.
 
-One base-class cost to know about: `ValidateRenderTarget` runs
-`UpdateVideoFilter`, whose `SetTextureFilter` asks `glIsTexture` for every
-field, plane and buffer (36 synchronous round trips with four buffers) once
-per `Configure` or `Flush`. `CRendererMediaCodec` pays the same; it is not
-in the per-frame path.
+The synchronous GL calls left in the base class happen once per `Configure`
+or `Flush`, not per frame: `glFinish`, `glGenTextures` and
+`glDeleteTextures`. The base class used to ask `glIsTexture` before it
+touched any texture, which made `SetTextureFilter` alone 36 round trips per
+seek with four buffers; it tests the id it owns instead.
 
 ### 3.4 Codec (`CDVDVideoCodecWebCodecs`)
 
