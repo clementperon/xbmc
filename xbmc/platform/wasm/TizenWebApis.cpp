@@ -8,7 +8,10 @@
 
 #include "TizenWebApis.h"
 
+#include "ServiceBroker.h"
+#include "dialogs/GUIDialogKaiToast.h"
 #include "utils/JSONVariantParser.h"
+#include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
 
@@ -209,6 +212,23 @@ TizenDeviceInfo CTizenWebApis::GetDeviceInfo()
   return info;
 }
 
+// Runs on the browser main thread from the setScreenSaver callbacks.
+extern "C" EMSCRIPTEN_KEEPALIVE void kodi_wasm_tizen_screensaver_result(int enabled,
+                                                                        int ok,
+                                                                        const char* error)
+{
+  const char* state = enabled ? "on" : "off";
+  std::string message =
+      ok ? StringUtils::Format("TV confirmed screensaver {}", state)
+         : StringUtils::Format("TV refused screensaver {}: {}", state, error ? error : "");
+  CLog::Log(ok ? LOGINFO : LOGWARNING, "Tizen screensaver: {}", message);
+  // The TV has no console to read this from; with debug logging on, show it.
+  if (CServiceBroker::GetLogging().IsLogLevelLogged(LOGDEBUG))
+    CGUIDialogKaiToast::QueueNotification(ok ? CGUIDialogKaiToast::Info
+                                             : CGUIDialogKaiToast::Warning,
+                                          "Samsung screensaver", message, 5000);
+}
+
 bool CTizenWebApis::SetScreenSaverEnabled(bool enabled)
 {
   // clang-format off
@@ -216,10 +236,25 @@ bool CTizenWebApis::SetScreenSaverEnabled(bool enabled)
     try {
       if (typeof webapis === 'undefined' || !webapis.appcommon)
         return 0;
-      const states = webapis.appcommon.AppCommonScreenSaverState;
-      webapis.appcommon.setScreenSaver(
-          $0 ? states.SCREEN_SAVER_ON : states.SCREEN_SAVER_OFF, () => {},
-          (e) => console.warn('[kodi] webapis.appcommon.setScreenSaver:', e));
+      const kodi = (Module.kodi = Module.kodi || {});
+      const apply = (on) => {
+        const states = webapis.appcommon.AppCommonScreenSaverState;
+        const report = (ok, e) => Module.ccall('kodi_wasm_tizen_screensaver_result', null,
+            ['number', 'number', 'string'],
+            [on ? 1 : 0, ok ? 1 : 0, e ? String(e.name || "") + " " + String(e.message || e.code || "") : ""]);
+        webapis.appcommon.setScreenSaver(on ? states.SCREEN_SAVER_ON : states.SCREEN_SAVER_OFF,
+                                         () => report(true), (e) => report(false, e));
+      };
+      kodi.screenSaverOn = !!$0;
+      if (!kodi.screenSaverHook) {
+        kodi.screenSaverHook = true;
+        // The TV may drop the request while its own screensaver covers the app.
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible' && kodi.screenSaverOn === false)
+            apply(false);
+        });
+      }
+      apply(kodi.screenSaverOn);
       return 1;
     } catch (e) {
       console.warn('[kodi] webapis.appcommon.setScreenSaver failed:', e);
