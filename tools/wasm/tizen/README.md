@@ -63,8 +63,12 @@ need Node 18 or later and no packages.
    WebCodecs playback has started, lets it settle and then samples every
    thread for 20 s into `out/<thread>.cpuprofile`. A worker another client
    has attached to cannot be attached again, so start the client before
-   opening `chrome://inspect`. `cpu <seconds> [outdir]` profiles at once
-   without waiting for playback.
+   opening `chrome://inspect`. It gives up after eight minutes without
+   playback; `KODI_CDP_PLAYBACK_WAIT=<seconds>` changes that, for a session
+   where someone else starts playback whenever they get to the TV. Once
+   attached, it must not be restarted: a worker attached a second time,
+   after Kodi's threads have entered their blocking loops, cannot be sampled.
+   `cpu <seconds> [outdir]` profiles at once without waiting for playback.
 4. `node tools/wasm/tizen/profiling/summarize_profiles.mjs out/` prints, per
    thread, wall and active time, the top self and inclusive functions, and
    what the thread was blocked on in futex waits.
