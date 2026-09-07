@@ -84,7 +84,9 @@ mergeInto(LibraryManager.library, {
     SS_COPY_RESULT: 7,
     SS_OPEN_FRAMES: 8,
     SS_DECODING: 9,
-    SS_RING_OFFSET: 40,
+    SS_CONFIGURED: 10,
+    SS_HARDWARE: 11,
+    SS_RING_OFFSET: 48,
 
     // Result of webcodecs_probe_texture_upload, null until it has run.
     textureUpload: null,
@@ -172,6 +174,9 @@ mergeInto(LibraryManager.library, {
       Atomics.store(HEAP32, base + this.SS_OPEN_FRAMES, state.frames.size);
       Atomics.store(HEAP32, base + this.SS_DECODING,
                     state.chunksDecoded - state.framesOutput + (state.copying ? 1 : 0));
+      Atomics.store(HEAP32, base + this.SS_CONFIGURED, state.configured ? 1 : 0);
+      Atomics.store(HEAP32, base + this.SS_HARDWARE,
+                    state.configured && state.hardwareAcceleration === 'prefer-hardware' ? 1 : 0);
       Atomics.add(HEAP32, base + this.SS_SIGNAL, 1);
       Atomics.notify(HEAP32, base + this.SS_SIGNAL);
     },
@@ -236,6 +241,8 @@ mergeInto(LibraryManager.library, {
       const colorSpace = frame.colorSpace || {};
       const lookup = (table, key, fallback) =>
         key != null && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : fallback;
+      const pixelFormat = frame.format ? lookup(this.pixelFormats, format, 0)
+                                       : this.pixelFormats.opaque;
 
       return {
         frame,
@@ -244,7 +251,7 @@ mergeInto(LibraryManager.library, {
         height,
         displayWidth: frame.displayWidth || width,
         displayHeight: frame.displayHeight || height,
-        pixelFormat: lookup(this.pixelFormats, format, 0),
+        pixelFormat,
         // A VideoFrame carries no frame type; the chunk it came from does, and
         // the output keeps the chunk's timestamp.
         keyFrame: state.keyTimestamps.delete(timestampMicros),
@@ -323,7 +330,7 @@ mergeInto(LibraryManager.library, {
       const config = {
         codec: state.codec,
         optimizeForLatency: true,
-        hardwareAcceleration: 'prefer-hardware',
+        hardwareAcceleration: state.hardwareAcceleration,
       };
       if (width > 0) config.codedWidth = width;
       if (height > 0) config.codedHeight = height;
@@ -334,6 +341,20 @@ mergeInto(LibraryManager.library, {
       if (state.description)
         config.description = state.description;
       return config;
+    },
+
+    // Chrome reads 'prefer-hardware' as hardware only, so a codec its platform
+    // decoder lacks (VP8 on macOS, say) is refused outright; 'no-preference'
+    // still picks the hardware decoder when there is one. Resolves to the
+    // first preference isConfigSupported() accepts, or null.
+    selectHardwareAcceleration: async function(state, width, height) {
+      for (const preference of ['prefer-hardware', 'no-preference']) {
+        state.hardwareAcceleration = preference;
+        const support = await VideoDecoder.isConfigSupported(this.buildConfig(state, width, height));
+        if (support && support.supported)
+          return preference;
+      }
+      return null;
     },
   },
 
@@ -426,6 +447,7 @@ mergeInto(LibraryManager.library, {
       uploadFailed: false,
       decoder: null,
       description: null,
+      hardwareAcceleration: 'prefer-hardware',
       configured: false,
     };
 
@@ -470,47 +492,38 @@ mergeInto(LibraryManager.library, {
 
       state.decoder = new VideoDecoder({ output: outputCallback, error: errorCallback });
       state.decoder.addEventListener('dequeue', () => WebCodecsBridge.publishState(state));
-
-      const config = WebCodecsBridge.buildConfig(state, width, height);
-
-      // isConfigSupported is advisory: we log but don't block on it because
-      // it's async and we need a synchronous return here. A failed config
-      // will surface via the decoder's error callback.
-      try {
-        VideoDecoder.isConfigSupported(config).then((support) => {
-          if (!support || !support.supported) {
-            state.failed = true;
-            state.errorMessage = 'isConfigSupported rejected config for ' + codec;
-            console.warn('WASM WebCodecs: isConfigSupported rejected', codec, support);
-            WebCodecsBridge.publishState(state);
-          }
-        }).catch((error) => {
-          state.failed = true;
-          state.errorMessage = 'isConfigSupported threw: ' + String(error);
-          WebCodecsBridge.publishState(state);
-        });
-      } catch (probeError) {
-        console.warn('WASM WebCodecs: isConfigSupported threw synchronously', probeError);
-      }
-
-      state.decoder.configure(config);
-      state.configured = true;
       registry.set(id, state);
       WebCodecsBridge.publishState(state);
 
-      console.info('WASM WebCodecs: configured VideoDecoder', {
-        codec, annexB: !!annexB, descriptionBytes: extraSize, width, height,
+      WebCodecsBridge.selectHardwareAcceleration(state, width, height).then((preference) => {
+        // Destroyed or failed while the probe ran.
+        if (!state.sharedPtr || state.failed)
+          return;
+        if (!preference) {
+          state.failed = true;
+          state.errorMessage = 'isConfigSupported rejected every config for ' + codec;
+          console.warn('WASM WebCodecs:', state.errorMessage);
+          WebCodecsBridge.publishState(state);
+          return;
+        }
+        state.decoder.configure(WebCodecsBridge.buildConfig(state, width, height));
+        state.configured = true;
+        WebCodecsBridge.publishState(state);
+        console.info('WASM WebCodecs: configured VideoDecoder', {
+          codec, hardwareAcceleration: preference, annexB: !!annexB,
+          descriptionBytes: extraSize, width, height,
+        });
+      }).catch((error) => {
+        if (!state.sharedPtr)
+          return;
+        state.failed = true;
+        state.errorMessage = 'configure failed: ' + String(error);
+        console.warn('WASM WebCodecs:', state.errorMessage);
+        WebCodecsBridge.publishState(state);
       });
       return id;
     } catch (e) {
-      console.warn('WASM WebCodecs: create/configure decoder failed', e);
-      // The state never reached the registry, so webcodecs_destroy_decoder cannot
-      // reach the decoder to close it.
-      try {
-        if (state.decoder) state.decoder.close();
-      } catch (closeError) {
-        console.warn('WASM WebCodecs: decoder close failed', closeError);
-      }
+      console.warn('WASM WebCodecs: VideoDecoder construction failed', e);
       return 0;
     }
   },

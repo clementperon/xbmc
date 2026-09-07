@@ -77,6 +77,7 @@ private:
   void PublishFramesTaken(int32_t sequence);
   void WaitForDecoderSignal(uint32_t seenSignal, double maxWaitMs);
   bool DecoderBusy() const;
+  bool WaitForConfigured();
   bool WaitForDrain();
   int32_t WaitForCopy(int copyId);
   void ReleaseCopyBuffer();
@@ -117,6 +118,9 @@ private:
   bool m_drained{false};
   bool m_waitingForKeyFrame{true};
   bool m_annexB{false};
+  // The browser accepted 'prefer-hardware'; false when it was left to choose
+  // the decoder, which WebCodecs does not identify.
+  bool m_hardware{false};
   bool m_hasDescription{false};
   int m_nalLengthSize{0};
   int m_codecControlFlags{0};
