@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://kodi.tv/SockTest" version="0.1.0" viewmodes="maximized">
+   <name>Kodi socket test</name>
+   <content src="index.html"></content>
+   <icon src="icon.png"></icon>
+   <access origin="*" subdomains="true"></access>
+   <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"></tizen:setting>
+   <tizen:application id="kodisocket.SockTest" package="kodisocket" required_version="2.3"></tizen:application>
+   <tizen:privilege name="http://tizen.org/privilege/internet"></tizen:privilege>
+   <tizen:profile name="tv-samsung"></tizen:profile>
+</widget>

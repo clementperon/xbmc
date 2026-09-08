@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kodi socket test</title>
+  <style>
+    body { margin: 0; background: #111; color: #ddd; font: 24px monospace; }
+    #log { padding: 24px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="log">socktest: loading…</div>
+  <script>
+    var logEl = document.getElementById('log');
+    function append(t) {
+      logEl.textContent += '\n' + t;
+    }
+    var Module = {
+      print: function (t) { console.log(t); append(t); },
+      printErr: function (t) { console.error(t); append(t); },
+      onAbort: function (what) { append('ABORT: ' + what); }
+    };
+  </script>
+  <script async src="socktest.js"></script>
+</body>
+</html>

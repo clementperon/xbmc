@@ -1,0 +1,20 @@
+project_type: web_app
+profile: tv-samsung
+api_version: "10.0"
+build_type: Debug
+output_name: SockTest
+output_path: ""
+opt: false
+signing_profile: ""
+trust_anchor: []
+files:
+  - index.html
+  - icon.png
+  - socktest.js
+  - socktest.wasm
+  - socktest.data
+excludes:
+  - Debug/*
+  - Release/*
+  - \.wgt
+deps: []
