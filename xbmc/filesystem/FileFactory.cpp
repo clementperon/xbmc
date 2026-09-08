@@ -19,6 +19,10 @@
 #include "CurlFile.h"
 #include "DAVFile.h"
 #include "ShoutcastFile.h"
+#if defined(TARGET_WASM)
+#include "platform/wasm/network/TizenSockets.h"
+#include "wasm/XhrFile.h"
+#endif
 #ifdef HAS_FILESYSTEM_SMB
 #ifdef TARGET_WINDOWS
 #include "platform/win32/filesystem/Win32SMBFile.h"
@@ -153,13 +157,21 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
   else if (CWinLibraryFile::IsValid(url)) return new CWinLibraryFile();
 #endif
 
-  if (url.IsProtocol("ftp")
-  ||  url.IsProtocol("ftps")
-  ||  url.IsProtocol("rss")
-  ||  url.IsProtocol("rsss")) return new CCurlFile();
-  else if (url.IsProtocol("http") || url.IsProtocol("https")) return new CCurlFile();
-  else if (url.IsProtocol("dav") || url.IsProtocol("davs")) return new CDAVFile();
-  else if (url.IsProtocol("shout") || url.IsProtocol("shouts")) return new CShoutcastFile();
+#if defined(TARGET_WASM)
+  // libcurl needs BSD sockets, which only the Tizen runtime provides.
+  const bool curlUsable = kodi_wasm_has_sockets();
+  if (!curlUsable && (url.IsProtocol("http") || url.IsProtocol("https")))
+    return new CXhrFile();
+#else
+  const bool curlUsable = true;
+#endif
+  if (curlUsable && (url.IsProtocol("ftp") || url.IsProtocol("ftps") || url.IsProtocol("rss") ||
+                     url.IsProtocol("rsss") || url.IsProtocol("http") || url.IsProtocol("https")))
+    return new CCurlFile();
+  else if (curlUsable && (url.IsProtocol("dav") || url.IsProtocol("davs")))
+    return new CDAVFile();
+  else if (curlUsable && (url.IsProtocol("shout") || url.IsProtocol("shouts")))
+    return new CShoutcastFile();
 #ifdef HAS_FILESYSTEM_SMB
 #ifdef TARGET_WINDOWS
   else if (url.IsProtocol("smb")) return new CWin32SMBFile();

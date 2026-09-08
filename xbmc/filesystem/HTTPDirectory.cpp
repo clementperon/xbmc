@@ -8,7 +8,7 @@
 
 #include "HTTPDirectory.h"
 
-#include "CurlFile.h"
+#include "File.h"
 #include "FileItem.h"
 #include "FileItemList.h"
 #include "ServiceBroker.h"
@@ -31,11 +31,12 @@ CHTTPDirectory::~CHTTPDirectory(void) = default;
 
 bool CHTTPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 {
-  CCurlFile http;
+  CFile http;
 
   const std::string& strBasePath = url.GetFileName();
 
-  if(!http.Open(url))
+  std::vector<uint8_t> data;
+  if (http.LoadFile(url, data) < 0 || !http.GetImplementation())
   {
     CLog::Log(LOGERROR, "{} - Unable to get http directory ({})", __FUNCTION__, url.GetRedacted());
     return false;
@@ -73,12 +74,13 @@ bool CHTTPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
   reSize.RegComp(" +([0-9]+)(B|K|M|G)?(?=\\s|<|$)");
 
   /* read response from server into string buffer */
-  std::string strBuffer;
-  if (http.ReadData(strBuffer) && !strBuffer.empty())
+  std::string strBuffer(data.begin(), data.end());
+  if (!strBuffer.empty())
   {
     /* if Content-Length is found and its not text/html, URL is pointing to file so don't treat URL as HTTPDirectory */
-    if (!http.GetHttpHeader().GetValue("Content-Length").empty() &&
-        !StringUtils::StartsWithNoCase(http.GetHttpHeader().GetValue("Content-type"), "text/html"))
+    if (!http.GetProperty(XFILE::FileProperty::RESPONSE_HEADER, "Content-Length").empty() &&
+        !StringUtils::StartsWithNoCase(http.GetProperty(XFILE::FileProperty::CONTENT_TYPE),
+                                       "text/html"))
     {
       return false;
     }
@@ -288,9 +290,9 @@ bool CHTTPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
           else
           if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_bHTTPDirectoryStatFilesize) // As a fallback get the size by stat-ing the file (slow)
           {
-            CCurlFile file;
-            file.Open(url);
-            pItem->SetSize(file.GetLength());
+            CFile file;
+            if (file.Open(url))
+              pItem->SetSize(file.GetLength());
             file.Close();
           }
         }
@@ -307,10 +309,9 @@ bool CHTTPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 
 bool CHTTPDirectory::Exists(const CURL &url)
 {
-  CCurlFile http;
   struct __stat64 buffer;
 
-  if( http.Stat(url, &buffer) != 0 )
+  if (CFile::Stat(url, &buffer) != 0)
   {
     return false;
   }

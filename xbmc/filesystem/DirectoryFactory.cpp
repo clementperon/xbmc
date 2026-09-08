@@ -62,6 +62,9 @@
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
+#if defined(TARGET_WASM)
+#include "platform/wasm/network/TizenSockets.h"
+#endif
 
 #ifdef TARGET_POSIX
 #include "platform/posix/filesystem/PosixDirectory.h"
@@ -211,9 +214,15 @@ IDirectory* CDirectoryFactory::Create(const CURL& url)
   if (CWinLibraryDirectory::IsValid(url)) return new CWinLibraryDirectory();
 #endif
 
-  if (url.IsProtocol("ftp") || url.IsProtocol("ftps")) return new CFTPDirectory();
+#if defined(TARGET_WASM)
+  // libcurl needs BSD sockets, which only the Tizen runtime provides.
+  const bool curlUsable = kodi_wasm_has_sockets();
+#else
+  const bool curlUsable = true;
+#endif
+  if (curlUsable && (url.IsProtocol("ftp") || url.IsProtocol("ftps"))) return new CFTPDirectory();
   if (url.IsProtocol("http") || url.IsProtocol("https")) return new CHTTPDirectory();
-  if (url.IsProtocol("dav") || url.IsProtocol("davs")) return new CDAVDirectory();
+  if (curlUsable && (url.IsProtocol("dav") || url.IsProtocol("davs"))) return new CDAVDirectory();
 #ifdef HAS_FILESYSTEM_SMB
 #ifdef TARGET_WINDOWS
   if (url.IsProtocol("smb")) return new CWin32SMBDirectory();
@@ -224,7 +233,7 @@ IDirectory* CDirectoryFactory::Create(const CURL& url)
 #ifdef HAS_UPNP
   if (url.IsProtocol("upnp")) return new CUPnPDirectory();
 #endif
-  if (url.IsProtocol("rss") || url.IsProtocol("rsss")) return new CRSSDirectory();
+  if (curlUsable && (url.IsProtocol("rss") || url.IsProtocol("rsss"))) return new CRSSDirectory();
 #ifdef HAS_ZEROCONF
   if (url.IsProtocol("zeroconf")) return new CZeroconfDirectory();
 #endif

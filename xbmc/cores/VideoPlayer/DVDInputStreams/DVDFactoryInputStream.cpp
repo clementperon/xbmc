@@ -27,7 +27,8 @@
 #include "addons/AddonManager.h"
 #include "addons/addoninfo/AddonType.h"
 #include "cores/VideoPlayer/Interface/InputStreamConstants.h"
-#include "filesystem/CurlFile.h"
+#include "filesystem/File.h"
+#include "filesystem/IFile.h"
 #include "filesystem/IFileTypes.h"
 #include "storage/MediaManager.h"
 #include "utils/FileUtils.h"
@@ -142,13 +143,13 @@ std::shared_ptr<CDVDInputStream> CDVDFactoryInputStream::CreateInputStream(IVide
     if (finalFileitem.ContentLookup())
     {
       CURL origUrl(finalFileitem.GetDynURL());
-      XFILE::CCurlFile curlFile;
+      XFILE::CFile curlFile;
       // try opening the url to resolve all redirects if any
       try
       {
         if (curlFile.Open(finalFileitem.GetDynURL()))
         {
-          CURL finalUrl(curlFile.GetURL());
+          CURL finalUrl(curlFile.GetProperty(XFILE::FileProperty::EFFECTIVE_URL));
           finalUrl.SetProtocolOptions(origUrl.GetProtocolOptions());
           finalUrl.SetUserName(origUrl.GetUserName());
           finalUrl.SetPassword(origUrl.GetPassWord());
