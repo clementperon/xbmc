@@ -27,12 +27,7 @@ namespace
 {
 
 /*!
- * \brief Minimal in-process HTTP handler used as a test double for the
- *        network tests below:
- *
- *   GET  /get          → returns the body "hello from get"
- *   POST /post         → echoes back whatever was sent as the request body
- *   GET  /echo-headers → returns "User-Agent:<value>\nReferer:<value>"
+ * \brief Minimal in-process HTTP handler used as a test double for the network tests below.
  */
 class CHTTPTestHandler : public IHTTPRequestHandler
 {
