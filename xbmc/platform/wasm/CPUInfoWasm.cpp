@@ -8,6 +8,8 @@
 
 #include "CPUInfoWasm.h"
 
+#include "platform/wasm/TizenWebApis.h"
+
 #include <emscripten.h>
 
 std::shared_ptr<CCPUInfo> CCPUInfo::GetCPUInfo()
@@ -26,6 +28,14 @@ CCPUInfoWasm::CCPUInfoWasm()
   });
 
   m_cpuModel = "WebAssembly";
+
+  const auto device = KODI::PLATFORM::WASM::CTizenWebApis::GetDeviceInfo();
+  if (device.available)
+  {
+    m_cpuHardware = "Samsung " + (device.realModel.empty() ? device.model : device.realModel);
+    if (!device.firmware.empty())
+      m_cpuHardware += ", firmware " + device.firmware;
+  }
 
   for (int core = 0; core < m_cpuCount; core++)
   {
