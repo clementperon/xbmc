@@ -51,7 +51,12 @@ public:
     if (m_request.pathUrl == "/get")
       m_responseBody = "hello from get";
     else if (m_request.pathUrl == "/post")
-      m_responseBody = m_requestBody;
+    {
+      // CCurlFile::Post() sends application/x-www-form-urlencoded, so CWebServer feeds the body
+      // to MHD's POST processor and the handler sees parsed fields instead of the raw body.
+      const auto field = m_postFields.find("payload");
+      m_responseBody = field != m_postFields.end() ? field->second : "";
+    }
     else if (m_request.pathUrl == "/echo-headers")
     {
       const std::string userAgent = HTTPRequestHandlerUtils::GetRequestHeaderValue(
@@ -77,14 +82,7 @@ public:
 
   HttpResponseRanges GetResponseData() const override { return {m_responseRange}; }
 
-  bool appendPostData(const char* data, size_t size) override
-  {
-    m_requestBody.append(data, size);
-    return true;
-  }
-
 private:
-  std::string m_requestBody;
   std::string m_responseBody;
   mutable CHttpResponseRange m_responseRange;
 };
@@ -134,8 +132,8 @@ TEST_F(TestCurlHttpClientNetwork, PostEchoesBody)
 {
   XFILE::CCurlHttpClient client;
   std::string response;
-  ASSERT_TRUE(client.Post(Url("/post"), "test payload", response));
-  EXPECT_EQ(response, "test payload");
+  ASSERT_TRUE(client.Post(Url("/post"), "payload=test-payload", response));
+  EXPECT_EQ(response, "test-payload");
 }
 
 TEST_F(TestCurlHttpClientNetwork, GetViaFactoryInterface)
