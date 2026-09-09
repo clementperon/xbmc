@@ -17,7 +17,6 @@
 #include "utils/HttpRangeUtils.h"
 #include "utils/StringUtils.h"
 
-#include <random>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -100,19 +99,11 @@ private:
 class TestCurlHttpClientNetwork : public testing::Test
 {
 protected:
-  TestCurlHttpClientNetwork()
-  {
-    std::random_device rd;
-    std::mt19937 mt(rd());
-    std::uniform_int_distribution<uint16_t> dist(49152, 65535);
-    m_port = dist(mt);
-    m_baseUrl = StringUtils::Format("http://" WEBSERVER_HOST ":{}", m_port);
-  }
-
   void SetUp() override
   {
     CServiceBroker::RegisterDNSNameCache(std::make_shared<CDNSNameCache>());
-    m_webServer.Start(m_port, "", "");
+    ASSERT_TRUE(m_webServer.Start(0, "", ""));
+    m_baseUrl = StringUtils::Format("http://" WEBSERVER_HOST ":{}", m_webServer.GetPort());
     m_webServer.RegisterRequestHandler(&m_handler);
   }
 
@@ -128,7 +119,6 @@ protected:
 
   CWebServer m_webServer;
   CHTTPTestHandler m_handler;
-  uint16_t m_port{0};
   std::string m_baseUrl;
 };
 
