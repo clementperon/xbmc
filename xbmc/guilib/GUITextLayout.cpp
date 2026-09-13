@@ -692,9 +692,14 @@ void CGUITextLayout::WrapText(const vecText &text, float maxWidth)
       }
 
       // Try to include word without trailing break char
-      if (currentWidth + wordWidth <= maxWidth)
+      if (currentWidth + wordWidth <= maxWidth && breakPos != currentStart)
       {
-        m_lines.emplace_back(currentStart, breakPos, false);
+        // an ideograph right after a space: the line ends before that space
+        const auto emitEnd = current == breakPos && !IsSpace(*breakPos) &&
+                                     lastNonSpaceInLine > currentStart
+                                 ? lastNonSpaceInLine
+                                 : breakPos;
+        m_lines.emplace_back(currentStart, emitEnd, false);
         if (m_lines.size() >= nMaxLines)
           return;
 
@@ -723,13 +728,16 @@ void CGUITextLayout::WrapText(const vecText &text, float maxWidth)
         continue;
       }
 
-      if (current == breakPos)
+      if (current == breakPos && IsSpace(*current))
         break;
+
+      // a lone ideograph wider than maxWidth is the word itself
+      const auto wordEnd = current == breakPos ? std::next(breakPos) : breakPos;
 
       // current line is empty and word is too long: split by character using a safe linear scan.
       // Do not assume monotonic width because shaping/kerning can make width shrink or grow non-linearly.
       size_t bestCount = 0;
-      for (auto it = std::next(current); it < breakPos; ++it)
+      for (auto it = std::next(current); it < wordEnd; ++it)
       {
         if (m_font->GetTextWidth({current, it}) <= maxWidth)
           bestCount = std::distance(current, it);
