@@ -257,6 +257,7 @@ bool CGUITextureGLES::DrawQuads(const std::vector<Quad>& quads,
   glUniformMatrix4fv(m_renderSystem->GUIShaderGetGUIMatrix(), 1, GL_FALSE,
                      CMatrixGL(context.GetGUIMatrix()));
   glUniform1f(m_renderSystem->GUIShaderGetSnap(), 1.0f);
+  glUniform1f(m_renderSystem->GUIShaderGetSubpixel(), m_info.m_subpixel ? 1.0f : 0.0f);
 
   m_quadBuffer.Bind();
   const auto attribute = [](GLint location, std::size_t member)
