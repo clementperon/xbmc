@@ -176,6 +176,13 @@ bool CGLESShader::OnEnabled()
 
   glUniform1f(m_hBrightness, 0.0f);
   glUniform1f(m_hContrast, 1.0f);
+  // clang-format off
+  static constexpr GLfloat identity[16] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 1.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 1.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 1.0f};
+  // clang-format on
+  glUniformMatrix4fv(m_hGUIMatrix, 1, GL_FALSE, identity);
   glUniform1f(m_hSnap, 0.0f);
 
   // Default to straight-alpha math for all consumers; the one site that draws

@@ -37,13 +37,12 @@ uniform float m_snap;
 
 void main ()
 {
-  vec4 pos = m_attrpos;
+  vec4 pos = m_gui * m_attrpos;
   if (m_snap > 0.0)
   {
-    // Skin coordinates: apply the GUI transform and round to whole pixels. m_attrsnap holds the
-    // opposite corner of the quad, and z = 1 pushes this corner one pixel away from it if both
-    // round to the same row or column, so that thin quads never vanish.
-    pos = m_gui * m_attrpos;
+    // Round to whole pixels. m_attrsnap holds the opposite corner of the quad, and z = 1 pushes
+    // this corner one pixel away from it if both round to the same row or column, so that thin
+    // quads never vanish.
     pos.xyz = floor(pos.xyz + 0.5);
     vec2 opposite = floor((m_gui * vec4(m_attrsnap.xy, 0.0, 1.0)).xy + 0.5);
     pos.xy += vec2(equal(pos.xy, opposite)) * m_attrsnap.z;

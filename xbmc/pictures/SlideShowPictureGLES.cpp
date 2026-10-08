@@ -56,7 +56,7 @@ void CSlideShowPicGLES::Render(float* x,
   }
 
   GLubyte col[4];
-  GLfloat ver[4][3];
+  static constexpr GLfloat ver[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
   GLfloat tex[4][2];
   GLubyte idx[4] = {0, 1, 3, 2}; //determines order of triangle strip
 
@@ -78,24 +78,26 @@ void CSlideShowPicGLES::Render(float* x,
     col[2] = (235 - 16) * col[2] / 255 + 16;
   }
 
-  for (int i = 0; i < 4; i++)
-  {
-    // Setup vertex position values
-    ver[i][0] = x[i];
-    ver[i][1] = y[i];
-    ver[i][2] = 0.0f;
-  }
+  // The corners are always a transformed rectangle, so they are the image of the unit quad.
+  // clang-format off
+  const GLfloat matrix[16] = {x[1] - x[0], y[1] - y[0], 0.0f, 0.0f,
+                              x[3] - x[0], y[3] - y[0], 0.0f, 0.0f,
+                              0.0f,        0.0f,        1.0f, 0.0f,
+                              x[0],        y[0],        0.0f, 1.0f};
+  // clang-format on
+  glUniformMatrix4fv(renderSystem->GUIShaderGetGUIMatrix(), 1, GL_FALSE, matrix);
+
   // Setup texture coordinates
   tex[0][0] = tex[3][0] = u1;
   tex[0][1] = tex[1][1] = v1;
   tex[1][0] = tex[2][0] = u2;
   tex[2][1] = tex[3][1] = v2;
 
-  m_posVBO.SetData(ver, GL_STREAM_DRAW);
-  glVertexAttribPointer(posLoc, 3, GL_FLOAT, 0, 0, 0);
+  m_posVBO.SetDataOnce(ver);
+  glVertexAttribPointer(posLoc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(posLoc);
 
-  m_texVBO.SetData(tex, GL_STREAM_DRAW);
+  m_texVBO.SetDataIfChanged(tex);
   glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(tex0Loc);
 
