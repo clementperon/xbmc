@@ -517,11 +517,11 @@ void COverlayTextureGLES::Render(SRenderState& state)
   tex[1][0] = tex[2][0] = m_u;
   tex[2][1] = tex[3][1] = m_v;
 
-  m_posVBO.SetData(ver, GL_STREAM_DRAW);
+  m_posVBO.SetDataIfChanged(ver);
   glVertexAttribPointer(posLoc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(posLoc);
 
-  m_texVBO.SetData(tex, GL_STREAM_DRAW);
+  m_texVBO.SetDataIfChanged(tex);
   glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(tex0Loc);
 
