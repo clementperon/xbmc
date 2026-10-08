@@ -487,7 +487,7 @@ void CLinuxRendererGLES::ClearBackBufferQuad()
   glUniform4f(uniCol, 0.0f, 0.0f, 0.0f, 1.0f);
   glUniform1f(depthLoc, -1);
 
-  m_clearQuadVBO.SetData(vertices.data(), vertices.size(), GL_STREAM_DRAW);
+  m_clearQuadVBO.SetDataIfChanged(vertices.data(), vertices.size());
 
   glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, sizeof(Svertex), 0);
   glEnableVertexAttribArray(posLoc);
@@ -547,7 +547,7 @@ void CLinuxRendererGLES::DrawBlackBars()
   glUniform4f(uniCol, 0.0f, 0.0f, 0.0f, 1.0f);
   glUniform1f(depthLoc, -1);
 
-  m_blackBarsVBO.SetData(vertices.data(), vertices.size(), GL_STREAM_DRAW);
+  m_blackBarsVBO.SetDataIfChanged(vertices.data(), vertices.size());
 
   glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, sizeof(Svertex), 0);
   glEnableVertexAttribArray(posLoc);
@@ -1284,11 +1284,11 @@ void CLinuxRendererGLES::RenderSinglePass(int index, int field)
     m_tex[i][2][1] = m_tex[i][3][1] = planes[i].rect.y2;
   }
 
-  m_singlePassPosVBO.SetData(m_vert, GL_STREAM_DRAW);
+  m_singlePassPosVBO.SetDataIfChanged(m_vert);
   glVertexAttribPointer(vertLoc, 3, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(vertLoc);
 
-  m_singlePassTexVBO.SetData(m_tex, GL_STREAM_DRAW);
+  m_singlePassTexVBO.SetDataIfChanged(m_tex);
   glVertexAttribPointer(Yloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(0 * sizeof(m_tex[0])));
   glVertexAttribPointer(Uloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(1 * sizeof(m_tex[0])));
   glVertexAttribPointer(Vloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(2 * sizeof(m_tex[0])));
@@ -1462,11 +1462,11 @@ void CLinuxRendererGLES::RenderToFBO(int index, int field)
     tex[i][2][1] = tex[i][3][1] = planes[i].rect.y2;
   }
 
-  m_fboPosVBO.SetData(vert, GL_STREAM_DRAW);
+  m_fboPosVBO.SetDataIfChanged(vert);
   glVertexAttribPointer(vertLoc, 3, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(vertLoc);
 
-  m_fboTexVBO.SetData(tex, GL_STREAM_DRAW);
+  m_fboTexVBO.SetDataIfChanged(tex);
   glVertexAttribPointer(Yloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(0 * sizeof(tex[0])));
   glVertexAttribPointer(Uloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(1 * sizeof(tex[0])));
   glVertexAttribPointer(Vloc, 2, GL_FLOAT, 0, 0, reinterpret_cast<GLvoid*>(2 * sizeof(tex[0])));
@@ -1560,11 +1560,11 @@ void CLinuxRendererGLES::RenderFromFBO()
   tex[1][0] = tex[2][0] = imgwidth;
   tex[2][1] = tex[3][1] = imgheight;
 
-  m_fromFboPosVBO.SetData(vert, GL_STREAM_DRAW);
+  m_fromFboPosVBO.SetDataIfChanged(vert);
   glVertexAttribPointer(vertLoc, 3, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(vertLoc);
 
-  m_fromFboTexVBO.SetData(tex, GL_STREAM_DRAW);
+  m_fromFboTexVBO.SetDataIfChanged(tex);
   glVertexAttribPointer(loc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(loc);
 
