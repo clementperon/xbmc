@@ -37,6 +37,9 @@ public:
   GLint GetMatrixLoc() { return m_hMatrix; }
   GLint GetShaderClipLoc() { return m_hShaderClip; }
   GLint GetShaderCoordStepLoc() { return m_hCoordStep; }
+  GLint GetGUIMatrixLoc() { return m_hGUIMatrix; }
+  GLint GetSnapLoc() { return m_hSnap; }
+  GLint GetAttrSnapLoc() { return m_hAttrSnap; }
   bool HardwareClipIsPossible() { return m_clipPossible; }
   GLfloat GetClipXFactor() { return m_clipXFactor; }
   GLfloat GetClipXOffset() { return m_clipXOffset; }
@@ -63,6 +66,9 @@ protected:
   GLint m_hBrightness = 0;
   GLint m_hDepth = 0;
   GLint m_hPma = 0;
+  GLint m_hGUIMatrix{-1};
+  GLint m_hSnap{-1};
+  GLint m_hAttrSnap{-1};
 
   const GLfloat *m_proj;
   const GLfloat *m_model;

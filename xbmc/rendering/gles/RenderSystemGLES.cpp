@@ -788,6 +788,30 @@ GLint CRenderSystemGLES::GUIShaderGetPma()
   return -1;
 }
 
+GLint CRenderSystemGLES::GUIShaderGetGUIMatrix()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetGUIMatrixLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetSnap()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetSnapLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetAttrSnap()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetAttrSnapLoc();
+
+  return -1;
+}
+
 GLint CRenderSystemGLES::GUIShaderGetUniCol()
 {
   if (m_pShader[m_method])

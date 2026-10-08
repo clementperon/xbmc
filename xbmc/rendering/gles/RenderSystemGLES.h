@@ -150,6 +150,9 @@ public:
   GLint GUIShaderGetCoordStep();
   GLint GUIShaderGetDepth();
   GLint GUIShaderGetPma();
+  GLint GUIShaderGetGUIMatrix();
+  GLint GUIShaderGetSnap();
+  GLint GUIShaderGetAttrSnap();
 
   // Shared by all CGUITextureGLES batches, which lay out every quad as 0,1,2 2,3,0.
   template<typename T>

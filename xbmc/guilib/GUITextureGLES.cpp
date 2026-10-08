@@ -12,6 +12,7 @@
 #include "ServiceBroker.h"
 #include "Texture.h"
 #include "guilib/TextureFormats.h"
+#include "rendering/MatrixGL.h"
 #include "rendering/gles/RenderSystemGLES.h"
 #include "utils/GLUtils.h"
 #include "utils/MathUtils.h"
@@ -44,9 +45,35 @@ CGUITextureGLES::CGUITextureGLES(
   m_isGLES20 = !m_renderSystem->SupportsTextureSwizzle();
 }
 
+CGUITextureGLES::CGUITextureGLES(const CGUITextureGLES& texture)
+  : CGUITexture(texture),
+    m_renderSystem(texture.m_renderSystem),
+    m_isGLES20(texture.m_isGLES20)
+{
+}
+
 CGUITextureGLES* CGUITextureGLES::Clone() const
 {
   return new CGUITextureGLES(*this);
+}
+
+namespace
+{
+// Texture coordinates for the corners of a quad, clockwise from the top left.
+std::array<CPoint, 4> TexCoordCorners(const CRect& rect, bool swapXY)
+{
+  if (swapXY)
+    return {{{rect.x1, rect.y1}, {rect.x1, rect.y2}, {rect.x2, rect.y2}, {rect.x2, rect.y1}}};
+
+  return {{{rect.x1, rect.y1}, {rect.x2, rect.y1}, {rect.x2, rect.y2}, {rect.x1, rect.y2}}};
+}
+} // namespace
+
+void CGUITextureGLES::Free()
+{
+  m_quadBuffer.Destroy();
+  m_quadBufferVersion = 0;
+  m_quadCount = 0;
 }
 
 void CGUITextureGLES::Begin(KODI::UTILS::COLOR::Color color)
@@ -140,6 +167,15 @@ void CGUITextureGLES::Begin(KODI::UTILS::COLOR::Color color)
     glDisable(GL_BLEND);
   }
 
+  GLint uniColLoc = m_renderSystem->GUIShaderGetUniCol();
+  if (uniColLoc >= 0)
+  {
+    glUniform4f(uniColLoc, (m_col[0] / 255.0f), (m_col[1] / 255.0f), (m_col[2] / 255.0f),
+                (m_col[3] / 255.0f));
+  }
+
+  glUniform1f(m_renderSystem->GUIShaderGetDepth(), m_depth);
+
   m_packedVertices.clear();
 }
 
@@ -150,15 +186,6 @@ void CGUITextureGLES::End()
     GLint posLoc  = m_renderSystem->GUIShaderGetPos();
     GLint tex0Loc = m_renderSystem->GUIShaderGetCoord0();
     GLint tex1Loc = m_renderSystem->GUIShaderGetCoord1();
-    GLint uniColLoc = m_renderSystem->GUIShaderGetUniCol();
-    GLint depthLoc = m_renderSystem->GUIShaderGetDepth();
-
-    if(uniColLoc >= 0)
-    {
-      glUniform4f(uniColLoc,(m_col[0] / 255.0f), (m_col[1] / 255.0f), (m_col[2] / 255.0f), (m_col[3] / 255.0f));
-    }
-
-    glUniform1f(depthLoc, m_depth);
 
     m_renderSystem->StreamGUIVertices(m_packedVertices);
     m_renderSystem->BindGUIQuadIndices(m_packedVertices.size() / 4);
@@ -202,79 +229,127 @@ void CGUITextureGLES::Draw(float *x, float *y, float *z, const CRect &texture, c
 {
   PackedVertex vertices[4];
 
-  // Setup texture coordinates
-  // TopLeft
-  vertices[0].u1 = texture.x1;
-  vertices[0].v1 = texture.y1;
-
-  // TopRight
-  if (orientation & 4)
+  const std::array<CPoint, 4> texCoords = TexCoordCorners(texture, orientation & 4);
+  const std::array<CPoint, 4> diffuseCoords = TexCoordCorners(diffuse, m_info.orientation & 4);
+  for (int i = 0; i < 4; i++)
   {
-    vertices[1].u1 = texture.x1;
-    vertices[1].v1 = texture.y2;
-  }
-  else
-  {
-    vertices[1].u1 = texture.x2;
-    vertices[1].v1 = texture.y1;
-  }
-
-  // BottomRight
-  vertices[2].u1 = texture.x2;
-  vertices[2].v1 = texture.y2;
-
-  // BottomLeft
-  if (orientation & 4)
-  {
-    vertices[3].u1 = texture.x2;
-    vertices[3].v1 = texture.y1;
-  }
-  else
-  {
-    vertices[3].u1 = texture.x1;
-    vertices[3].v1 = texture.y2;
-  }
-
-  if (m_diffuse.size())
-  {
-    // TopLeft
-    vertices[0].u2 = diffuse.x1;
-    vertices[0].v2 = diffuse.y1;
-
-    // TopRight
-    if (m_info.orientation & 4)
+    vertices[i].u1 = texCoords[i].x;
+    vertices[i].v1 = texCoords[i].y;
+    if (m_diffuse.size())
     {
-      vertices[1].u2 = diffuse.x1;
-      vertices[1].v2 = diffuse.y2;
+      vertices[i].u2 = diffuseCoords[i].x;
+      vertices[i].v2 = diffuseCoords[i].y;
     }
-    else
-    {
-      vertices[1].u2 = diffuse.x2;
-      vertices[1].v2 = diffuse.y1;
-    }
-
-    // BottomRight
-    vertices[2].u2 = diffuse.x2;
-    vertices[2].v2 = diffuse.y2;
-
-    // BottomLeft
-    if (m_info.orientation & 4)
-    {
-      vertices[3].u2 = diffuse.x2;
-      vertices[3].v2 = diffuse.y1;
-    }
-    else
-    {
-      vertices[3].u2 = diffuse.x1;
-      vertices[3].v2 = diffuse.y2;
-    }
-  }
-
-  for (int i=0; i<4; i++)
-  {
     vertices[i].x = x[i];
     vertices[i].y = y[i];
     vertices[i].z = z[i];
     m_packedVertices.push_back(vertices[i]);
   }
+}
+
+bool CGUITextureGLES::DrawQuads(const std::vector<Quad>& quads, unsigned int version)
+{
+  CGraphicContext& context = CServiceBroker::GetWinSystem()->GetGfxContext();
+  const bool clip = context.HasClipRegion();
+  if (clip && !m_renderSystem->ScissorsCanEffectClipping())
+    return false;
+
+  if (m_quadBufferVersion != version)
+  {
+    const std::size_t count = quads.size();
+    if (count > 0)
+    {
+      const int orientation = GetOrientation();
+      std::vector<QuadVertex> vertices;
+      vertices.reserve(count * 4);
+      for (const Quad& quad : quads)
+      {
+        const CRect& rect = quad.vertex;
+        const std::array<CPoint, 4> corners{
+            {{rect.x1, rect.y1}, {rect.x2, rect.y1}, {rect.x2, rect.y2}, {rect.x1, rect.y2}}};
+        const std::array<CPoint, 4> texCoords = TexCoordCorners(quad.texture, orientation & 4);
+        const std::array<CPoint, 4> diffuseCoords =
+            TexCoordCorners(quad.diffuse, m_info.orientation & 4);
+        for (std::size_t i = 0; i < 4; i++)
+        {
+          const CPoint& opposite = corners[(i + 2) % 4];
+          // CGUITexture::Render() pushes the bottom right and bottom left corners.
+          const float push = i >= 2 ? 1.0f : 0.0f;
+          vertices.push_back({corners[i].x, corners[i].y, opposite.x, opposite.y, push,
+                              texCoords[i].x, texCoords[i].y, diffuseCoords[i].x,
+                              diffuseCoords[i].y});
+        }
+      }
+      m_quadBuffer.SetData(vertices.data(), vertices.size(), GL_STATIC_DRAW);
+    }
+    m_quadBufferVersion = version;
+    m_quadCount = count;
+  }
+  else if (m_quadCount > 0)
+  {
+    m_quadBuffer.Bind();
+  }
+
+  if (m_quadCount == 0)
+    return true;
+
+  CRect scissor;
+  if (clip)
+  {
+    scissor = context.StereoCorrection(context.GetScissors());
+    CRect clipRect = m_renderSystem->ClipRectToScissorRect(context.GetClipRegion());
+    clipRect.Intersect(scissor);
+    if (clipRect.IsEmpty())
+    {
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      return true;
+    }
+    m_renderSystem->SetScissors(clipRect);
+  }
+
+  glUniformMatrix4fv(m_renderSystem->GUIShaderGetGUIMatrix(), 1, GL_FALSE,
+                     CMatrixGL(context.GetGUIMatrix()));
+  glUniform1f(m_renderSystem->GUIShaderGetSnap(), 1.0f);
+
+  GLint posLoc = m_renderSystem->GUIShaderGetPos();
+  GLint snapLoc = m_renderSystem->GUIShaderGetAttrSnap();
+  GLint tex0Loc = m_renderSystem->GUIShaderGetCoord0();
+  GLint tex1Loc = m_renderSystem->GUIShaderGetCoord1();
+
+  m_renderSystem->BindGUIQuadIndices(m_quadCount);
+
+  if (m_diffuse.size())
+  {
+    if (m_texture.m_textures[m_currentFrame]->GetSwizzle() == KD_TEX_SWIZ_111R)
+      std::swap(tex0Loc, tex1Loc);
+    glVertexAttribPointer(tex1Loc, 2, GL_FLOAT, 0, sizeof(QuadVertex),
+                          reinterpret_cast<GLvoid*>(offsetof(QuadVertex, u2)));
+    glEnableVertexAttribArray(tex1Loc);
+  }
+  glVertexAttribPointer(posLoc, 2, GL_FLOAT, 0, sizeof(QuadVertex),
+                        reinterpret_cast<GLvoid*>(offsetof(QuadVertex, x)));
+  glEnableVertexAttribArray(posLoc);
+  glVertexAttribPointer(snapLoc, 3, GL_FLOAT, 0, sizeof(QuadVertex),
+                        reinterpret_cast<GLvoid*>(offsetof(QuadVertex, oppositeX)));
+  glEnableVertexAttribArray(snapLoc);
+  glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, 0, sizeof(QuadVertex),
+                        reinterpret_cast<GLvoid*>(offsetof(QuadVertex, u1)));
+  glEnableVertexAttribArray(tex0Loc);
+
+  glDrawElements(GL_TRIANGLES, m_quadCount * 6, GL_UNSIGNED_SHORT, 0);
+  CRenderSystemBase::m_GUIElementCount++;
+
+  if (m_diffuse.size())
+    glDisableVertexAttribArray(tex1Loc);
+  glDisableVertexAttribArray(posLoc);
+  glDisableVertexAttribArray(snapLoc);
+  glDisableVertexAttribArray(tex0Loc);
+
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+  if (clip)
+    m_renderSystem->SetScissors(scissor);
+
+  return true;
 }
