@@ -112,6 +112,13 @@ protected:
     return size;
   }
 
+  static GLint BufferUsage(GLenum target)
+  {
+    GLint usage = 0;
+    glGetBufferParameteriv(target, GL_BUFFER_USAGE, &usage);
+    return usage;
+  }
+
   EGLDisplay m_display = EGL_NO_DISPLAY;
   EGLSurface m_surface = EGL_NO_SURFACE;
   EGLContext m_context = EGL_NO_CONTEXT;
@@ -200,4 +207,49 @@ TEST_F(TestGLBufferObject, DestructorDeletesBuffer)
     EXPECT_TRUE(glIsBuffer(name));
   }
   EXPECT_FALSE(glIsBuffer(name));
+}
+
+TEST_F(TestGLBufferObject, SetDataIfChangedSkipsIdenticalData)
+{
+  CGLBufferObject vbo{GL_ARRAY_BUFFER};
+  const GLfloat data[3] = {1.0f, 2.0f, 3.0f};
+
+  vbo.SetDataIfChanged(data);
+  const GLuint name = BoundBuffer(GL_ARRAY_BUFFER_BINDING);
+  EXPECT_EQ(BufferUsage(GL_ARRAY_BUFFER), GL_STATIC_DRAW);
+
+  // Respecify the store behind the object's back: a skipped upload leaves the usage alone.
+  glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_DYNAMIC_DRAW);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  vbo.SetDataIfChanged(data);
+  EXPECT_EQ(BoundBuffer(GL_ARRAY_BUFFER_BINDING), name);
+  EXPECT_EQ(BufferUsage(GL_ARRAY_BUFFER), GL_DYNAMIC_DRAW);
+}
+
+TEST_F(TestGLBufferObject, SetDataIfChangedUploadsChangedData)
+{
+  CGLBufferObject vbo{GL_ARRAY_BUFFER};
+  const GLfloat first[3] = {1.0f, 2.0f, 3.0f};
+  const GLfloat second[3] = {1.0f, 2.0f, 4.0f};
+  const GLfloat longer[4] = {1.0f, 2.0f, 4.0f, 5.0f};
+
+  vbo.SetDataIfChanged(first);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(first), first, GL_DYNAMIC_DRAW);
+  vbo.SetDataIfChanged(second);
+  EXPECT_EQ(BufferUsage(GL_ARRAY_BUFFER), GL_STATIC_DRAW);
+
+  vbo.SetDataIfChanged(longer);
+  EXPECT_EQ(BufferSize(GL_ARRAY_BUFFER), static_cast<GLint>(sizeof(longer)));
+}
+
+TEST_F(TestGLBufferObject, SetDataIfChangedUploadsAfterSetData)
+{
+  CGLBufferObject vbo{GL_ARRAY_BUFFER};
+  const GLfloat data[3] = {1.0f, 2.0f, 3.0f};
+
+  vbo.SetDataIfChanged(data);
+  vbo.SetData(data, GL_DYNAMIC_DRAW);
+  vbo.SetDataIfChanged(data);
+  EXPECT_EQ(BufferUsage(GL_ARRAY_BUFFER), GL_STATIC_DRAW);
 }

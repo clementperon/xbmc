@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "system_gl.h"
 
@@ -20,10 +21,11 @@ namespace GL
 {
 
 // Owns one GL buffer object, bound to `target` for its whole life and created lazily on the first
-// SetData()/SetDataOnce() -- construction performs no GL calls, so instances can be constructed
-// before any GL context exists. All other methods require a current GL context; if this object may
-// outlive the context, call Destroy() while the context is still valid instead of relying on the
-// destructor. SetData()/SetDataOnce()/Bind() all leave the buffer bound to its target.
+// SetData()/SetDataOnce()/SetDataIfChanged() -- construction performs no GL calls, so instances can
+// be constructed before any GL context exists. All other methods require a current GL context; if
+// this object may outlive the context, call Destroy() while the context is still valid instead of
+// relying on the destructor. All the SetData variants and Bind() leave the buffer bound to its
+// target.
 class CGLBufferObject
 {
 public:
@@ -58,6 +60,19 @@ public:
     SetDataOnce(static_cast<const void*>(data), N * sizeof(T));
   }
 
+  // Uploads `data` (GL_STATIC_DRAW) only if it differs from what the last call uploaded; otherwise
+  // just binds. For data that is rebuilt every frame but rarely changes.
+  template<typename T>
+  void SetDataIfChanged(const T* data, std::size_t count)
+  {
+    SetDataIfChanged(static_cast<const void*>(data), count * sizeof(T));
+  }
+  template<typename T, std::size_t N>
+  void SetDataIfChanged(const T (&data)[N])
+  {
+    SetDataIfChanged(static_cast<const void*>(data), N * sizeof(T));
+  }
+
   // Binds the buffer; it must already hold data from an earlier SetData()/SetDataOnce().
   void Bind() const;
 
@@ -70,9 +85,11 @@ public:
 private:
   void SetData(const void* data, std::size_t size, GLenum usage);
   void SetDataOnce(const void* data, std::size_t size);
+  void SetDataIfChanged(const void* data, std::size_t size);
 
   GLenum m_target;
   GLuint m_buffer = 0;
+  std::vector<std::byte> m_contents; // last SetDataIfChanged() upload
 };
 
 } // namespace GL
