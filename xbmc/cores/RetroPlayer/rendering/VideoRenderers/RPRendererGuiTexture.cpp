@@ -277,11 +277,11 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
   tex[1][0] = tex[2][0] = u2;
   tex[2][1] = tex[3][1] = v2;
 
-  m_posVBO.SetData(ver, GL_STREAM_DRAW);
+  m_posVBO.SetDataIfChanged(ver);
   glVertexAttribPointer(posLoc, 3, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(posLoc);
 
-  m_texVBO.SetData(tex, GL_STREAM_DRAW);
+  m_texVBO.SetDataIfChanged(tex);
   glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, 0, 0, 0);
   glEnableVertexAttribArray(tex0Loc);
 
