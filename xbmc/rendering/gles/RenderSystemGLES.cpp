@@ -849,14 +849,6 @@ GLint CRenderSystemGLES::GUIShaderGetSnap()
   return -1;
 }
 
-GLint CRenderSystemGLES::GUIShaderGetSubpixel()
-{
-  if (m_pShader[m_method])
-    return m_pShader[m_method]->GetSubpixelLoc();
-
-  return -1;
-}
-
 GLint CRenderSystemGLES::GUIShaderGetAttrSnap()
 {
   if (m_pShader[m_method])

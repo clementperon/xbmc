@@ -60,7 +60,6 @@ void CGLESShader::OnCompiledAndLinked()
   m_hPma = glGetUniformLocation(ProgramHandle(), "m_pma");
   m_hGUIMatrix = glGetUniformLocation(ProgramHandle(), "m_gui");
   m_hSnap = glGetUniformLocation(ProgramHandle(), "m_snap");
-  m_hSubpixel = glGetUniformLocation(ProgramHandle(), "m_subpixel");
   m_hQuadRect = glGetUniformLocation(ProgramHandle(), "m_quadRect");
   m_hQuadClip = glGetUniformLocation(ProgramHandle(), "m_quadClip");
   m_hTexSwap = glGetUniformLocation(ProgramHandle(), "m_texSwap");

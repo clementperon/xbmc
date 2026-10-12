@@ -151,7 +151,6 @@ public:
   GLint GUIShaderGetPma();
   GLint GUIShaderGetGUIMatrix();
   GLint GUIShaderGetSnap();
-  GLint GUIShaderGetSubpixel();
   GLint GUIShaderGetAttrSnap();
   GLint GUIShaderGetQuadRect();
   GLint GUIShaderGetQuadClip();

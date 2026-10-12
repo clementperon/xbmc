@@ -33,7 +33,6 @@ uniform mat4 m_coord0Matrix;
 uniform float m_depth;
 uniform mat4 m_gui;
 uniform float m_snap;
-uniform float m_subpixel;
 uniform vec4 m_quadRect;
 uniform vec4 m_quadClip;
 uniform vec2 m_texSwap;
@@ -58,13 +57,13 @@ void main ()
     cord0 = vec4(m_attrcord0.xy + (m_texSwap.x > 0.0 ? t.yx : t) * (m_attrcord0.zw - m_attrcord0.xy), 0.0, 1.0);
     cord1 = vec4(m_attrcord1.xy + (m_texSwap.y > 0.0 ? t.yx : t) * (m_attrcord1.zw - m_attrcord1.xy), 0.0, 1.0);
 
-    // Round to whole pixels, unless the texture keeps subpixel positions (then only the depth is
-    // rounded). A bottom corner is pushed one pixel away from the opposite corner if both land on
-    // the same row or column, so that thin quads never vanish.
+    // Round to whole pixels, unless m_snap is 2 for a texture that keeps subpixel positions (then
+    // only the depth is rounded). A bottom corner is pushed one pixel away from the opposite corner
+    // if both land on the same row or column, so that thin quads never vanish.
     float push = (p.y > q.y && all(notEqual(pc, qc))) ? 1.0 : 0.0;
     pos = m_gui * vec4(pc, 0.0, 1.0);
     vec2 opposite = (m_gui * vec4(qc, 0.0, 1.0)).xy;
-    if (m_subpixel == 0.0)
+    if (m_snap < 1.5)
     {
       pos.xy = floor(pos.xy + 0.5);
       opposite = floor(opposite + 0.5);

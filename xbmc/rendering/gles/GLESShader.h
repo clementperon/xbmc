@@ -38,7 +38,6 @@ public:
   GLint GetShaderCoordStepLoc() { return m_hCoordStep; }
   GLint GetGUIMatrixLoc() { return m_hGUIMatrix; }
   GLint GetSnapLoc() { return m_hSnap; }
-  GLint GetSubpixelLoc() { return m_hSubpixel; }
   GLint GetAttrSnapLoc() { return m_hAttrSnap; }
   GLint GetQuadRectLoc() { return m_hQuadRect; }
   GLint GetQuadClipLoc() { return m_hQuadClip; }
@@ -69,7 +68,6 @@ protected:
   GLint m_hPma = 0;
   GLint m_hGUIMatrix{-1};
   GLint m_hSnap{-1};
-  GLint m_hSubpixel{-1};
   GLint m_hAttrSnap{-1};
   GLint m_hQuadRect{-1};
   GLint m_hQuadClip{-1};
