@@ -20,6 +20,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <utility>
 
 CreateGUITextureFunc CGUITexture::m_createGUITextureFunc;
 DrawQuadFunc CGUITexture::m_drawQuadFunc;
@@ -174,6 +175,9 @@ bool CGUITexture::Process(unsigned int currentTime)
   if (m_invalid)
     changed |= CalculateSize();
 
+  // redraw once more after motion stops, so that the texture settles on whole pixels
+  changed |= std::exchange(m_moving, false);
+
   if (m_isAllocated)
   {
     // Only report change on ready state transition, not every frame while loading
@@ -227,6 +231,17 @@ void CGUITexture::Render(int32_t depthOffset, int32_t overrideDepth)
     return;
   if (!hasAlpha && renderOrder == RENDER_ORDER_BACK_TO_FRONT)
     return;
+
+  if (m_info.m_subpixel)
+  {
+    const CGraphicContext& context = CServiceBroker::GetWinSystem()->GetGfxContext();
+    const CRect screen(context.ScaleFinalXCoord(m_vertex.x1, m_vertex.y1),
+                       context.ScaleFinalYCoord(m_vertex.x1, m_vertex.y1),
+                       context.ScaleFinalXCoord(m_vertex.x2, m_vertex.y2),
+                       context.ScaleFinalYCoord(m_vertex.x2, m_vertex.y2));
+    m_moving = screen != m_lastScreenRect;
+    m_lastScreenRect = screen;
+  }
 
   // see if we need to clip the image
   if (m_vertex.Width() > m_width || m_vertex.Height() > m_height)
@@ -353,13 +368,6 @@ void CGUITexture::UpdateSegments()
   }
 }
 
-float CGUITexture::SnapToPixel(float coord, bool subpixel)
-{
-  if (subpixel)
-    return coord;
-  return static_cast<float>(MathUtils::round_int(static_cast<double>(coord)));
-}
-
 void CGUITexture::Render(const Segment& segment)
 {
   CRect diffuse(segment.texture);
@@ -375,22 +383,22 @@ void CGUITexture::Render(const Segment& segment)
 
   float x[4], y[4], z[4];
 
-#define ROUND_TO_PIXEL(x) SnapToPixel((x), m_info.m_subpixel)
-#define ROUND_DEPTH(x) SnapToPixel((x), false)
+#define ROUND(x) static_cast<float>(MathUtils::round_int(static_cast<double>(x)))
+#define ROUND_TO_PIXEL(x) (m_moving ? (x) : ROUND(x))
 
   // clang-format off
   x[0] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalXCoord(vertex.x1, vertex.y1));
   y[0] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalYCoord(vertex.x1, vertex.y1));
-  z[0] = ROUND_DEPTH(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x1, vertex.y1));
+  z[0] = ROUND(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x1, vertex.y1));
   x[1] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalXCoord(vertex.x2, vertex.y1));
   y[1] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalYCoord(vertex.x2, vertex.y1));
-  z[1] = ROUND_DEPTH(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x2, vertex.y1));
+  z[1] = ROUND(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x2, vertex.y1));
   x[2] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalXCoord(vertex.x2, vertex.y2));
   y[2] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalYCoord(vertex.x2, vertex.y2));
-  z[2] = ROUND_DEPTH(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x2, vertex.y2));
+  z[2] = ROUND(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x2, vertex.y2));
   x[3] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalXCoord(vertex.x1, vertex.y2));
   y[3] = ROUND_TO_PIXEL(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalYCoord(vertex.x1, vertex.y2));
-  z[3] = ROUND_DEPTH(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x1, vertex.y2));
+  z[3] = ROUND(CServiceBroker::GetWinSystem()->GetGfxContext().ScaleFinalZCoord(vertex.x1, vertex.y2));
   // clang-format on
 
   if (y[2] == y[0]) y[2] += 1.0f;

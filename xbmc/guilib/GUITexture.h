@@ -45,7 +45,7 @@ public:
   CRect      border;          // scaled  - unneeded if we get rid of scale on load
   bool m_infill{
       true}; // if false, the main body of a texture is not drawn. useful for borders with no inner filling
-  bool m_subpixel{false}; // if true, corners are not snapped to whole pixels, for smooth motion
+  bool m_subpixel{false}; // if true, corners are not snapped to whole pixels while moving
   int        orientation;     // orientation of the texture (0 - 7 == EXIForientation - 1)
   std::string diffuse;         // diffuse overlay texture
   KODI::GUILIB::GUIINFO::CGUIInfoColor diffuseColor; // diffuse color
@@ -75,13 +75,6 @@ public:
   static CGUITexture* CreateTexture(
       float posX, float posY, float width, float height, const CTextureInfo& texture);
   virtual CGUITexture* Clone() const = 0;
-
-  /*! \brief Screen coordinate of a texture corner.
-   \param coord the unsnapped screen coordinate
-   \param subpixel whether the texture keeps its fractional position
-   \return coord rounded to a whole pixel, or unchanged if subpixel
-   */
-  static float SnapToPixel(float coord, bool subpixel);
 
   static void DrawQuad(const CRect& coords,
                        KODI::UTILS::COLOR::Color color,
@@ -209,6 +202,8 @@ protected:
   bool m_invalid;       // if true, we need to recalculate
   bool m_use_cache;
   std::optional<bool> m_lastReadyState; // cached ready state for change detection
+  CRect m_lastScreenRect; // unsnapped screen rect of the last render, for subpixel textures
+  bool m_moving{false};
   unsigned char m_alpha;
 
   float m_frameWidth, m_frameHeight;          // size in pixels of the actual frame within the texture
