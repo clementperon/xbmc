@@ -127,6 +127,10 @@ void CGUITextBox::DoProcess(unsigned int currentTime, CDirtyRegionList &dirtyreg
 
 void CGUITextBox::Process(unsigned int currentTime, CDirtyRegionList &dirtyregions)
 {
+  // redraw once more after motion stops, so that the text settles on whole pixels
+  if (ResetMoving())
+    MarkDirtyRegion();
+
   // update our auto-scrolling as necessary
   if (m_autoScrollTime && m_lines.size() > m_itemsPerPage)
   {
@@ -236,6 +240,7 @@ void CGUITextBox::Render()
 
     if (m_font)
     {
+      const bool snap = SnapToPixels(m_posX, m_posY);
       m_font->Begin();
       int current = offset;
 
@@ -252,7 +257,7 @@ void CGUITextBox::Render()
           align &= ~XBFONT_JUSTIFIED; // last line of a paragraph shouldn't be justified
 
         m_font->DrawVScrollingText(posX, posY, m_colors, m_label.shadowColor, lineString.m_text,
-                                   align, m_width, m_scrollSpeed != 0.0f);
+                                   align, m_width, m_scrollSpeed != 0.0f, snap);
         posY += m_itemHeight;
         current++;
       }

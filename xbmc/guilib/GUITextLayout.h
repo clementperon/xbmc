@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/ColorUtils.h"
+#include "utils/Geometry.h"
 
 #include <stdint.h>
 #include <string>
@@ -135,6 +136,11 @@ public:
    */
   void SetFont(CGUIFont* font);
 
+  /*! \brief Clear the motion state of the last render
+   \return true if the text moved on screen, so that its owner redraws it once more on whole pixels
+   */
+  bool ResetMoving();
+
   static void DrawText(CGUIFont* font,
                        float x,
                        float y,
@@ -153,6 +159,11 @@ protected:
                                int* visualToLogicalMap = nullptr);
   void CalcTextExtent();
   void UpdateCommon(const std::wstring &text, float maxWidth, bool forceLTRReadingOrder);
+
+  /*! \brief Track the screen position of the text origin between renders
+   \return true if the text is still and should be drawn on whole pixels
+   */
+  bool SnapToPixels(float x, float y);
 
   /*! \brief Returns the text, utf8 encoded
    \return utf8 text
@@ -186,6 +197,9 @@ protected:
   bool        m_lastUpdateW; ///< true if the last string we updated was the wstring version
   float m_textWidth;
   float m_textHeight;
+  CPoint m_lastScreenPos;
+  bool m_moving{false};
+
 private:
   inline bool IsSpace(character_t letter) const XBMC_FORCE_INLINE
   {

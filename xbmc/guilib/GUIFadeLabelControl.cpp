@@ -78,6 +78,10 @@ void CGUIFadeLabelControl::Process(unsigned int currentTime, CDirtyRegionList &d
   if (m_currentLabel >= m_infoLabels.size() )
     m_currentLabel = 0;
 
+  // redraw once more after motion stops, so that the text settles on whole pixels
+  if (m_textLayout.ResetMoving())
+    MarkDirtyRegion();
+
   if (m_textLayout.Update(GetLabel()))
   { // changed label - update our suffix based on length of available text
     float width, height;

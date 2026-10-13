@@ -371,6 +371,7 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
                                    float maxPixelWidth,
                                    bool hScrolling,
                                    bool vScrolling,
+                                   bool snap,
                                    float dx,
                                    float dy)
 {
@@ -384,9 +385,9 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
   bool dirtyCache(false);
 
   // round coordinates to the pixel grid. otherwise, we might sample at the wrong positions.
-  if (!hScrolling)
+  if (snap && !hScrolling)
     x = std::round(x);
-  if (!vScrolling)
+  if (snap && !vScrolling)
     y = std::round(y);
 
   // GL, GLES and DX can scissor and shader clip
@@ -689,7 +690,7 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
                                 hScrolling, std::chrono::steady_clock::now(), dirtyCache);
       CVertexBuffer newVertexBuffer = CreateVertexBuffer(*tempVertices);
       vertexBuffer = newVertexBuffer;
-      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), dx, dy);
+      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), snap, dx, dy);
     }
     else
     {
@@ -703,7 +704,7 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
   else
   {
     if (hardwareClipping)
-      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), dx, dy);
+      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), snap, dx, dy);
     else
       /* Append the vertices from the cache to the set collected since the first Begin() call */
       m_vertex.insert(m_vertex.end(), vertices->begin(), vertices->end());

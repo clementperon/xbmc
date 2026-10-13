@@ -23,6 +23,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <utility>
 
 CGUIString::CGUIString(iString start, iString end, bool carriageReturn)
 {
@@ -82,6 +83,8 @@ void CGUITextLayout::Render(float x,
   if (!m_colors.empty())
     m_colors[0] = color;
 
+  const bool snap = SnapToPixels(x, y);
+
   // render the text at the required location, angle, and size
   if (angle)
   {
@@ -101,14 +104,28 @@ void CGUITextLayout::Render(float x,
     if (align & XBFONT_JUSTIFIED && string.m_carriageReturn)
       align &= ~XBFONT_JUSTIFIED;
     if (solid)
-      m_font->DrawText(x, y, m_colors[0], shadowColor, string.m_text, align, maxWidth);
+      m_font->DrawText(x, y, m_colors[0], shadowColor, string.m_text, align, maxWidth, snap);
     else
-      m_font->DrawText(x, y, m_colors, shadowColor, string.m_text, align, maxWidth);
+      m_font->DrawText(x, y, m_colors, shadowColor, string.m_text, align, maxWidth, snap);
     y += m_font->GetLineHeight();
   }
   m_font->End();
   if (angle)
     CServiceBroker::GetWinSystem()->GetGfxContext().RemoveTransform();
+}
+
+bool CGUITextLayout::ResetMoving()
+{
+  return std::exchange(m_moving, false);
+}
+
+bool CGUITextLayout::SnapToPixels(float x, float y)
+{
+  const CGraphicContext& context = CServiceBroker::GetWinSystem()->GetGfxContext();
+  const CPoint screen(context.ScaleFinalXCoord(x, y), context.ScaleFinalYCoord(x, y));
+  m_moving = screen != m_lastScreenPos;
+  m_lastScreenPos = screen;
+  return !m_moving;
 }
 
 bool CGUITextLayout::UpdateScrollinfo(CScrollInfo &scrollInfo)
@@ -137,6 +154,8 @@ void CGUITextLayout::RenderScrolling(float x,
   if (!m_colors.empty())
     m_colors[0] = color;
 
+  const bool snap = SnapToPixels(x, y);
+
   // render the text at the required location, angle, and size
   if (angle)
   {
@@ -158,7 +177,8 @@ void CGUITextLayout::RenderScrolling(float x,
   //       though, so this hack is probably OK.
   for (const auto& string : m_lines)
   {
-    m_font->DrawScrollingText(x, y, m_colors, shadowColor, string.m_text, alignment, maxWidth, scrollInfo);
+    m_font->DrawScrollingText(x, y, m_colors, shadowColor, string.m_text, alignment, maxWidth,
+                              scrollInfo, snap);
     y += m_font->GetLineHeight();
   }
   m_font->End();

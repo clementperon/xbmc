@@ -166,6 +166,7 @@ protected:
                         float maxPixelWidth,
                         bool hScrolling,
                         bool vScrolling,
+                        bool snap,
                         float dx = 0.0f,
                         float dy = 0.0f);
 
@@ -245,11 +246,13 @@ protected:
     float m_offsetY;
     const CVertexBuffer* m_vertexBuffer;
     CRect m_clip;
+    bool m_snap; // align the text origin to whole screen pixels
     CTranslatedVertices(float translateX,
                         float translateY,
                         float translateZ,
                         const CVertexBuffer* vertexBuffer,
                         const CRect& clip,
+                        bool snap,
                         float offsetX = 0.0f,
                         float offsetY = 0.0f)
       : m_translateX(translateX),
@@ -258,7 +261,8 @@ protected:
         m_offsetX(offsetX),
         m_offsetY(offsetY),
         m_vertexBuffer(vertexBuffer),
-        m_clip(clip)
+        m_clip(clip),
+        m_snap(snap)
     {
     }
   };

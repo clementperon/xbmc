@@ -128,9 +128,10 @@ public:
                 KODI::UTILS::COLOR::Color shadowColor,
                 std::span<const character_t> text,
                 uint32_t alignment,
-                float maxPixelWidth)
+                float maxPixelWidth,
+                bool snap = true)
   {
-    DrawText(x, y, std::span(&color, 1), shadowColor, text, alignment, maxPixelWidth);
+    DrawText(x, y, std::span(&color, 1), shadowColor, text, alignment, maxPixelWidth, snap);
   };
 
   void DrawText(float x,
@@ -139,9 +140,10 @@ public:
                 KODI::UTILS::COLOR::Color shadowColor,
                 std::span<const character_t> text,
                 uint32_t alignment,
-                float maxPixelWidth)
+                float maxPixelWidth,
+                bool snap = true)
   {
-    DrawTextInternal(x, y, colors, shadowColor, text, alignment, maxPixelWidth, false);
+    DrawTextInternal(x, y, colors, shadowColor, text, alignment, maxPixelWidth, false, snap);
   }
 
   void DrawScrollingText(float x,
@@ -151,7 +153,8 @@ public:
                          std::span<const character_t> text,
                          uint32_t alignment,
                          float maxPixelWidth,
-                         const CScrollInfo& scrollInfo);
+                         const CScrollInfo& scrollInfo,
+                         bool snap = true);
 
   void DrawVScrollingText(float x,
                           float y,
@@ -160,9 +163,10 @@ public:
                           std::span<const character_t> text,
                           uint32_t alignment,
                           float maxPixelWidth,
-                          bool isScrolling)
+                          bool isScrolling,
+                          bool snap = true)
   {
-    DrawTextInternal(x, y, colors, shadowColor, text, alignment, maxPixelWidth, isScrolling);
+    DrawTextInternal(x, y, colors, shadowColor, text, alignment, maxPixelWidth, isScrolling, snap);
   }
 
   bool UpdateScrollInfo(std::span<const character_t> text, CScrollInfo& scrollInfo);
@@ -205,5 +209,6 @@ private:
                         std::span<const character_t> text,
                         uint32_t alignment,
                         float maxPixelWidth,
-                        bool isVScrolling);
+                        bool isVScrolling,
+                        bool snap);
 };

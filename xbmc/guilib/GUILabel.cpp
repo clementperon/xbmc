@@ -97,6 +97,9 @@ bool CGUILabel::Process(unsigned int currentTime)
 {
   //! @todo Add the correct processing
 
+  // redraw once more after motion stops, so that the text settles on whole pixels
+  const bool moved = m_textLayout.ResetMoving();
+
   bool overFlows = (m_renderRect.Width() + 0.5f < m_textLayout.GetTextWidth()); // 0.5f to deal with floating point rounding issues
   bool renderSolid = (m_color == COLOR_DISABLED);
 
@@ -105,10 +108,10 @@ bool CGUILabel::Process(unsigned int currentTime)
     if (m_maxScrollLoops < m_scrollInfo.m_loopCount)
       SetScrolling(false);
     else
-      return m_textLayout.UpdateScrollinfo(m_scrollInfo);
+      return m_textLayout.UpdateScrollinfo(m_scrollInfo) || moved;
   }
 
-  return false;
+  return moved;
 }
 
 void CGUILabel::Render()

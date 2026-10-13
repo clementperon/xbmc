@@ -187,12 +187,17 @@ void CGUIFontTTFDX::LastEnd()
     }
 
     // calculate the fractional offset to the ideal position
-    float fractX =
-        context.ScaleFinalXCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
-    float fractY =
-        context.ScaleFinalYCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
-    fractX = -fractX + std::round(fractX);
-    fractY = -fractY + std::round(fractY);
+    float fractX = 0.0f;
+    float fractY = 0.0f;
+    if (m_vertexTrans[i].m_snap)
+    {
+      fractX =
+          context.ScaleFinalXCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
+      fractY =
+          context.ScaleFinalYCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
+      fractX = -fractX + std::round(fractX);
+      fractY = -fractY + std::round(fractY);
+    }
 
     // The multiplication order below is important and the reverse of the GL/GLES chain because of
     // column-major vs row-major differences
