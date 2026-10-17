@@ -26,6 +26,7 @@
 #include "windowing/GraphicContext.h"
 #include "windowing/WindowSystemFactory.h"
 
+#include "platform/wasm/MseBridge.h"
 #include "platform/wasm/TizenEmss.h"
 
 #include <cstdint>
@@ -55,7 +56,7 @@ EMSCRIPTEN_WEBGL_CONTEXT_HANDLE CreateProxiedGLContext()
   emscripten_webgl_init_context_attributes(&attrs);
   // The <video> of a media backend shows through where the GUI is transparent. The
   // canvas has a black background otherwise.
-  attrs.alpha = tizen_emss_available() ? EM_TRUE : EM_FALSE;
+  attrs.alpha = tizen_emss_available() || mse_available() ? EM_TRUE : EM_FALSE;
   attrs.depth = EM_TRUE;
   attrs.stencil = EM_TRUE;
   attrs.antialias = EM_FALSE;
