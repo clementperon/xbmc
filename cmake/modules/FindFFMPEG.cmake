@@ -45,6 +45,12 @@ macro(buildFFMPEG)
     set(FFMPEG_OPTIONS -DENABLE_DAV1D=ON)
   endif()
 
+  # The browser media backend converts audio the browser cannot play to Opus.
+  if(CORE_SYSTEM_NAME STREQUAL wasm)
+    find_package(Opus REQUIRED ${SEARCH_QUIET})
+    list(APPEND FFMPEG_OPTIONS -DENABLE_LIBOPUS=ON)
+  endif()
+
   set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC ffmpeg)
 
   SETUP_BUILD_VARS()
@@ -255,6 +261,9 @@ macro(buildFFMPEG)
 
   if(TARGET LIBRARY::Dav1d)
     add_dependencies(${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} LIBRARY::Dav1d)
+  endif()
+  if(TARGET LIBRARY::Opus)
+    add_dependencies(${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} LIBRARY::Opus)
   endif()
 
   set(FFMPEG_FOUND 1)
