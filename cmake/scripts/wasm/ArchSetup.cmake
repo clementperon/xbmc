@@ -41,8 +41,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   add_link_options(
     "SHELL:-sUSE_PTHREADS=1"
     "SHELL:-sPTHREAD_POOL_SIZE=16"
-    "SHELL:-sAUDIO_WORKLET"
-    "SHELL:-sWASM_WORKERS"
     "SHELL:-sINITIAL_MEMORY=512MB"
     # Emscripten's getHeapMax() (src/lib/libcore.js) caps this at
     # 4GB - WASM_PAGE_SIZE on non-MEMORY64 builds, so emscripten_get_heap_max()
@@ -63,6 +61,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "SHELL:-sEXPORTED_RUNTIME_METHODS=ccall,cwrap"
     "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/xbmc/platform/wasm/kodi_pre.js"
     "SHELL:--js-library ${CMAKE_SOURCE_DIR}/xbmc/windowing/wasm/webgl_commit.js"
+    "SHELL:--js-library ${CMAKE_SOURCE_DIR}/xbmc/platform/wasm/audio_worklet.js"
     # BSD sockets over the Tizen Sockets Extension; falls back to the upstream
     # implementation in ordinary browsers.
     "SHELL:--js-library ${CMAKE_SOURCE_DIR}/xbmc/platform/wasm/network/tizen_sockets.js"

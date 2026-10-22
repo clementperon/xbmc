@@ -9,9 +9,7 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 #include <vector>
 
 namespace KODI::PLATFORM::WASM
@@ -53,46 +51,26 @@ private:
   CWasmAudioWorkletManager(const CWasmAudioWorkletManager&) = delete;
   CWasmAudioWorkletManager& operator=(const CWasmAudioWorkletManager&) = delete;
 
-  bool EnsureContext(unsigned int requestedSampleRate);
-  bool EnsureWorkletProcessor();
-  bool ConfigureNode(unsigned int channels);
-  void InstallResumeHooks() const;
-  void ClearResumeHooks() const;
+  bool OpenContext(unsigned int requestedSampleRate);
+  bool StartNode();
   void EnsureBufferAllocated();
   void ResetBuffer();
   void WaitForWorkletIdle();
   int QuantumSleepMs() const;
 
-  bool WaitForState(std::atomic<bool>& readyFlag, const char* stageName);
-  static void OnWorkletThreadStarted(int audioContext, bool success, void* userData);
-  static void OnProcessorCreated(int audioContext, bool success, void* userData);
-  static bool ProcessAudio(int numInputs,
-                           const void* inputs,
-                           int numOutputs,
-                           void* outputs,
-                           int numParams,
-                           const void* params,
-                           void* userData);
-  bool ProcessAudioImpl(int numOutputs, void* outputs);
-
-  mutable std::mutex m_stateMutex;
-  std::condition_variable m_stateCv;
-
-  int m_audioContext{0};
-  int m_workletNode{0};
+  bool m_contextOpen{false};
 
   std::atomic<bool> m_ready{false};
-  std::atomic<bool> m_workletThreadCreated{false};
-  std::atomic<bool> m_processorCreated{false};
-  std::atomic<bool> m_asyncResult{false};
-  std::atomic<bool> m_asyncDone{false};
+  // 0 while audio_worklet.js starts the node, then 1 on success or 2 on failure.
+  std::atomic<uint32_t> m_nodeState{0};
 
   std::atomic<unsigned int> m_channels{2};
   std::atomic<unsigned int> m_sampleRate{48000};
   std::atomic<unsigned int> m_quantumSize{128};
 
   // SPSC ring: the sink thread writes m_writeFrame and (re)allocates, only after
-  // WaitForWorkletIdle(); the worklet thread writes m_readFrame.
+  // WaitForWorkletIdle(); the processor in audio_worklet.js reads the ring and
+  // writes m_readFrame through raw wasm memory.
   std::vector<float> m_ringBuffer;
   unsigned int m_bufferCapacityFrames{0};
   unsigned int m_bufferChannels{0};
