@@ -1312,6 +1312,11 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string& filters, bool scale)
     return -1;
   }
 
+  // By default the filters and their scaler would each start a thread per core, even when
+  // software decoding was forced to run single threaded.
+  if (m_decoderState == STATE_SW_SINGLE)
+    m_pFilterGraph->nb_threads = m_pCodecContext->thread_count;
+
   const AVFilter* srcFilter = avfilter_get_by_name("buffer");
   const AVFilter* outFilter = avfilter_get_by_name("buffersink"); // should be last filter in the graph for now
 
