@@ -76,9 +76,9 @@ platform legs between them: `e2e-linux.yml` (Linux GBM and Wayland on x86_64 and
 arm64, plus X11 - five legs), `apple.yml` (macOS plus the iOS and tvOS Simulator -
 three of its five legs run e2e, the iOS/tvOS device legs are build-only), `e2e-windows.yml`
 and `e2e-android.yml`. Where the platform builds through `tools/depends` (Android,
-Apple, webOS) a `depends-key` job first looks up which legs already have their
-dependency prefix cached for the current `tools/depends` tree, a `depends` job builds
-the missing ones, and `build` restores the prefix and only re-runs `configure`.
+Apple, webOS) `build` pulls the leg's dependency prefix from ghcr.io for the current
+`tools/depends` tree and toolchain and only re-runs `configure`; without one it builds
+`tools/depends` and, outside pull requests, publishes the prefix.
 `build` compiles Kodi (via `tools/depends` where the platform
 needs it, against distro packages on Linux, with prebuilt packages on Windows), builds
 the `peripheral.joystick` binary add-on, runs the unit tests where the platform has

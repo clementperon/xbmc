@@ -143,10 +143,11 @@ jobs:
   android:
     needs: gate
     if: needs.gate.outputs.run == 'true' && contains(fromJSON('["all","android"]'), needs.gate.outputs.platform)
-    # actions: read lets the depends-key job query the cache API.
+    # packages: write publishes tools/depends prefixes to ghcr.io; pull
+    # requests only read them.
     permissions:
       contents: read
-      actions: read
+      packages: write
     uses: ./.github/workflows/e2e-android.yml
     with:
       configuration: ${{ needs.gate.outputs.configuration }}
@@ -160,7 +161,7 @@ jobs:
     if: needs.gate.outputs.run == 'true' && contains(fromJSON('["all","apple"]'), needs.gate.outputs.platform)
     permissions:
       contents: read
-      actions: read
+      packages: write
     uses: ./.github/workflows/apple.yml
     with:
       configuration: ${{ needs.gate.outputs.configuration }}
@@ -172,7 +173,7 @@ jobs:
     if: needs.gate.outputs.run == 'true' && contains(fromJSON('["all","webos"]'), needs.gate.outputs.platform)
     permissions:
       contents: read
-      actions: read
+      packages: write
     uses: ./.github/workflows/build-webos.yml
     with:
       configuration: ${{ needs.gate.outputs.configuration }}

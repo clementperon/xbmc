@@ -106,14 +106,18 @@ jobs:
             tvos-aarch64)    host=aarch64-apple-darwin;   extra="--with-platform=tvos" ;;
             *) echo "::error::unknown platform ${{ matrix.platform }}"; exit 1 ;;
           esac
+          # The Xcode each platform builds with in apple.yml; the NDK is a
+          # default in tools/depends/configure.ac, so the tree hash covers it.
           case "${{ matrix.platform }}" in
-            android-*) prefix=/home/runner/xbmc-addon-depends ;;
-            *)         prefix=/Users/Shared/xbmc-addon-depends ;;
+            android-*) prefix=/home/runner/xbmc-addon-depends; xcode="" ;;
+            osx-*)     prefix=/Users/Shared/xbmc-addon-depends; xcode=16.4 ;;
+            *)         prefix=/Users/Shared/xbmc-addon-depends; xcode=26.3 ;;
           esac
           {
             echo "host=${host}"
             echo "extra=${extra}"
             echo "prefix=${prefix}"
+            echo "xcode=${xcode}"
             echo "hash=$(git -C xbmc rev-parse HEAD:tools/depends)"
           } >> "$GITHUB_OUTPUT"
 
@@ -126,25 +130,25 @@ jobs:
           yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "ndk;${ANDROID_NDK_VERSION}"
 
-      - name: Select latest available Xcode
-        if: startsWith(matrix.platform, 'osx') || startsWith(matrix.platform, 'ios') || startsWith(matrix.platform, 'tvos')
+      - name: Select Xcode
+        if: steps.cfg.outputs.xcode != ''
         run: |
-          latest_xcode=$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)
-          if [ -n "$latest_xcode" ]; then sudo xcode-select -s "$latest_xcode"; fi
+          sudo xcode-select -s "/Applications/Xcode_${{ steps.cfg.outputs.xcode }}.app"
           xcodebuild -version
 
       # Only the native tools are needed (buildPlugin ran make-native-depends):
       # the add-on's own dependencies are built by cmake/addons/depends with the
       # generated toolchain. The prefix is cached on the tools/depends tree hash
-      # of the Kodi checkout; configure alone regenerates what the add-on build
-      # reads from the tree, so make is skipped on a hit.
+      # of the Kodi checkout and the Xcode; configure alone regenerates what the
+      # add-on build reads from the tree, so make is skipped on a hit whose
+      # native directory, named after the host's Darwin version, still matches.
       - name: Restore native tools
         if: ${{ !startsWith(matrix.platform, 'windows') }}
         id: native-cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ steps.cfg.outputs.prefix }}
-          key: addon-native-${{ matrix.platform }}-${{ steps.cfg.outputs.hash }}
+          key: addon-native-${{ matrix.platform }}-xcode${{ steps.cfg.outputs.xcode }}-${{ steps.cfg.outputs.hash }}
 
       - name: Configure depends and build native tools
         if: ${{ !startsWith(matrix.platform, 'windows') }}
@@ -155,7 +159,8 @@ jobs:
           ./configure --host=${{ steps.cfg.outputs.host }} ${{ steps.cfg.outputs.extra }} \
             --prefix="${{ steps.cfg.outputs.prefix }}" --with-tarballs="${RUNNER_TEMP}/xbmc-tarballs" \
             --disable-debug
-          if [ "${{ steps.native-cache.outputs.cache-hit }}" != "true" ]; then
+          if [ "${{ steps.native-cache.outputs.cache-hit }}" != "true" ] \
+             || [ ! -d "$(sed -n 's/^NATIVEPREFIX=//p' Makefile.include)/bin" ]; then
             make -C native -j"$(getconf _NPROCESSORS_ONLN)"
           fi
 
@@ -164,7 +169,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.cfg.outputs.prefix }}
-          key: addon-native-${{ matrix.platform }}-${{ steps.cfg.outputs.hash }}
+          key: addon-native-${{ matrix.platform }}-xcode${{ steps.cfg.outputs.xcode }}-${{ steps.cfg.outputs.hash }}
 
       # PACKAGE=1 runs the package-<addon> target; PACKAGE_ZIP drops the zip in
       # PACKAGE_DIR/<addon>+<platform>/. .success/.failure are written per add-on.

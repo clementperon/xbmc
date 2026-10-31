@@ -6,9 +6,9 @@ name: E2E (Android emulator)
 # Jenkins ships to test-builds/nightlies and are build-only. Every leg also
 # builds the requested binary add-ons, which the APK bundles.
 #
-# depends-key looks up which ABIs already have their tools/depends prefix
-# cached for this tools/depends tree, depends builds the missing ones, and
-# build restores the prefix and only re-runs configure before building Kodi.
+# The build job restores its ABI's tools/depends prefix from ghcr.io, keyed on
+# the tools/depends tree hash, and only re-runs configure; without one it
+# builds tools/depends and, outside pull requests, publishes the prefix.
 #
 # Android has no -p/--portable flag, so tools/e2e/driver/android_launcher.py
 # manages a fixed on-device profile instead of the desktop launcher.
@@ -37,22 +37,15 @@ env:
   BINARY_ADDONS: ${{ inputs.addons }}
 
 jobs:
-  # Resolves the matrix once, with the configuration per ABI, and looks up
-  # which legs already have a cached prefix.
-  depends-key:
-    runs-on: ubuntu-24.04
+  # Resolves the matrix once, with the configuration per ABI. The NDK version
+  # and API level are defaults in tools/depends/configure.ac, so the tree hash
+  # already covers them.
+  legs:
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
     outputs:
       legs: ${{ steps.legs.outputs.legs }}
-      missing: ${{ steps.lookup.outputs.missing }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github
-
       # Debug for the x86_64 emulator leg and Release for the shipped ABIs, as
       # Jenkins builds them, unless the caller asks for one configuration or the
       # run has debug logging enabled. Lower-cased: the APK name carries it.
@@ -75,61 +68,20 @@ jobs:
           echo "legs=${legs}" >> "$GITHUB_OUTPUT"
           echo "${legs}" | jq .
 
-      - uses: ./.github/actions/depends-cache-lookup
-        id: lookup
-        with:
-          legs: ${{ steps.legs.outputs.legs }}
-
-  depends:
-    name: depends (${{ matrix.abi }})
-    needs: depends-key
-    if: needs.depends-key.outputs.missing != '[]'
-    runs-on: ubuntu-26.04
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.depends-key.outputs.missing) }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: ./.github/actions/setup-android-build
-
-      # --disable-debug selects the Release build type in the generated
-      # toolchain, as tools/buildsteps/defaultenv does for Jenkins' Android jobs.
-      - uses: ./.github/actions/configure-depends
-        with:
-          configure-args: >-
-            --host=${{ matrix.host }} --with-sdk-path=${{ env.ANDROID_SDK_ROOT }}
-            ${{ matrix.config == 'release' && '--disable-debug' || '' }}
-          prefix: ${{ env.DEPENDS_PREFIX }}
-          build: "true"
-
-      - uses: ./.github/actions/upload-build-logs
-        if: always()
-        with:
-          name: android-${{ matrix.abi }}-depends
-
-      # Not reached when the build failed, so a half-built prefix is never saved.
-      - uses: ./.github/actions/depends-cache-save
-        with:
-          key: ${{ matrix.key }}
-          prefix: ${{ env.DEPENDS_PREFIX }}
-
   build:
     name: build (${{ matrix.abi }})
-    needs: [depends-key, depends]
-    # Runs whether depends built anything or was skipped. A leg depends failed
-    # on fails at the restore below; one evicted since the lookup is rebuilt.
-    if: ${{ !cancelled() && needs.depends-key.result == 'success' }}
+    needs: legs
     runs-on: ubuntu-26.04
     timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
     env:
       CONFIG: ${{ matrix.config }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.depends-key.outputs.legs) }}
+        include: ${{ fromJSON(needs.legs.outputs.legs) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -168,25 +120,35 @@ jobs:
             echo "KODI_ANDROID_KEY_PASSWORD=${ANDROID_KEY_PASSWORD:-${ANDROID_KEYSTORE_PASSWORD}}"
           } >> "$GITHUB_ENV"
 
-      - uses: ./.github/actions/depends-cache-restore
+      - uses: ./.github/actions/depends-prefix-restore
         id: depends
         with:
           key: ${{ matrix.key }}
           prefix: ${{ env.DEPENDS_PREFIX }}
-          fail-on-cache-miss: ${{ contains(fromJSON(needs.depends-key.outputs.missing).*.key, matrix.key) }}
 
       - uses: ./.github/actions/ccache-restore
         with:
           key: android-${{ matrix.abi }}-${{ env.CONFIG }}
           dir: /home/runner/.cache/kodi-e2e-ccache
 
+      # --disable-debug selects the Release build type in the generated
+      # toolchain, as tools/buildsteps/defaultenv does for Jenkins' Android jobs.
       - uses: ./.github/actions/configure-depends
+        id: configure
         with:
           configure-args: >-
             --host=${{ matrix.host }} --with-sdk-path=${{ env.ANDROID_SDK_ROOT }}
             ${{ matrix.config == 'release' && '--disable-debug' || '' }}
           prefix: ${{ env.DEPENDS_PREFIX }}
-          build: ${{ steps.depends.outputs.cache-hit != 'true' }}
+          build: ${{ steps.depends.outputs.hit != 'true' }}
+
+      # Before the add-ons below install into the prefix, so it holds
+      # tools/depends alone.
+      - uses: ./.github/actions/depends-prefix-push
+        if: steps.configure.outputs.built == 'true' && github.event_name != 'pull_request'
+        with:
+          key: ${{ matrix.key }}
+          prefix: ${{ env.DEPENDS_PREFIX }}
 
       # Installed into the depends prefix, from where the APK packaging copies
       # the add-on libraries (tools/android/packaging/Makefile.in).

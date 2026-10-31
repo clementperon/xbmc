@@ -164,15 +164,15 @@ device builds on Apple - live in one file instead of being copy-pasted
 across several. `build-webos.yml` builds a platform with no emulator to test
 on. Every `build` job in these workflows has the same shape:
 
-- Where Kodi builds through `tools/depends` (Android, Apple, webOS), a
-  `depends-key` job on a Linux runner resolves the matrix and asks the cache API
-  which legs already have their dependency prefix for the current `tools/depends`
-  tree hash; a `depends` job then builds only the missing ones on the platform's
-  runner and saves the prefix. `build` restores it and re-runs `configure`
-  alone, which regenerates `Makefile.include` and the toolchain files the Kodi
-  and add-on builds read, so no `make` runs in `tools/depends` on a hit. A leg
-  whose `depends` build failed fails at that restore; one whose prefix was
-  evicted after the lookup builds the dependencies itself.
+- Where Kodi builds through `tools/depends` (Android, Apple, webOS), `build`
+  pulls the leg's dependency prefix from `ghcr.io/<owner>/kodi-depends`, tagged
+  with a key naming the platform, toolchain (Xcode version, webOS toolchain
+  release) and configuration, as Jenkins' `getBuildHash` does, plus the
+  `tools/depends` tree hash. On a hit it re-runs `configure` alone, which
+  regenerates `Makefile.include` and the toolchain files the Kodi and add-on
+  builds read, so no `make` runs in `tools/depends`. Without a published prefix,
+  or with one whose directories do not match the host, it builds `tools/depends`
+  and, outside pull requests, publishes the prefix before building Kodi.
 - `build` compiles Kodi from source, builds the `peripheral.joystick` binary add-on
   against the same tree (a failing add-on is reported as a warning, as on Jenkins),
   runs the unit tests where the platform has them (macOS, Windows, and Linux GBM,
@@ -193,10 +193,9 @@ on. Every `build` job in these workflows has the same shape:
   `e2e` job reuses the build.
 
 The steps shared between workflows live in `.github/actions/`: `ccache-restore` /
-`ccache-save`, `depends-cache-lookup` / `depends-cache-restore` / `depends-cache-save`
-for the `tools/depends` install prefix (keyed on the tree's git hash),
-`configure-depends`, `setup-android-build` and `setup-webos-build` for the steps the
-`depends` and `build` jobs share, `run-e2e`, `e2e-artifacts` and `upload-build-logs`
+`ccache-save`, `depends-prefix-restore` / `depends-prefix-push` (with `setup-oras`)
+for the `tools/depends` install prefix on ghcr.io, `configure-depends`,
+`setup-android-build` and `setup-webos-build`, `run-e2e`, `e2e-artifacts` and `upload-build-logs`
 (autoconf/meson/cmake logs, only on runs started with debug logging).
 
 Triggers and cache policy:
@@ -208,14 +207,15 @@ Triggers and cache policy:
   `workflow_call`. The platform workflows keep `workflow_dispatch` for manual runs.
   A job the gate skips counts as passed for branch protection.
 - Pull-request runs are cancelled by a newer push to the same PR; master runs are
-  never cancelled, so their cache saves always complete.
+  never cancelled, so their cache saves and prefix pushes always complete.
 - ccache is saved from master only. PR runs restore it but do not add entries:
   it is keyed per commit, so a PR save would add an entry per push until the
   repository's cache budget evicts the entries that are actually reused.
-- The depends prefix is keyed on content, so PR runs save it too: a PR that
-  changes `tools/depends` adds one entry per distinct tree, which its later pushes
-  and its `build` job reuse. It is saved only when the dependency build succeeded,
-  so a half-built prefix is never stored under a key later runs would trust.
+- The depends prefix is published from master and manual runs only, not from
+  pull requests: a PR that changes `tools/depends` builds it in each `build` job.
+  It is pushed only after the dependency build succeeded, so a half-built prefix
+  is never stored under a tag later runs would trust. It lives in ghcr.io rather
+  than the Actions cache, whose 10 GB repository budget ccache alone fills.
 
 Per platform:
 

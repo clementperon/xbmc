@@ -354,7 +354,7 @@ Design rules:
 
 | Platform | Hosted runner feasibility | Recommendation |
 | --- | --- | --- |
-| Linux x86_64 (gl, gles, X11, Wayland, GBM), cross arm/arm64 | Good. `ubuntu-24.04`, 4 vCPU; `ubuntu-24.04-arm` exists for native arm64 | Hosted. Cache `tools/depends` and ccache as this PR does. Use a container image (`ghcr.io/xbmc/...`) to pin the toolchain like the podman images do today |
+| Linux x86_64 (gl, gles, X11, Wayland, GBM), cross arm/arm64 | Good. `ubuntu-24.04`, 4 vCPU; `ubuntu-24.04-arm` exists for native arm64 | Hosted. Publish `tools/depends` prefixes to ghcr.io and cache ccache as this PR does. Use a container image (`ghcr.io/xbmc/...`) to pin the toolchain like the podman images do today |
 | Android arm, arm64, x86 | Good, NDK on the image | Hosted; PR builds unsigned or debug-keystore signed, nightly signed in a `push`-only job with the keystore from secrets |
 | webOS | Feasible: SDK buildroot must be downloaded (licence terms to check) | Hosted, container image with the buildroot |
 | macOS x86_64 and arm64 | `macos-15`/`macos-26` arm64 are hosted; GitHub no longer offers Intel macOS runners. Team plan: 5 concurrent macOS jobs | Hosted for arm64; keep one Mac mini as a self-hosted runner for the Intel build and for notarisation |
@@ -459,7 +459,7 @@ key, an environment fix) is fixed once.
 | Android arm64, arm, x86 | Yes: release APKs for arm64-v8a, armeabi-v7a and x86 plus the x86_64 debug APK for the emulator; release keystore from secrets on non-PR runs | AAB |
 | webOS | Yes: `build-webos.yml`, buildroot-nc4 toolchain, `.ipk` | No device or emulator test. The `ipk` target fails in `verify-libs`: the buildroot-nc4 sysroot lacks the webOS 11 `smp::util::getMaxVideoResolution(const std::string&, ...)` overload that `MediaPipelineWebOS.cpp` references, which the sysroot of Jenkins' `webos-arm:1.3` image provides |
 | macOS arm64 | Yes: `tools/depends`, Kodi.app, unit tests, `.dmg`, signing and notarisation from secrets on non-PR runs | No Intel build (dropped: GitHub has no Intel macOS runners) |
-| iOS / tvOS device | Yes: `apple.yml`'s device legs, unsigned `.ipa` and dSYM artifacts; Simulator legs of the same workflow for E2E | No `.deb` (dropped: only needed for the jailbreak apt repository). Built with the newest Xcode on `macos-15` (26.3), the same version as Jenkins. The Simulator E2E runs fail since the rebase onto the 2026-10 master: Kodi exits before it writes `kodi.log` |
+| iOS / tvOS device | Yes: `apple.yml`'s device legs, unsigned `.ipa` and dSYM artifacts; Simulator legs of the same workflow for E2E | No `.deb` (dropped: only needed for the jailbreak apt repository). Built with Xcode 26.3 pinned on `macos-15`, the same version as Jenkins. The Simulator E2E runs fail since the rebase onto the 2026-10 master: Kodi exits before it writes `kodi.log` |
 | Windows x64 | Yes: x64, Win32, ARM64 and UWP x64 through `BuildSetup.bat`, NSIS installer and `.pdb`, `.msix`, unit tests on x64 and Win32 | Visual Studio generator, so no ccache; a CPack NSIS port would need Windows `install()` rules first. `download-msys2.bat` exits 0 when pacman fails to download packages, so a mirror timeout surfaces later as an ffmpeg build failure |
 | wasm | No | Low priority; the Jenkins job compiles only `tools/depends`, and only when it changed |
 | FreeBSD | No | Disabled in Jenkins too |
@@ -478,7 +478,7 @@ key, an environment fix) is fixed once.
 | Path-based skip, `No-Jenkins` / `Stale` labels, target-branch conditions | Yes, once, in `ci.yml`: docs, Markdown and the non-workflow `.github/` files are skipped by `paths-ignore` on master pushes and by the gate's `code` path filter on pull requests; the gate job skips every build on drafts and on the `No-Jenkins`, `No Jenkins` and `Stale` labels, and skipped jobs count as passed for branch protection | Narrower than Jenkins on purpose: `addons/`, `system/*.xml` and `system/shaders/` now change E2E results, so they trigger. No per-branch leg conditions yet |
 | PR draft handling | Yes: drafts skipped, `ready_for_review` starts | Jenkins has no equivalent |
 | Cancel superseded runs | Yes: `concurrency` with `cancel-in-progress` | |
-| Dependency and ccache caching | Yes: the `tools/depends` install prefix is cached by tree hash and built in a `depends` job that runs only for the legs a lookup finds missing; the `build` job restores it and re-runs `configure` alone. ccache saved from master only | Cache size against the 10 GB limit with 8 platforms needs measuring; moving the prefix to GHCR as an OCI artifact would lift it |
+| Dependency and ccache caching | Yes: the `tools/depends` install prefix is published to ghcr.io from master, tagged with the platform, toolchain, configuration and tree hash like Jenkins' `getBuildHash`; the `build` job pulls it and re-runs `configure` alone, or builds `tools/depends` when there is none. ccache saved from master only | The `kodi-depends` package must be made public once it exists; old tags are never deleted |
 | Retry infrastructure failures | Not needed: the dependency downloads retry inside CMake and the emulator action retries its boot | |
 | Slack notification | No | Add to scheduled workflows on failure |
 | Kore | No | Trivial Gradle workflow in `xbmc/Kore` |
