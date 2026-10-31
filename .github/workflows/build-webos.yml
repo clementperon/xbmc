@@ -123,6 +123,13 @@ jobs:
           key: ${{ matrix.key }}
           prefix: ${{ env.DEPENDS_PREFIX }}
 
+      # The ipk target's verify-libs step resolves the libraries only the TV
+      # has against the webos-userland stubs in that package's build tree
+      # (cmake/scripts/webos/Install.cmake), which a restored prefix does not
+      # carry. A no-op when tools/depends was built above.
+      - name: Build webos-userland stubs
+        run: make -C tools/depends/target/webos-userland
+
       # Installed into the depends prefix's addons/ directory (the webos rule in
       # tools/depends/xbmc-addons.include), from where the bundle step copies them.
       - uses: ./.github/actions/build-binary-addons
