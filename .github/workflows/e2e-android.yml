@@ -205,7 +205,7 @@ jobs:
           name: kodi-android-x86_64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.1
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: tools/e2e/uv.lock
@@ -228,7 +228,7 @@ jobs:
       # module docstring); reading as root is safe, only writing mislabels files.
       # Repeated here so logs are collected even when pytest never launched Kodi.
       - name: Run E2E suite on emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 30
           target: google_apis

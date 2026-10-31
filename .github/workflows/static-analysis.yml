@@ -140,12 +140,12 @@ jobs:
           python3 .github/scripts/analysis_to_sarif.py --cppcheck build/cppcheck-result.xml \
             --sarif cppcheck.sarif --tool-version "$(cppcheck --version | grep -o '[0-9][0-9.]*' | head -1)"
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: clang-tidy.sarif
           category: clang-tidy
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: cppcheck.sarif
           category: cppcheck
