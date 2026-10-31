@@ -45,34 +45,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $cl = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" | Select-Object -First 1 -ExpandProperty FullName
-          Write-Host "cl = $cl"
-          $ccache = (Get-Command ccache.exe).Source
-          Write-Host "ccache = $ccache"
-          & $ccache --version; Write-Host "ccache --version exit=$LASTEXITCODE"
-          & $ccache -p; Write-Host "ccache -p exit=$LASTEXITCODE"
-          & $cl /? > $null 2>&1; Write-Host "plain cl /? exit=$LASTEXITCODE"
+          $cl = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" | Select-Object -Last 1 -ExpandProperty FullName
           New-Item -ItemType Directory -Force probe | Out-Null
-          Copy-Item $ccache probe\cl.exe
+          Copy-Item (Get-Command ccache.exe).Source probe\cl.exe
           $env:CCACHE_DISABLE = '1'; $env:CCACHE_NOSTATS = '1'; $env:CCACHE_COMPILER = $cl
-          $sw = [Diagnostics.Stopwatch]::StartNew()
-          $out = & .\probe\cl.exe /? 2>&1
-          Write-Host "probe cl.exe /? exit=$LASTEXITCODE in $($sw.ElapsedMilliseconds) ms"
-          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
-          $env:CCACHE_COMPILER = ($cl -replace '\\','/')
-          $out = & .\probe\cl.exe /? 2>&1
-          Write-Host "probe with forward slashes exit=$LASTEXITCODE"
-          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
-          Remove-Item Env:CCACHE_DISABLE
-          $out = & .\probe\cl.exe /? 2>&1
-          Write-Host "probe without CCACHE_DISABLE exit=$LASTEXITCODE"
-          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
-          Set-Content probe\t.cpp 'int main(){return 0;}'
-          $env:CCACHE_LOGFILE = "$PWD\probe\ccache.log"
-          $out = & .\probe\cl.exe /nologo /c probe\t.cpp /Foprobe\t.obj 2>&1
-          Write-Host "probe compile exit=$LASTEXITCODE"
-          $out | ForEach-Object { Write-Host "  | $_" }
-          Get-Content probe\ccache.log -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { Write-Host "  log| $_" }
+          foreach ($a in @('/?', '/help', '/HELP')) {
+            $out = & .\probe\cl.exe $a 2>&1
+            Write-Host "probe [$a] exit=$LASTEXITCODE first=$($out | Select-Object -First 1) err=$($out | Select-String 'D8003|D9002')"
+            & $cl $a > $null 2>&1; Write-Host "plain cl [$a] exit=$LASTEXITCODE"
+          }
+          Set-Location D:\a\_temp
+          $out = & D:\a\xbmc\xbmc\probe\cl.exe '/?' 2>&1
+          Write-Host "probe [/?] from D:\a\_temp exit=$LASTEXITCODE err=$($out | Select-String 'D8003|D9002')"
 
       - name: Kodi FindCCache in a minimal project
         shell: pwsh
@@ -88,10 +72,12 @@ jobs:
           message(STATUS "CCACHE_FOUND=${CCACHE_FOUND} PROGRAM=${CCACHE_PROGRAM} VERSION=${CCACHE_VERSION}")
           set(_p "${CMAKE_BINARY_DIR}/CMakeFiles/ccache/cl.exe")
           execute_process(COMMAND "${CMAKE_COMMAND}" -E env CCACHE_DISABLE=1 CCACHE_NOSTATS=1
-                                  "CCACHE_COMPILER=${CMAKE_CXX_COMPILER}" "${_p}" /?
+                                  "CCACHE_COMPILER=${CMAKE_CXX_COMPILER}" "${_p}" /help
                           RESULT_VARIABLE r OUTPUT_VARIABLE o ERROR_VARIABLE e TIMEOUT 10)
           string(SUBSTRING "${o}" 0 300 o)
           string(SUBSTRING "${e}" 0 600 e)
           message(STATUS "probe result=[${r}]\nstdout=${o}\nstderr=${e}")
           '@ | Set-Content mini\CMakeLists.txt
+          (Get-Content cmake\modules\buildtools\FindCCache.cmake) -replace '"\$\{_ccache_probe\}" /\?', '"${_ccache_probe}" /help' | Set-Content cmake\modules\buildtools\FindCCache.cmake
+          Select-String -Path cmake\modules\buildtools\FindCCache.cmake -Pattern '_ccache_probe}" '
           cmake -S mini -B mini-build -G "Visual Studio 17 2022" -A x64 "-DKODI_SRC=$($PWD -replace '\\','/')"
