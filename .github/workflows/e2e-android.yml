@@ -227,8 +227,11 @@ jobs:
       # nothing less can read the external-storage profile (see the launcher's
       # module docstring); reading as root is safe, only writing mislabels files.
       # Repeated here so logs are collected even when pytest never launched Kodi.
+      #
+      # Not pinned to a SHA: the org's action allowlist names this action by its
+      # v2 tag.
       - name: Run E2E suite on emulator
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           target: google_apis
