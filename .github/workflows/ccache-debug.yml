@@ -1,0 +1,97 @@
+name: ccache debug (Windows)
+on:
+  push:
+    branches: [debug-ccache-win]
+permissions:
+  contents: read
+env:
+  CCACHE_VERSION: 4.14.1
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: xbmc/xbmc
+          ref: master
+          sparse-checkout: cmake
+
+      - name: Install ccache (as e2e-windows.yml)
+        shell: bash
+        run: |
+          tmp=$(cygpath -u "${RUNNER_TEMP}")
+          curl -fsSL --retry 5 -o "${tmp}/ccache.zip" \
+            "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-windows-x86_64.zip"
+          echo "6219f3865ca59aec41ee4b678df171d5d35855ecb2b6dbbbd20690b3a68af7b4  ${tmp}/ccache.zip" | sha256sum -c -
+          unzip -q "${tmp}/ccache.zip" -d "${tmp}"
+          ls -la "${tmp}/ccache-${CCACHE_VERSION}-windows-x86_64"
+          cygpath -w "${tmp}/ccache-${CCACHE_VERSION}-windows-x86_64" >> "$GITHUB_PATH"
+
+      - name: Same env as ccache-restore
+        shell: bash
+        run: |
+          {
+            echo "CCACHE_DIR=${RUNNER_TEMP}\\ccache"
+            echo "CCACHE_COMPILERCHECK=content"
+            echo "CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_MAXSIZE=2G"
+            echo "CCACHE_NOHASHDIR=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Manual probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $cl = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "cl = $cl"
+          $ccache = (Get-Command ccache.exe).Source
+          Write-Host "ccache = $ccache"
+          & $ccache --version; Write-Host "ccache --version exit=$LASTEXITCODE"
+          & $ccache -p; Write-Host "ccache -p exit=$LASTEXITCODE"
+          & $cl /? > $null 2>&1; Write-Host "plain cl /? exit=$LASTEXITCODE"
+          New-Item -ItemType Directory -Force probe | Out-Null
+          Copy-Item $ccache probe\cl.exe
+          $env:CCACHE_DISABLE = '1'; $env:CCACHE_NOSTATS = '1'; $env:CCACHE_COMPILER = $cl
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $out = & .\probe\cl.exe /? 2>&1
+          Write-Host "probe cl.exe /? exit=$LASTEXITCODE in $($sw.ElapsedMilliseconds) ms"
+          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
+          $env:CCACHE_COMPILER = ($cl -replace '\\','/')
+          $out = & .\probe\cl.exe /? 2>&1
+          Write-Host "probe with forward slashes exit=$LASTEXITCODE"
+          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
+          Remove-Item Env:CCACHE_DISABLE
+          $out = & .\probe\cl.exe /? 2>&1
+          Write-Host "probe without CCACHE_DISABLE exit=$LASTEXITCODE"
+          $out | Select-Object -First 15 | ForEach-Object { Write-Host "  | $_" }
+          Set-Content probe\t.cpp 'int main(){return 0;}'
+          $env:CCACHE_LOGFILE = "$PWD\probe\ccache.log"
+          $out = & .\probe\cl.exe /nologo /c probe\t.cpp /Foprobe\t.obj 2>&1
+          Write-Host "probe compile exit=$LASTEXITCODE"
+          $out | ForEach-Object { Write-Host "  | $_" }
+          Get-Content probe\ccache.log -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { Write-Host "  log| $_" }
+
+      - name: Kodi FindCCache in a minimal project
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force mini | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.25)
+          project(mini CXX)
+          list(APPEND CMAKE_MODULE_PATH ${KODI_SRC}/cmake/modules/buildtools)
+          set(CMAKE_SOURCE_DIR_SAVED ${CMAKE_SOURCE_DIR})
+          message(STATUS "CMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+          find_package(CCache 4.13.3)
+          message(STATUS "CCACHE_FOUND=${CCACHE_FOUND} PROGRAM=${CCACHE_PROGRAM} VERSION=${CCACHE_VERSION}")
+          set(_p "${CMAKE_BINARY_DIR}/CMakeFiles/ccache/cl.exe")
+          execute_process(COMMAND "${CMAKE_COMMAND}" -E env CCACHE_DISABLE=1 CCACHE_NOSTATS=1
+                                  "CCACHE_COMPILER=${CMAKE_CXX_COMPILER}" "${_p}" /?
+                          RESULT_VARIABLE r OUTPUT_VARIABLE o ERROR_VARIABLE e TIMEOUT 10)
+          string(SUBSTRING "${o}" 0 300 o)
+          string(SUBSTRING "${e}" 0 600 e)
+          message(STATUS "probe result=[${r}]\nstdout=${o}\nstderr=${e}")
+          '@ | Set-Content mini\CMakeLists.txt
+          cmake -S mini -B mini-build -G "Visual Studio 17 2022" -A x64 "-DKODI_SRC=$($PWD -replace '\\','/')"
