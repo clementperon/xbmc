@@ -57,6 +57,7 @@ jobs:
           Set-Location D:\a\_temp
           $out = & D:\a\xbmc\xbmc\probe\cl.exe '/?' 2>&1
           Write-Host "probe [/?] from D:\a\_temp exit=$LASTEXITCODE err=$($out | Select-String 'D8003|D9002')"
+          exit 0
 
       - name: Kodi FindCCache in a minimal project
         shell: pwsh
