@@ -57,7 +57,7 @@ jobs:
   # system changed, which is the only case worth exercising the reusable add-on
   # workflow from this repository.
   gate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     # paths-filter reads the pull request's file list.
     permissions:

@@ -220,15 +220,15 @@ Triggers and cache policy:
 Per platform:
 
 - `e2e-linux.yml` — one `build` job matrixed over five legs (`gbm`/`wayland` on
-  `ubuntu-24.04` and `ubuntu-24.04-arm`, plus `x11` on `ubuntu-22.04`), each with
+  `ubuntu-26.04` and `ubuntu-26.04-arm`, plus `x11` on `ubuntu-22.04`), each with
   its own package list and CMake flags but otherwise identical steps, and a
   matching five-leg `e2e` job. GBM and Wayland build `APP_RENDER_SYSTEM=gles`
-  against Ubuntu 24.04's own packages the way `docs/README.Linux.md` documents
+  against Ubuntu 26.04's own packages the way `docs/README.Linux.md` documents
   rather than `tools/depends`, with only ffmpeg, TagLib and SWIG built
-  internally (24.04's are too old for Kodi's minimum, for Matroska tag support
-  and for the Python bindings respectively). GBM gets its display from the
+  internally (26.04's TagLib and SWIG are too old for Matroska tag support and
+  for the Python bindings respectively). GBM gets its display from the
   `vkms` virtual KMS driver (with a newer libdrm built on the test runner,
-  since 24.04's cannot see vkms), Wayland from a headless Weston; both render
+  since 26.04's cannot see vkms), Wayland from a headless Weston; both render
   through Mesa's llvmpipe, exercising the DRM/GBM/EGL/GLES pipeline on a
   GPU-less runner. X11 builds `APP_RENDER_SYSTEM=gl` for desktop OpenGL/GLX
   instead, on Ubuntu 22.04 (see the workflow header for why), under Xvfb, with

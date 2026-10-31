@@ -16,7 +16,7 @@ permissions:
 jobs:
   coverity:
     if: github.repository == 'xbmc/xbmc' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     env:
       COVERITY_PROJECT: xbmc%2Fxbmc

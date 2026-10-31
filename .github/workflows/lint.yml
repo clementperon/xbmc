@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   clang-format:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       # Full history: the check walks every commit of the PR. The checkout is
@@ -27,10 +27,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The image ships several LLVM versions; pin one so results do not drift
-      # with the image. CODE_GUIDELINES.md requires 9.0 or newer.
-      - name: Select clang-format
+      # Pinned so results do not drift with the image. CODE_GUIDELINES.md
+      # requires 9.0 or newer.
+      - name: Install clang-format
         run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
           sudo update-alternatives --install /usr/bin/git-clang-format git-clang-format /usr/bin/git-clang-format-18 100
           clang-format --version
@@ -85,7 +87,7 @@ jobs:
           exit 1
 
   logging-style:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7

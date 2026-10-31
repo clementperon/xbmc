@@ -354,7 +354,7 @@ Design rules:
 
 | Platform | Hosted runner feasibility | Recommendation |
 | --- | --- | --- |
-| Linux x86_64 (gl, gles, X11, Wayland, GBM), cross arm/arm64 | Good. `ubuntu-24.04`, 4 vCPU; `ubuntu-24.04-arm` exists for native arm64 | Hosted. Publish `tools/depends` prefixes to ghcr.io and cache ccache as this PR does. Use a container image (`ghcr.io/xbmc/...`) to pin the toolchain like the podman images do today |
+| Linux x86_64 (gl, gles, X11, Wayland, GBM), cross arm/arm64 | Good. `ubuntu-26.04`, 4 vCPU; `ubuntu-26.04-arm` exists for native arm64 | Hosted. Publish `tools/depends` prefixes to ghcr.io and cache ccache as this PR does. Use a container image (`ghcr.io/xbmc/...`) to pin the toolchain like the podman images do today |
 | Android arm, arm64, x86 | Good, NDK on the image | Hosted; PR builds unsigned or debug-keystore signed, nightly signed in a `push`-only job with the keystore from secrets |
 | webOS | Feasible: SDK buildroot must be downloaded (licence terms to check) | Hosted, container image with the buildroot |
 | macOS x86_64 and arm64 | `macos-15`/`macos-26` arm64 are hosted; GitHub no longer offers Intel macOS runners. Team plan: 5 concurrent macOS jobs | Hosted for arm64; keep one Mac mini as a self-hosted runner for the Intel build and for notarisation |
