@@ -1,0 +1,44 @@
+name: OCI smoke (Windows)
+on:
+  push:
+    branches: [debug-ccache-win]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  smoke:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - shell: bash
+        run: |
+          command -v zstd tar unzip shasum || true
+          zstd --version; tar --version | head -1
+          mkdir -p smoke/src/a smoke/src/b smoke/src/c
+          echo one > smoke/src/a/f1; echo two > smoke/src/b/f2; echo skip > smoke/src/c/f3
+      - uses: ./.github/actions/depends-prefix-restore
+        id: first
+        with:
+          key: windows-smoke-${{ github.run_id }}
+          configure-args: smoke
+          prefix: smoke/out1
+      - uses: ./.github/actions/depends-prefix-push
+        with:
+          ref: ${{ steps.first.outputs.ref }}
+          prefix: smoke/src
+          paths: a b
+      - uses: ./.github/actions/depends-prefix-restore
+        id: second
+        with:
+          key: windows-smoke-${{ github.run_id }}
+          configure-args: smoke
+          prefix: smoke/out2
+      - shell: bash
+        run: |
+          echo "first=${{ steps.first.outputs.hit }} second=${{ steps.second.outputs.hit }}"
+          find smoke/out2 -type f | sort
+          [ "${{ steps.second.outputs.hit }}" = true ] && [ -f smoke/out2/a/f1 ] && [ -f smoke/out2/b/f2 ] && [ ! -e smoke/out2/c ]
+          printf '%s /xbmc/x 1.0\n' 0123456789abcdef0123456789abcdef01234567 > rev.txt
+          sed -i -E "1s/^[0-9a-f]{40} /$(git rev-parse HEAD) /" rev.txt
+          cat rev.txt

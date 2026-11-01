@@ -1,0 +1,229 @@
+#.rst:
+# FindCurl
+# --------
+# Finds the Curl library
+#
+# This will define the following target:
+#
+#   ${APP_NAME_LC}::Curl   - The Curl library
+
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
+
+  macro(buildmacroCurl)
+    find_package(Brotli REQUIRED ${SEARCH_QUIET})
+    find_package(NGHttp2 REQUIRED ${SEARCH_QUIET})
+    find_package(OpenSSL REQUIRED ${SEARCH_QUIET})
+    find_package(ZSTD REQUIRED ${SEARCH_QUIET})
+
+    # Darwin platforms link against toolchain provided zlib regardless
+    # They will fail when searching for static. All other platforms, prefer static
+    # if possible (requires cmake 3.24+ otherwise variable is a no-op)
+    # Windows still uses dynamic lib for zlib for other purposes, dont mix
+    if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin" AND NOT (WIN32 OR WINDOWS_STORE))
+      set(ZLIB_USE_STATIC_LIBS ON)
+    endif()
+    find_package(ZLIB REQUIRED ${SEARCH_QUIET})
+    unset(ZLIB_USE_STATIC_LIBS)
+
+    set(CURL_VERSION ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER})
+    # Curl debug uses postfix -d for all platforms
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX -d)
+
+    if(WIN32 OR WINDOWS_STORE)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_C_FLAGS -DNGHTTP2_STATICLIB)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LINK_LIBRARIES crypt32.lib)
+    endif()
+
+    set(CMAKE_ARGS -DBUILD_CURL_EXE=OFF
+                   -DBUILD_SHARED_LIBS=OFF
+                   -DBUILD_STATIC_LIBS=ON
+                   -DBUILD_LIBCURL_DOCS=OFF
+                   -DENABLE_CURL_MANUAL=OFF
+                   -DCURL_DISABLE_TESTS=OFF
+                   -DCURL_DISABLE_LDAP=ON
+                   -DCURL_DISABLE_LDAPS=ON
+                   -DCURL_DISABLE_SMB=OFF
+                   -DCURL_USE_OPENSSL=ON
+                   -DOPENSSL_ROOT_DIR=${DEPENDS_PATH}
+                   -DCURL_BROTLI=ON
+                   -DCURL_ZSTD=ON
+                   -DUSE_NGHTTP2=ON
+                   -DUSE_LIBIDN2=OFF
+                   -DCURL_USE_LIBSSH2=OFF
+                   -DCURL_USE_LIBPSL=OFF
+                   -DCURL_USE_GSSAPI=OFF
+                   -DCURL_CA_FALLBACK=ON
+                   ${OPTIONAL_ARGS})
+
+    # Curl runs its own FindZstd.cmake in the nested configure step, so pass the
+    # selected ZSTD include directories and libraries explicitly
+    get_target_property(ZSTD_INCLUDE_DIR LIBRARY::ZSTD ZSTD_INCLUDE_DIR)
+    get_target_property(ZSTD_LIBRARY LIBRARY::ZSTD ZSTD_LIBRARY)
+    get_target_property(_ZSTD_TARGET LIBRARY::ZSTD ALIASED_TARGET)
+    if(_ZSTD_TARGET STREQUAL "PkgConfig::zstd")
+      get_target_property(ZSTD_INCLUDE_DIR LIBRARY::ZSTD INTERFACE_INCLUDE_DIRECTORIES)
+      get_target_property(ZSTD_LIBRARY LIBRARY::ZSTD INTERFACE_LINK_LIBRARIES)
+    elseif(_ZSTD_TARGET)
+      find_package(zstd CONFIG REQUIRED PATHS "${zstd_DIR}" NO_DEFAULT_PATH)
+      list(APPEND CMAKE_ARGS "-DCMAKE_PROJECT_INCLUDE=${zstd_CONFIG}")
+      set(ZSTD_INCLUDE_DIR "$<JOIN:$<REMOVE_DUPLICATES:$<TARGET_PROPERTY:LIBRARY::ZSTD,INTERFACE_INCLUDE_DIRECTORIES>>,|>")
+      set(ZSTD_LIBRARY ${_ZSTD_TARGET})
+    endif()
+    unset(_ZSTD_TARGET)
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LIST_SEPARATOR LIST_SEPARATOR |)
+    if (ZSTD_INCLUDE_DIR)
+      string(REPLACE ";" "|" ZSTD_INCLUDE_DIR "${ZSTD_INCLUDE_DIR}")
+      list(APPEND CMAKE_ARGS "-DZSTD_INCLUDE_DIR=${ZSTD_INCLUDE_DIR}")
+    endif()
+    if (ZSTD_LIBRARY)
+      string(REPLACE ";" "|" ZSTD_LIBRARY "${ZSTD_LIBRARY}")
+      list(APPEND CMAKE_ARGS "-DZSTD_LIBRARY:STRING=${ZSTD_LIBRARY}")
+    endif()
+
+    # Preserve the hint and prefix list through ExternalProject's argument expansion.
+    if(ZSTD_HINT_PREFIX_PATH)
+      set(_CURL_ORIGINAL_CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}")
+      list(APPEND CMAKE_PREFIX_PATH "${ZSTD_HINT_PREFIX_PATH}")
+      string(REPLACE ";" "|" CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}")
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LIST_SEPARATOR LIST_SEPARATOR |)
+    endif()
+
+    BUILD_DEP_TARGET()
+
+    if(ZSTD_HINT_PREFIX_PATH)
+      set(CMAKE_PREFIX_PATH "${_CURL_ORIGINAL_CMAKE_PREFIX_PATH}")
+      unset(_CURL_ORIGINAL_CMAKE_PREFIX_PATH)
+    endif()
+
+    unset(ZSTD_INCLUDE_DIR)
+    unset(ZSTD_LIBRARY)
+
+    # Link libraries for target interface
+    list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LINK_LIBRARIES LIBRARY::Brotli
+                                                                    LIBRARY::NGHttp2
+                                                                    OpenSSL::Crypto
+                                                                    OpenSSL::SSL
+                                                                    LIBRARY::ZLIB
+                                                                    LIBRARY::ZSTD)
+
+    # Add dependencies to build target
+    add_dependencies(${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} LIBRARY::Brotli
+                                                                        LIBRARY::NGHttp2
+                                                                        OpenSSL::SSL
+                                                                        OpenSSL::Crypto
+                                                                        LIBRARY::ZLIB
+                                                                        LIBRARY::ZSTD)
+  endmacro()
+
+  # If there is a potential this library can be built internally
+  # Check its dependencies to allow forcing this lib to be built if one of its
+  # dependencies requires being rebuilt
+  if(ENABLE_INTERNAL_CURL)
+    # Dependency list of this find module for an INTERNAL build
+    set(${CMAKE_FIND_PACKAGE_NAME}_DEPLIST Brotli
+                                           NGHttp2
+                                           OpenSSL
+                                           ZLIB
+                                           ZSTD)
+
+    check_dependency_build(${CMAKE_FIND_PACKAGE_NAME} "${${CMAKE_FIND_PACKAGE_NAME}_DEPLIST}")
+  endif()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC curl)
+  set(${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME CURL)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  # An installed CURLConfig.cmake finds zstd again using curl's own FindZstd.cmake, which looks
+  # for zstd.lib and misses our zstd_static.lib. Pass it the target we already resolved, as
+  # buildmacroCurl does.
+  # NOT ZSTD_LIBRARY rather than NOT DEFINED: a failed configure leaves ZSTD_LIBRARY-NOTFOUND cached.
+  if(ENABLE_INTERNAL_CURL AND TARGET LIBRARY::ZSTD AND NOT ZSTD_LIBRARY)
+    get_target_property(_zstd_target LIBRARY::ZSTD ALIASED_TARGET)
+    if(NOT _zstd_target)
+      set(_zstd_target LIBRARY::ZSTD)
+    endif()
+    set(ZSTD_LIBRARY ${_zstd_target})
+    set(ZSTD_INCLUDE_DIR "$<TARGET_PROPERTY:${_zstd_target},INTERFACE_INCLUDE_DIRECTORIES>")
+    set(_curl_zstd_hint ON)
+    unset(_zstd_target)
+  endif()
+
+  # CURLConfig.cmake prepends its own find modules to CMAKE_MODULE_PATH and doesn't restore it
+  # if a dependency fails. Restore it, or buildmacroCurl would load curl's find modules
+  # instead of ours.
+  set(_curl_module_path "${CMAKE_MODULE_PATH}")
+  find_package(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} ${CONFIG_${CMAKE_FIND_PACKAGE_NAME}_FIND_SPEC} CONFIG ${SEARCH_QUIET}
+                                                         HINTS ${DEPENDS_PATH}/lib/cmake
+                                                         ${${CORE_SYSTEM_NAME}_SEARCH_CONFIG})
+  set(CMAKE_MODULE_PATH "${_curl_module_path}")
+  unset(_curl_module_path)
+
+  if(_curl_zstd_hint)
+    unset(ZSTD_LIBRARY)
+    unset(ZSTD_INCLUDE_DIR)
+    unset(_curl_zstd_hint)
+  endif()
+
+  # A config can reject itself (eg a dependency it can't find) yet leave CURL_VERSION set,
+  # which would skip the internal build below. Forget the version so a build can take over.
+  if(NOT ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(DEFINED ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_NOT_FOUND_MESSAGE)
+      message(STATUS "Ignoring curl config: ${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_NOT_FOUND_MESSAGE}")
+    endif()
+    unset(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION)
+  endif()
+
+  # cmake config may not be available (eg Debian libcurl-dev package)
+  # fallback to pkgconfig for non windows platforms
+  if(NOT ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    find_package(PkgConfig ${SEARCH_QUIET})
+    # We explicitly skip a pkgconfig search for Darwin platforms, as system zlib can not
+    # be found by pkg-config, and a search for Curl's Libs field is made during the
+    # pkg_check_modules call
+    if(PKG_CONFIG_FOUND AND NOT ((WIN32 OR WINDOWSSTORE) OR 
+                                 (CMAKE_SYSTEM_NAME MATCHES "Darwin")))
+      pkg_check_modules(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} libcurl${PC_${CMAKE_FIND_PACKAGE_NAME}_FIND_SPEC} ${SEARCH_QUIET} IMPORTED_TARGET)
+    endif()
+  endif()
+
+  # Check for existing Curl. If version >= CURL-VERSION file version, dont build
+  # A corner case, but if a linux/freebsd user WANTS to build internal curl, build anyway
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_CURL) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_CURL) OR
+     (DEFINED ${CMAKE_FIND_PACKAGE_NAME}_FORCE_BUILD))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    # cmake target and not building internal
+    if(TARGET CURL::libcurl AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      # CURL::libcurl is an alias. We need to get the actual aias target, as we cant make an
+      # alias of an alias (ie our ${APP_NAME_LC}::Curl cant be an alias of Curl::libcurl)
+      get_target_property(_CURL_ALIASTARGET CURL::libcurl ALIASED_TARGET)
+
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS ${_CURL_ALIASTARGET})
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      SETUP_BUILD_TARGET()
+
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS CURL_STATICLIB)
+      ADD_TARGET_COMPILE_DEFINITION()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    ADD_MULTICONFIG_BUILDMACRO()
+  else()
+    if(Curl_FIND_REQUIRED)
+      message(FATAL_ERROR "Curl libraries were not found.")
+    endif()
+  endif()
+endif()
