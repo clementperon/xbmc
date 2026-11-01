@@ -22,4 +22,5 @@ SHIFT
 GOTO parseArgs
 :argsParsed
 
-ECHO install=%install% clean=%clean% package=%package% store=%store% addon=[%addon%]
+ECHO install=%install% clean=%clean% package=%package% store=%store%
+SET addon
