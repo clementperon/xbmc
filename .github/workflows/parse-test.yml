@@ -14,9 +14,8 @@ jobs:
         shell: cmd
         run: |
           (echo @ECHO OFF& echo SET addon=& echo SETLOCAL EnableDelayedExpansion& echo FOR %%%%b IN ^(%%*^) DO ^(SET addon=!addon! %%%%~b^)& echo ECHO old addon=[!addon!]) > old.bat
-          type old.bat
-          call old.bat peripheral.joystick inputstream.adaptive pvr.*
-          call old.bat pvr.*
+          call old.bat "^peripheral\.joystick$"
+          call old.bat "pvr\.(hts|iptvsimple)" peripheral.joystick
       - name: New parser
         shell: cmd
         env:
@@ -25,5 +24,7 @@ jobs:
         run: |
           call parse-test.bat %BINARY_ADDONS%
           call parse-test.bat %ONLY_PATTERN%
+          call parse-test.bat "^peripheral\.joystick$"
+          call parse-test.bat "pvr\.(hts|iptvsimple)" peripheral.joystick
           call parse-test.bat install clean package win10 a.b
           call parse-test.bat

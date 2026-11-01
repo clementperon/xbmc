@@ -16,7 +16,7 @@ IF "%~1" == "install" (
 ) ELSE IF "%~1" == "win10" (
   SET store=store
 ) ELSE (
-  SET addon=%addon% %~1
+  SET "addon=%addon% %~1"
 )
 SHIFT
 GOTO parseArgs
