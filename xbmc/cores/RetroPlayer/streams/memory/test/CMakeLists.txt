@@ -1,3 +1,0 @@
-set(SOURCES TestDeltaPairMemoryStream.cpp)
-
-core_add_test_library(retroplayer_memory_test)

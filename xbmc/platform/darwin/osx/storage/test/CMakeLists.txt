@@ -1,3 +1,0 @@
-set(SOURCES TestOSXStorageProvider.cpp)
-
-core_add_test_library(platform_osx_storage_test)

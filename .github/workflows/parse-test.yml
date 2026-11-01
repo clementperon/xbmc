@@ -1,0 +1,29 @@
+name: make-addons parse test (Windows)
+on:
+  push:
+    branches: [debug-ccache-win]
+permissions:
+  contents: read
+jobs:
+  parse:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Old parser (current make-addons.bat loop)
+        shell: cmd
+        run: |
+          (echo @ECHO OFF& echo SET addon=& echo SETLOCAL EnableDelayedExpansion& echo FOR %%%%b IN ^(%%*^) DO ^(SET addon=!addon! %%%%~b^)& echo ECHO old addon=[!addon!]) > old.bat
+          type old.bat
+          call old.bat peripheral.joystick inputstream.adaptive pvr.*
+          call old.bat pvr.*
+      - name: New parser
+        shell: cmd
+        env:
+          BINARY_ADDONS: peripheral.joystick inputstream.adaptive pvr.*
+          ONLY_PATTERN: pvr.*
+        run: |
+          call parse-test.bat %BINARY_ADDONS%
+          call parse-test.bat %ONLY_PATTERN%
+          call parse-test.bat install clean package win10 a.b
+          call parse-test.bat
