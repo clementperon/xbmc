@@ -183,7 +183,7 @@ jobs:
 
       - name: Publish the toolchain image
         uses: ./.github/actions/depends-prefix-push
-        if: steps.build-kodi.outcome == 'success' && steps.toolchain.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.build-kodi.outcome == 'success' && steps.toolchain.outputs.hit != 'true' && github.ref == 'refs/heads/validate-windows-oci'
         with:
           ref: ${{ steps.toolchain.outputs.ref }}
           prefix: ${{ env.DEPS }}
@@ -191,14 +191,14 @@ jobs:
 
       - name: Publish the FFmpeg image
         uses: ./.github/actions/depends-prefix-push
-        if: steps.build-kodi.outcome == 'success' && steps.ffmpeg.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.build-kodi.outcome == 'success' && steps.ffmpeg.outputs.hit != 'true' && github.ref == 'refs/heads/validate-windows-oci'
         with:
           ref: ${{ steps.ffmpeg.outputs.ref }}
           prefix: ${{ env.DEPS }}/mingwlibs
 
       - name: Publish the target libraries image
         uses: ./.github/actions/depends-prefix-push
-        if: steps.build-kodi.outcome == 'success' && steps.target.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.build-kodi.outcome == 'success' && steps.target.outputs.hit != 'true' && github.ref == 'refs/heads/validate-windows-oci'
         with:
           ref: ${{ steps.target.outputs.ref }}
           prefix: ${{ env.DEPS }}/${{ env.DEPS_TARGET }}
@@ -243,7 +243,7 @@ jobs:
         if: '!cancelled()'
         with:
           key: windows-${{ inputs.name }}-${{ env.buildconfig }}
-          save: ${{ github.ref == 'refs/heads/master' }}
+          save: ${{ github.ref == 'refs/heads/validate-windows-oci' }}
 
       - name: Report unit tests
         uses: ./.github/actions/report-unit-tests

@@ -30,7 +30,7 @@ on:
         default: peripheral.joystick
   # Only the Windows legs run tools/buildsteps; the other platforms' are Jenkins'.
   push:
-    branches: [master]
+    branches: [master, validate-windows-oci]
     paths:
       - '**'
       - '!tools/buildsteps/**'
@@ -87,7 +87,7 @@ jobs:
           if [ "${CONFIGURATION}" = Default ]; then CONFIGURATION=""; fi
           {
             echo "run=${run}"
-            echo "platform=${PLATFORM:-all}"
+            echo "platform=${PLATFORM:-windows}"
             echo "configuration=${CONFIGURATION}"
             echo "addons=${ADDONS:-peripheral.joystick}"
           } >> "$GITHUB_OUTPUT"
