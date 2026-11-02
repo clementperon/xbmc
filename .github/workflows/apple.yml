@@ -157,6 +157,15 @@ jobs:
           save: ${{ github.ref == 'refs/heads/master' }}
 
       # From the build tree, where CUtil::GetHomePath() finds system/ by walking up.
+      - name: Backtrace the scanner crash
+        if: inputs.kind == 'macos'
+        continue-on-error: true
+        working-directory: build
+        run: |
+          sudo DevToolsSecurity -enable || true
+          lldb --batch -o run -k "bt all" -k "quit 1" -- ./"${CONFIGURATION}"/kodi-test \
+            --gtest_filter='TestVideoInfoScanner.*'
+
       - name: Run unit tests
         if: inputs.kind == 'macos'
         working-directory: build

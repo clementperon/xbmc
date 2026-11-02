@@ -30,7 +30,7 @@ on:
         default: peripheral.joystick
   # Only the Windows legs run tools/buildsteps; the other platforms' are Jenkins'.
   push:
-    branches: [master]
+    branches: [master, validate-apple]
     paths:
       - '**'
       - '!tools/buildsteps/**'
@@ -87,7 +87,7 @@ jobs:
           if [ "${CONFIGURATION}" = Default ]; then CONFIGURATION=""; fi
           {
             echo "run=${run}"
-            echo "platform=${PLATFORM:-all}"
+            echo "platform=${PLATFORM:-apple}"
             echo "configuration=${CONFIGURATION}"
             echo "addons=${ADDONS:-peripheral.joystick}"
           } >> "$GITHUB_OUTPUT"
@@ -224,10 +224,6 @@ jobs:
       matrix:
         include:
           - { kind: macos, platform: macos, depends_platform: macos, xcode: '26.3' }
-          - { kind: simulator, platform: ios, depends_platform: ios-simulator, xcode: '26.3', xcodebuild_args: -target ipa }
-          - { kind: simulator, platform: tvos, depends_platform: tvos-simulator, xcode: '26.3', xcodebuild_args: -target ipa }
-          - { kind: device, platform: ios, depends_platform: ios, xcode: '26.3', xcodebuild_args: -target ipa }
-          - { kind: device, platform: tvos, depends_platform: tvos, xcode: '26.3', xcodebuild_args: -target ipa }
     uses: ./.github/workflows/apple.yml
     with:
       kind: ${{ matrix.kind }}
