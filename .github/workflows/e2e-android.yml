@@ -119,7 +119,7 @@ jobs:
       # Before the add-ons install into the prefix, so it holds tools/depends alone.
       - name: Publish tools/depends prefix
         uses: ./.github/actions/depends-prefix-push
-        if: steps.configure.outputs.built == 'true' && github.ref == 'refs/heads/master'
+        if: steps.configure.outputs.built == 'true' && github.ref == 'refs/heads/validate-android'
         with:
           ref: ${{ steps.depends.outputs.ref }}
           prefix: ${{ env.DEPENDS_PREFIX }}
@@ -143,6 +143,14 @@ jobs:
           ref: ${{ inputs.gradle_image }}
           prefix: ${{ env.GRADLE_USER_HOME }}
 
+      - name: Cut Gradle off the network
+        run: |
+          for h in repo.maven.apache.org repo1.maven.org maven.google.com dl.google.com plugins.gradle.org \
+            plugins-artifacts.gradle.org services.gradle.org downloads.gradle.org api.foojay.io; do
+            echo "0.0.0.0 ${h}" | sudo tee -a /etc/hosts
+          done
+          ! curl -sfI --max-time 10 https://repo.maven.apache.org/maven2/
+
       - name: Package APK
         run: |
           make -C build apk
@@ -160,7 +168,7 @@ jobs:
         if: '!cancelled()'
         with:
           key: android-${{ inputs.abi }}-${{ env.CONFIG }}
-          save: ${{ github.ref == 'refs/heads/master' }}
+          save: ${{ github.ref == 'refs/heads/validate-android' }}
 
       - uses: actions/upload-artifact@v7
         with:

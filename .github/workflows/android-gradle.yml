@@ -37,7 +37,7 @@ jobs:
         uses: ./.github/actions/depends-prefix-restore
         id: gradle
         with:
-          key: android-gradle
+          key: android-gradle-offline-check
           sources: >-
             tools/android/packaging/build.gradle tools/android/packaging/settings.gradle
             tools/android/packaging/gradle.properties tools/android/packaging/gradle
@@ -45,13 +45,13 @@ jobs:
           prefix: ${{ env.GRADLE_USER_HOME }}
 
       - name: Set up the Android build environment
-        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/validate-android'
         uses: ./.github/actions/setup-android-build
 
       # Debug and Release, as the legs build them, signed like theirs with a
       # generated debug key.
       - name: Fill the Gradle home
-        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/validate-android'
         run: |
           keytool -genkey -keystore "${RUNNER_TEMP}/debug.keystore" -alias androiddebugkey \
             -dname "CN=Android Debug,O=Android,C=US" -keypass android -storepass android \
@@ -73,7 +73,7 @@ jobs:
 
       - name: Publish the Gradle home
         uses: ./.github/actions/depends-prefix-push
-        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/master'
+        if: steps.gradle.outputs.hit != 'true' && github.ref == 'refs/heads/validate-android'
         with:
           ref: ${{ steps.gradle.outputs.ref }}
           prefix: ${{ env.GRADLE_USER_HOME }}
