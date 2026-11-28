@@ -189,6 +189,8 @@ bool CDeviceFolderDirectory::GetDirectory(const CURL& url, CFileItemList& items)
     auto item = std::make_shared<CFileItem>(fields[4]);
     item->SetPath(base + fields[3] + (isDir ? "/" : ""));
     item->SetFolder(isDir);
+    if (fields[3].starts_with('.'))
+      item->SetProperty("file:hidden", true);
     if (!isDir)
     {
       item->SetSize(std::strtoll(fields[1].c_str(), nullptr, 10));
